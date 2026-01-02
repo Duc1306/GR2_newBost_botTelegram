@@ -1,346 +1,277 @@
-# 🤖 NewsBot - Tổng hợp Tin tức Telegram
+# 🤖 NewsBot - Telegram News Aggregator
 
-**Mục tiêu:** Thu thập bài viết từ Telegram, làm sạch, phân loại chủ đề và hiển thị trên web.
+Thu thập, phân loại và hiển thị tin tức từ Telegram với AI/ML.
 
-Lấy tin từ Telegram → Phân loại topics → Scrape full articles → Hiển thị Web
+**Pipeline:** Telegram → Clean → ML Topic Classification → Web UI
 
-**Tech Stack:** Python 3.12, FastAPI, MongoDB, React 18, Material-UI
-
----
-
-## 🚀 Khởi động nhanh
-
-### 1. Chạy Backend + Frontend
-
-```cmd
-scripts\run_fullstack.cmd
-```
-
-- Backend: http://localhost:8000
-- Frontend: http://localhost:3000
-
-### 2. Lấy dữ liệu mới (200 posts, ~5 phút)
-
-```cmd
-scripts\fetch_telegram.cmd
-```
-
-### 3. Lấy dữ liệu đầy đủ (5000 posts, ~30-60 phút)
-
-```cmd
-scripts\fetch_telegram_full.cmd
-```
+**Tech:** Python 3.12, FastAPI, MongoDB, React 18, scikit-learn (TF-IDF + SVM)
 
 ---
 
-## 📋 Yêu cầu môi trường
+## 🚀 Quick Start (3 bước)
 
-- Python 3.12+
-- MongoDB (local hoặc MongoDB Atlas)
-- Telegram API credentials (api_id, api_hash từ https://my.telegram.org/apps)
-- Node.js 18+ (cho React frontend)
+### 1. Setup & Cài Đặt
 
----
-
-## 🔧 Cài đặt & Cấu hình
-
-### 1. Tạo môi trường ảo và cài dependencies
-
-```cmd
+```bash
+# Clone & Install
+git clone <repo>
+cd botTele
 python -m venv venv
-venv\Scripts\activate.bat
+venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-### 2. Cấu hình `.env`
-
-```env
+# Config .env
 MONGO_URI=mongodb://localhost:27017
 DB_NAME=newsbot
-TELEGRAM_API_ID=your_api_id
-TELEGRAM_API_HASH=your_api_hash
-TELEGRAM_SESSION_STRING=your_session_string
-TELEGRAM_CHANNELS=channel1;channel2;channel3
-```
+TELEGRAM_API_ID=your_id
+TELEGRAM_API_HASH=your_hash
+TELEGRAM_SESSION_STRING=your_session
 
-### 3. Tạo session Telegram (chỉ làm một lần)
-
-```cmd
-venv\Scripts\activate.bat
+# Create session (1 lần duy nhất)
 python scripts\create_session.py
 ```
 
-Nhập SĐT + mã OTP, sau đó copy session string vào `.env` dòng `TELEGRAM_SESSION_STRING`.
+### 2. Thu Thập & Train ML Model
 
-### 4. Kiểm tra kênh Telegram hợp lệ
+```bash
+# Thu thập dữ liệu (quick: 200 posts, full: 1000 posts)
+scripts\fetch_telegram.cmd          # Quick mode
+scripts\fetch_telegram.cmd full     # Full mode
+scripts\fetch_telegram.cmd scrape   # With article scraping
 
-```cmd
-scripts\check_channels.cmd
+# Hoặc dùng trực tiếp
+python -m src.ingestion.telegram_worker          # Quick (200 posts)
+python -m src.ingestion.telegram_worker --full   # Full (1000 posts)
+
+# Train ML topic classifier
+scripts\train_ml_classifier.cmd
+
+# Migrate database schema (1 lần duy nhất)
+scripts\migrate_db_schema.cmd
+
+# Generate analytics data
+scripts\aggregate_topic_stats.cmd --days 7
+scripts\extract_keyword_trends.cmd --days 7
 ```
 
-### 5. Tạo indexes MongoDB
+### 3. Chạy Ứng Dụng
 
-```cmd
-python scripts\create_indexes.py
+```bash
+# Backend + Frontend
+scripts\run_fullstack.cmd
 ```
 
-### 6. Chạy ingestion Telegram
-
-**Chế độ nhanh (200 tin/kênh - cập nhật hàng ngày):**
-
-```cmd
-scripts\fetch_telegram.cmd
-```
-
-**Chế độ đầy đủ (5000 tin/kênh - lần đầu hoặc training model):**
-
-```cmd
-scripts\fetch_telegram_full.cmd
-```
-
-Hoặc chạy trực tiếp:
-
-```cmd
-venv\Scripts\activate.bat
-python -m src.ingestion.telegram_worker          # chế độ nhanh (200 tin/kênh)
-python -m src.ingestion.telegram_worker --full   # chế độ đầy đủ (5000 tin/kênh)
-python -m src.ingestion.telegram_worker --full --scrape  # đầy đủ + scraping bài báo đầy đủ
-```
-
-**Lưu ý:**
-- Chế độ đầy đủ có thể mất 10-30 phút tùy số kênh và lượng tin.
-- **Chế độ scraping** sẽ mất nhiều thời gian hơn (1-2 giờ) vì phải tải và phân tích từng bài báo.
-- Telegram có rate limit, script sẽ tự động chờ nếu gặp FloodWait.
-- Dữ liệu trùng sẽ được cập nhật (upsert) nhờ dedupe_key và id unique.
-- Scraper hỗ trợ các nguồn: VnExpress, Baomoi, CafeF, VietStock, CafeBiz, Kenh14, Bloomberg, CoinTelegraph.
-
-### 7. Chạy API server
-
-```cmd
-scripts\run_api.cmd
-```
-
-Mở http://localhost:8000/docs để xem API docs (Swagger UI).
-
-### 8. Chạy Web Frontend
-
-```cmd
-cd web
-npm install
-npm start
-```
-
-Frontend sẽ chạy tại http://localhost:3000
-
-**Cấu hình frontend:**
-Tạo file `web/.env`:
-```
-REACT_APP_API_URL=http://localhost:8000
-```
-
-### 9. Chạy tests
-
-```cmd
-venv\Scripts\activate.bat
-python -m unittest discover tests
-```
+- **Backend:** http://localhost:8000 (API docs: /docs)
+- **Frontend:** http://localhost:3000
 
 ---
 
-## 🌐 Web Interface
+## 🤖 ML Topic Classification
 
-### Features:
-- ✅ Dropdown filters (Chủ đề + Ngôn ngữ)
-- ✅ Click tiêu đề → mở link gốc
-- ✅ Ẩn posts chưa phân loại
-- ✅ Search + Pagination
-- ✅ React 18 với Material-UI
-- ✅ Responsive design
+### Tính Năng
+
+- **TF-IDF + SVM** baseline classifier
+- **10 Topics:** Crypto, Kinh tế, Công nghệ, Chính trị, Thể thao, Giải trí, Sức khỏe, Giáo dục, Du lịch, Ẩm thực
+- **Auto-predict:** Mỗi post mới tự động được phân loại
+- **Confidence tracking:** Lưu topic với confidence + model version + timestamp
+- **Multi-platform:** Hỗ trợ Telegram & Twitter (chuẩn bị sẵn)
+
+### Workflow
+
+```
+1. Thu thập data → python -m src.ingestion.telegram_worker --full
+2. Train model    → python scripts/train_ml_classifier.py
+3. Ingest mới     → python -m src.ingestion.telegram_worker (auto predict)
+4. Retrain        → python scripts/auto_retrain.py (khi có data mới)
+```
+
+### Commands
+
+```bash
+# Train model với data từ DB
+scripts\train_ml_classifier.cmd
+
+# Train với sample data (demo only)
+scripts\train_ml_classifier.cmd --use-sample-data
+
+# Auto retrain khi có data mới (≥100 posts)
+scripts\auto_retrain.cmd
+
+# Force retrain
+python scripts\auto_retrain.py --force
+
+# Predict cho posts cũ trong DB
+scripts\predict_topics.cmd
+
+# Database migration (1 lần duy nhất)
+scripts\migrate_db_schema.cmd
+
+# Generate topic stats (for dashboard)
+scripts\aggregate_topic_stats.cmd --days 7
+
+# Extract keyword trends
+scripts\extract_keyword_trends.cmd --days 7
+
+# Test model
+python -m src.processing.ml_topic_classifier
+```
+
+### Database Schema
+
+**Collections:**
+- `posts` - Main posts (với platform, topic_predictions)
+- `sources` - Source metadata (channels, groups)
+- `topic_stats` - Daily topic statistics (cho trending)
+- `keyword_trends` - Daily keyword tracking (cho word cloud)
+- `ml_model_versions` - Model version history
+
+**Xem chi tiết:** [docs/database_design.md](docs/database_design.md)
+
+### Khi Nào Retrain?
+
+✅ **CẦN retrain:**
+- Có ≥100 posts mới với labels
+- Model > 1 tuần
+- Thêm channels/sources mới
+- Accuracy giảm
+
+❌ **KHÔNG CẦN:**
+- Model mới train < 24h
+- Không có data mới
+- Chỉ predict vài posts
+
+### Performance Tips
+
+- Minimum: 1000 samples (100+/topic)
+- Recommended: 5000 samples
+- Target accuracy: > 70%
+- Retrain frequency: Daily/Weekly (dùng `auto_retrain.py`)
 
 ---
 
-## 🎯 Phân loại Topics (10 chủ đề)
-
-| Icon | Topic | Ví dụ |
-|------|-------|-------|
-| 💰 | Kinh tế | GDP, chứng khoán, VN-Index |
-| 💻 | Công nghệ | AI, startup, iPhone |
-| ₿ | Crypto | Bitcoin, blockchain |
-| 🏛️ | Chính trị | quốc hội, bầu cử |
-| ⚽ | Thể thao | World Cup, V-League |
-| 🎬 | Giải trí | phim, ca sĩ |
-| 🏥 | Sức khỏe | bệnh viện, vaccine |
-| 📚 | Giáo dục | đại học, học bổng |
-| ✈️ | Du lịch | visa, tour |
-| 🍜 | Ẩm thực | nhà hàng, món ngon |
-
----
-
-## 📁 Cấu trúc Project
+## � Project Structure
 
 ```
 botTele/
 ├── src/
-│   ├── api/
-│   │   └── main.py              # FastAPI backend
+│   ├── api/main.py                    # FastAPI server
 │   ├── ingestion/
-│   │   ├── telegram_worker.py   # Lấy tin Telegram
-│   │   └── sources.py           # Danh sách kênh nguồn
+│   │   ├── telegram_worker.py         # Telegram ingestion + auto ML predict
+│   │   └── sources.py                 # Channel configs
 │   ├── processing/
-│   │   ├── topic_classifier.py  # Phân loại topics
-│   │   ├── web_scraper.py       # Scrape articles
-│   │   ├── cleaning.py          # Làm sạch văn bản
-│   │   ├── dedupe.py            # Loại trùng
-│   │   └── lang.py              # Phát hiện ngôn ngữ
-│   ├── models/
-│   │   └── post.py              # Data models
-│   ├── db/
-│   │   └── mongo.py             # MongoDB client
-│   └── config.py                # Load cấu hình
-├── web/                         # React frontend
-│   ├── public/
+│   │   ├── ml_topic_classifier.py     # ML classifier (TF-IDF + SVM)
+│   │   ├── topic_classifier.py        # Rule-based (fallback)
+│   │   ├── cleaning.py                # Text cleaning
+│   │   ├── dedupe.py                  # Deduplication
+│   │   ├── lang.py                    # Language detection
+│   │   └── web_scraper.py             # Article scraping
+│   ├── models/post.py                 # Data models
+│   ├── db/mongo.py                    # MongoDB client
+│   └── config.py                      # Configuration
+├── web/                               # React frontend
 │   ├── src/
-│   │   ├── components/
-│   │   │   ├── PostCard.js      # Card hiển thị bài viết
-│   │   │   ├── FilterSidebar.js # Sidebar filters
-│   │   │   └── Pagination.js    # Pagination component
-│   │   ├── lib/
-│   │   │   └── api.js           # API client
-│   │   ├── App.js               # Main app
-│   │   └── index.js             # Entry point
+│   │   ├── components/                # UI components
+│   │   └── lib/api.js                 # API client
 │   └── package.json
-├── tests/
-│   ├── test_cleaning.py
-│   ├── test_dedupe.py
-│   └── test_post_model.py
 ├── scripts/
-│   ├── run_fullstack.cmd        # Chạy backend + frontend
-│   ├── run_api.cmd              # Chạy API server
-│   ├── fetch_telegram.cmd       # Lấy dữ liệu nhanh
-│   ├── fetch_telegram_full.cmd  # Lấy dữ liệu đầy đủ
-│   ├── create_session.py        # Tạo Telegram session
-│   ├── create_indexes.py        # Tạo MongoDB indexes
-│   └── check_channels.py        # Kiểm tra kênh Telegram
-├── docs/
-│   └── plan.md                  # Chi tiết kế hoạch
-├── .env                         # Cấu hình môi trường
-├── .gitignore                   # Git ignore rules
-├── requirements.txt             # Python dependencies
-└── README.md
+│   ├── fetch_telegram.cmd             # Fetch posts (quick/full/scrape modes)
+│   ├── train_ml_classifier.py         # Train ML model
+│   ├── auto_retrain.py                # Auto retrain logic
+│   ├── predict_topics.py              # Batch predictions
+│   ├── create_session.py              # Telegram auth
+│   ├── create_indexes.py              # MongoDB indexes
+│   ├── check_channels.py              # Validate channels
+│   ├── run_api.cmd                    # Start backend
+│   ├── run_fullstack.cmd              # Start both
+│   └── *.cmd                          # Windows shortcuts
+├── tests/                             # Unit tests
+├── models/                            # Saved ML models
+│   └── topic_classifier_svm.pkl       # Trained model (after training)
+├── .env                               # Environment config
+└── requirements.txt                   # Python dependencies
 ```
 
 ---
 
-## 📊 Channels & Links
+## 🔧 API Endpoints
 
-### Trong database hiện tại:
-
-- **telegram** (Bloomberg): 16,860 posts
-  - ✅ **8,003 có links** click được
-  - ✅ 6,311 có topics
-
-### ✅ Links hoạt động:
-
-1. **bloom.bg** (Bloomberg) - 1,172 links
-   - Click tiêu đề → mở bloomberg.com
-2. **tradingview.com** - 70 links
-   - Click tiêu đề → mở phân tích
-
-### ❌ Không scrape (blacklist):
-
-- t.me, youtube.com, facebook.com
+```
+GET  /posts?topic=Technology&limit=20&skip=0    # Get posts
+GET  /topics                                     # List all topics
+GET  /stats                                      # Database statistics  
+GET  /posts/count?topic=Crypto                  # Count posts
+GET  /docs                                       # Swagger UI
+```
 
 ---
 
-## 📈 Database Stats
+## ⚙️ Configuration (.env)
 
-```
-16,860 posts total
-├─ 8,003 có links (47%)
-├─ 6,311 có topics (37%)
-└─ Domains: bloom.bg (1172), tradingview.com (70)
+```env
+# MongoDB
+MONGO_URI=mongodb://localhost:27017
+DB_NAME=newsbot
+
+# Telegram
+TELEGRAM_API_ID=your_api_id
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_SESSION_STRING=your_session_string
+TELEGRAM_CHANNELS=channel1;channel2;channel3
+TELEGRAM_FETCH_LIMIT=200
+
+# Web
+REACT_APP_API_URL=http://localhost:8000
 ```
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Web báo "Failed to fetch"?
-
-```cmd
-# Restart backend
+**Web báo "Failed to fetch"?**
+```bash
 taskkill /F /FI "WINDOWTITLE eq *Backend*"
 scripts\run_api.cmd
 ```
 
-### Không có posts?
-
-```cmd
-# Lấy posts mới với topics
-scripts\fetch_telegram.cmd
+**Không có posts?**
+```bash
+python -m src.ingestion.telegram_worker --full
 ```
 
-### Click tiêu đề không mở?
+**ML model accuracy thấp?**
+```bash
+# Thu thập thêm data
+python -m src.ingestion.telegram_worker --full
 
-- Posts không có links thì không clickable
-- Chỉ Bloomberg/TradingView có links đầy đủ
+# Retrain với nhiều data hơn
+python scripts/train_ml_classifier.py --limit 20000
+```
 
----
-
-## 📞 API Endpoints
-
-- `GET /posts?topic=Kinh+tế&limit=20` - Lấy danh sách posts
-- `GET /topics` - Lấy danh sách topics
-- `GET /stats` - Lấy thống kê
-- `GET /posts/count` - Đếm số posts
-- `GET /docs` - Swagger UI documentation
-
----
-
-## 🎓 Demo cho Đồ án
-
-1. Chạy `scripts\run_fullstack.cmd`
-2. Mở http://localhost:3000
-3. Filter: "💰 Kinh tế" hoặc "💻 Công nghệ"
-4. Click tiêu đề → Bloomberg/TradingView
-5. Search: "Bitcoin", "AI"
+**Warning "ML model not found"?**
+```bash
+# Train model lần đầu
+python scripts/train_ml_classifier.py
+```
 
 ---
 
-## 📝 Ghi chú pháp lý
+## 📊 Requirements
 
-- Việc thu thập dữ liệu phải tuân thủ điều khoản dịch vụ của từng nền tảng.
-- Chỉ lấy dữ liệu từ kênh công khai (public) mà bạn có quyền truy cập.
-- X (Twitter) API có thể yêu cầu gói trả phí để đọc dữ liệu.
-
----
-
-## 📌 Tiến độ
-
-Theo dõi trong `docs/plan.md` và file `STATUS.md`.
-
-### Hoàn thành:
-- ✅ Thiết lập môi trường, cài dependencies
-- ✅ Thiết kế schema dữ liệu `Post`
-- ✅ Cleaning & Dedupe utilities
-- ✅ Ingestion Telegram
-- ✅ Phân loại chủ đề (rule-based)
-- ✅ API endpoints (/posts, /topics, /stats)
-- ✅ Web UI React với Material-UI
-
-### Đang làm:
-- 🚧 Docker Compose
-- 🚧 Tối ưu scraper
-- 🚧 ML-based topic classification
+- Python 3.12+
+- MongoDB (local or Atlas)
+- Node.js 18+ (for frontend)
+- Telegram API credentials (get from https://my.telegram.org/apps)
 
 ---
 
-## 🤝 Contributing
+## 📝 License & Legal
 
-Pull requests welcome! Vui lòng tạo issue trước khi làm các thay đổi lớn.
+- MIT License
+- Thu thập data phải tuân thủ TOS của platforms
+- Chỉ lấy từ public channels có quyền truy cập
 
 ---
 
-**License:** MIT
+**Status:** ✅ Production Ready | **Version:** 2.0 (with ML)
 
 

@@ -19,14 +19,46 @@ from src.processing.cleaning import clean_text
 from src.processing.lang import detect_language
 from src.processing.web_scraper import enrich_post_with_article
 from src.processing.topic_classifier import classify_post_topics
+from src.processing.ml_topic_classifier import MLTopicClassifier
 from src.models.post import Post, MediaItem
 from src.db.mongo import get_posts_collection
+from pathlib import Path
 
 # Session name (file) nếu không dùng session string
 SESSION_NAME = "telegram_session"
 
 # Chế độ lấy dữ liệu đầy đủ (nhiều hơn nhiều)
 FULL_MODE_LIMIT = 1000 # Lấy tối đa 1000 tin/kênh cho training
+
+# ML Classifier (lazy load)
+_ml_classifier: MLTopicClassifier | None = None
+_ml_classifier_checked: bool = False  # Flag to avoid repeated warnings
+
+
+def get_ml_classifier() -> MLTopicClassifier | None:
+    """Get ML classifier instance (lazy load). Returns None if not available."""
+    global _ml_classifier, _ml_classifier_checked
+    
+    # Only check once
+    if not _ml_classifier_checked:
+        _ml_classifier_checked = True
+        model_path = Path("models/topic_classifier_svm.pkl")
+        
+        if model_path.exists():
+            try:
+                _ml_classifier = MLTopicClassifier(model_path=str(model_path))
+                print("✓ ML Topic Classifier loaded successfully")
+            except Exception as e:
+                print(f"⚠️  Failed to load ML classifier: {e}")
+                print("   Falling back to rule-based classifier")
+                _ml_classifier = None
+        else:
+            print("\n⚠️  ML model not found!")
+            print("   → Using rule-based classifier (fallback)")
+            print("   → To train ML model: python scripts/train_ml_classifier.py\n")
+            _ml_classifier = None
+    
+    return _ml_classifier
 
 
 def build_client() -> TelegramClient:
@@ -73,10 +105,26 @@ async def process_message(m: Message) -> Post:
     if lang:
         post.lang = lang
     
-    # Classify topics
-    topics = classify_post_topics(cleaned_text, lang)
-    if topics:
-        post.topics = topics
+    # Classify topics using ML model (preferred)
+    ml_classifier = get_ml_classifier()
+    if ml_classifier and cleaned_text:
+        try:
+            predicted_topic, confidence = ml_classifier.predict(cleaned_text)
+            # Chỉ lưu nếu confidence >= 0.3 (có thể điều chỉnh threshold)
+            if confidence >= 0.3:
+                post.topics = [predicted_topic]
+                post.score = confidence  # Lưu confidence vào score field
+        except Exception as e:
+            print(f"   ⚠️  ML prediction error: {e}")
+            # Fallback to rule-based classifier
+            topics = classify_post_topics(cleaned_text, lang)
+            if topics:
+                post.topics = topics
+    else:
+        # Fallback to rule-based classifier
+        topics = classify_post_topics(cleaned_text, lang)
+        if topics:
+            post.topics = topics
     
     return post
 
