@@ -10,14 +10,14 @@ start "FastAPI Backend" cmd /k "cd /d c:\Users\84328\botTele && venv\Scripts\act
 
 timeout /t 3 /nobreak >nul
 
-echo Starting React frontend on port 3000...
+echo Starting Vite frontend on port 5173...
 cd /d c:\Users\84328\botTele\web
-start "React Frontend" cmd /k "npm start"
+start "Vite Frontend" cmd /k "npm run dev"
 
 echo.
 echo ========================================
 echo  Both servers starting...
 echo  Backend:  http://localhost:8000
-echo  Frontend: http://localhost:3000
+echo  Frontend: http://localhost:5173
 echo ========================================
 pause

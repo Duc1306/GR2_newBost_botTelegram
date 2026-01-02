@@ -21,10 +21,18 @@ function TopicBadge({ topic }) {
 }
 
 export function PostCard({ post, onClick }) {
-  const timeAgo = formatDistanceToNow(new Date(post.created_at), {
-    addSuffix: true,
-    locale: vi,
-  });
+  let timeAgo = 'Unknown date';
+  try {
+    if (post.created_at) {
+      timeAgo = formatDistanceToNow(new Date(post.created_at), {
+        addSuffix: true,
+        locale: vi,
+      });
+    }
+  } catch (error) {
+    console.error('Error formatting date:', error);
+    timeAgo = 'Unknown date';
+  }
 
   return (
     <article
@@ -59,45 +67,25 @@ export function PostCard({ post, onClick }) {
 
         {/* Main Content */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {/* Title - clickable to open full article */}
-          {post.full_article?.title ? (
-            <a 
-              href={post.links[0] || '#'}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              style={{ display: 'block', textDecoration: 'none' }}
-            >
-              <h2 style={{
-                fontSize: '1.25rem',
-                fontWeight: 600,
-                color: '#111827',
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                transition: 'color 0.2s'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.color = '#2563eb'}
-              onMouseLeave={(e) => e.currentTarget.style.color = '#111827'}
-              >
-                {post.full_article.title}
-              </h2>
-            </a>
-          ) : post.links.length > 0 ? (
+          {/* Post Text - Always show, clickable if has link */}
+          {post.links && post.links.length > 0 ? (
             <a
               href={post.links[0]}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
-              style={{ display: 'block', textDecoration: 'none' }}
+              style={{ 
+                display: 'block', 
+                textDecoration: 'none',
+                position: 'relative'
+              }}
             >
               <p style={{
-                fontSize: '1.125rem',
-                fontWeight: 500,
+                fontSize: '1rem',
                 color: '#1f2937',
+                lineHeight: '1.6',
                 display: '-webkit-box',
-                WebkitLineClamp: 2,
+                WebkitLineClamp: 4,
                 WebkitBoxOrient: 'vertical',
                 overflow: 'hidden',
                 transition: 'color 0.2s'
@@ -107,14 +95,26 @@ export function PostCard({ post, onClick }) {
               >
                 {post.text}
               </p>
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                marginTop: '0.5rem',
+                fontSize: '0.875rem',
+                color: '#2563eb',
+                fontWeight: 500
+              }}>
+                <LinkIcon sx={{ fontSize: 16 }} />
+                Đọc thêm
+              </div>
             </a>
           ) : (
             <p style={{
-              fontSize: '1.125rem',
-              fontWeight: 500,
+              fontSize: '1rem',
               color: '#1f2937',
+              lineHeight: '1.6',
               display: '-webkit-box',
-              WebkitLineClamp: 2,
+              WebkitLineClamp: 4,
               WebkitBoxOrient: 'vertical',
               overflow: 'hidden'
             }}>
@@ -122,7 +122,7 @@ export function PostCard({ post, onClick }) {
             </p>
           )}
 
-          {/* Snippet */}
+          {/* Full article snippet if available */}
           {post.full_article?.content && (
             <p style={{
               fontSize: '0.875rem',
@@ -130,7 +130,10 @@ export function PostCard({ post, onClick }) {
               display: '-webkit-box',
               WebkitLineClamp: 3,
               WebkitBoxOrient: 'vertical',
-              overflow: 'hidden'
+              overflow: 'hidden',
+              fontStyle: 'italic',
+              borderLeft: '3px solid #e5e7eb',
+              paddingLeft: '0.75rem'
             }}>
               {post.full_article.content.slice(0, 200)}...
             </p>
