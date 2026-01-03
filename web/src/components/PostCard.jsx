@@ -22,16 +22,20 @@ function TopicBadge({ topic }) {
 
 export function PostCard({ post, onClick }) {
   let timeAgo = 'Unknown date';
+  let displayDate = 'Unknown date';
+  
   try {
     if (post.created_at) {
-      timeAgo = formatDistanceToNow(new Date(post.created_at), {
+      const date = new Date(post.created_at);
+      timeAgo = formatDistanceToNow(date, {
         addSuffix: true,
         locale: vi,
       });
+      // Format: "02/01/2026 05:19"
+      displayDate = `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getFullYear()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
     }
   } catch (error) {
-    console.error('Error formatting date:', error);
-    timeAgo = 'Unknown date';
+    console.error('Error formatting date:', error, post.created_at);
   }
 
   return (
@@ -47,8 +51,8 @@ export function PostCard({ post, onClick }) {
       onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
     >
       <div style={{ padding: '1.25rem 1.5rem' }}>
-        {/* Header: Source + Time */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+        {/* Header: Source + Author + Time */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem', fontWeight: 500, color: '#111827' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center' }}>
               <FiberManualRecordIcon sx={{ color: '#2563eb', fontSize: 12 }} />
@@ -62,7 +66,9 @@ export function PostCard({ post, onClick }) {
             </>
           )}
           <span style={{ color: '#d1d5db' }}>•</span>
-          <time style={{ fontSize: '0.875rem', color: '#6b7280' }}>{timeAgo}</time>
+          <time style={{ fontSize: '0.875rem', color: '#6b7280' }} title={displayDate}>
+            {displayDate}
+          </time>
         </div>
 
         {/* Main Content */}

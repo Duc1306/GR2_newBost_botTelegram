@@ -140,42 +140,63 @@ export default function OverviewPage() {
             }}
           >
             <Typography variant="h6" gutterBottom fontWeight="bold">
-              🔥 Trending Topics (7 days)
+              🔥 Top Topics (30 days)
             </Typography>
-            {trendingLoading ? (
+            {statsLoading ? (
               <CircularProgress size={24} />
-            ) : trendingList.length > 0 ? (
+            ) : topicDistribution.length > 0 ? (
               <Box>
-                {trendingList.map((topic, index) => (
-                  <Box 
-                    key={topic.topic} 
-                    sx={{ 
-                      py: 1.5, 
-                      borderBottom: index < trendingList.length - 1 ? '1px solid #eee' : 'none',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Box>
-                      <Typography variant="body1" fontWeight="bold">
-                        {index + 1}. {topic.topic}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {topic.total_posts} posts • {topic.avg_confidence.toFixed(1)}% confidence
-                      </Typography>
-                    </Box>
-                    <Typography 
-                      variant="body2" 
-                      fontWeight="bold"
+                {topicDistribution.slice(0, 5).map((item, index) => {
+                  const percentage = ((item.value / stats?.total_posts) * 100).toFixed(1);
+                  return (
+                    <Box 
+                      key={item.name} 
                       sx={{ 
-                        color: topic.growth_rate > 0 ? 'success.main' : 'error.main',
+                        mb: 2,
+                        p: 1.5,
+                        borderRadius: 1,
+                        bgcolor: 'background.default',
+                        transition: 'all 0.2s',
+                        '&:hover': {
+                          bgcolor: 'action.hover',
+                          transform: 'translateX(4px)',
+                        }
                       }}
                     >
-                      {topic.growth_rate > 0 ? '↑' : '↓'} {Math.abs(topic.growth_rate).toFixed(0)}%
-                    </Typography>
-                  </Box>
-                ))}
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
+                        <Typography variant="body1" fontWeight="600">
+                          #{index + 1} {item.name}
+                        </Typography>
+                        <Typography variant="h6" fontWeight="bold" color="primary">
+                          {item.value.toLocaleString()}
+                        </Typography>
+                      </Box>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <Box 
+                          sx={{ 
+                            flex: 1, 
+                            height: 6, 
+                            bgcolor: 'grey.200', 
+                            borderRadius: 1,
+                            overflow: 'hidden'
+                          }}
+                        >
+                          <Box 
+                            sx={{ 
+                              width: `${percentage}%`, 
+                              height: '100%', 
+                              bgcolor: getTopicColor(item.name),
+                              transition: 'width 0.3s'
+                            }} 
+                          />
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" fontWeight="500">
+                          {percentage}%
+                        </Typography>
+                      </Box>
+                    </Box>
+                  );
+                })}
               </Box>
             ) : (
               <Typography color="text.secondary">No trending data yet</Typography>
@@ -216,13 +237,13 @@ export default function OverviewPage() {
               }
             }}
           >
-            <Typography variant="h6" gutterBottom fontWeight="bold">\ud83c\udd9a Platform Split</Typography>
+            <Typography variant="h6" gutterBottom fontWeight="bold"> Platform Split</Typography>
             <Box sx={{ mt: 4 }}>
               <Box sx={{ mb: 3 }}>
                 <Box display="flex" justifyContent="space-between" mb={1}>
                   <Typography variant="body1">Telegram</Typography>
                   <Typography variant="body1" fontWeight="bold">
-                    {stats?.platform_counts?.telegram || 0} ({((stats?.platform_counts?.telegram || 0) / (stats?.total_posts || 1) * 100).toFixed(1)}%)
+                    {(stats?.by_source?.telegram || 0).toLocaleString()} ({((stats?.by_source?.telegram || 0) / (stats?.total_posts || 1) * 100).toFixed(1)}%)
                   </Typography>
                 </Box>
                 <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 24 }}>
@@ -231,7 +252,7 @@ export default function OverviewPage() {
                       bgcolor: '#0088cc', 
                       height: '100%', 
                       borderRadius: 1,
-                      width: `${(stats?.platform_counts?.telegram || 0) / (stats?.total_posts || 1) * 100}%`,
+                      width: `${(stats?.by_source?.telegram || 0) / (stats?.total_posts || 1) * 100}%`,
                     }}
                   />
                 </Box>
@@ -240,7 +261,7 @@ export default function OverviewPage() {
                 <Box display="flex" justifyContent="space-between" mb={1}>
                   <Typography variant="body1">Twitter</Typography>
                   <Typography variant="body1" fontWeight="bold">
-                    {stats?.platform_counts?.twitter || 0} ({((stats?.platform_counts?.twitter || 0) / (stats?.total_posts || 1) * 100).toFixed(1)}%)
+                    {(stats?.by_source?.twitter || 0).toLocaleString()} ({((stats?.by_source?.twitter || 0) / (stats?.total_posts || 1) * 100).toFixed(1)}%)
                   </Typography>
                 </Box>
                 <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 24 }}>
@@ -249,7 +270,7 @@ export default function OverviewPage() {
                       bgcolor: '#1DA1F2', 
                       height: '100%', 
                       borderRadius: 1,
-                      width: `${(stats?.platform_counts?.twitter || 0) / (stats?.total_posts || 1) * 100}%`,
+                      width: `${(stats?.by_source?.twitter || 0) / (stats?.total_posts || 1) * 100}%`,
                     }}
                   />
                 </Box>

@@ -673,3 +673,90 @@ async def get_platform_comparison(
             "to": date_to
         }
     }
+
+
+@app.get("/analytics/heatmap")
+async def get_activity_heatmap(
+    date_from: Optional[str] = Query(None, description="Ngày bắt đầu (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Ngày kết thúc (YYYY-MM-DD)"),
+    topic: Optional[str] = Query(None, description="Lọc theo topic"),
+):
+    """
+    Trả về activity heatmap: số lượng bài theo giờ trong ngày và ngày trong tuần
+    """
+    db = get_db()
+    posts = db["posts"]
+    
+    # Parse dates
+    if date_to:
+        to_date = datetime.fromisoformat(date_to)
+    else:
+        to_date = datetime.utcnow()
+    
+    if date_from:
+        from_date = datetime.fromisoformat(date_from)
+    else:
+        from_date = to_date - timedelta(days=30)
+    
+    # Build query
+    query = {
+        "created_at": {
+            "$gte": from_date,
+            "$lte": to_date
+        }
+    }
+    
+    if topic:
+        query["topics"] = topic
+    
+    # Aggregate by hour and day of week
+    pipeline = [
+        {"$match": query},
+        {
+            "$project": {
+                "hour": {"$hour": "$created_at"},
+                "dayOfWeek": {"$dayOfWeek": "$created_at"}  # 1=Sunday, 2=Monday, ..., 7=Saturday
+            }
+        },
+        {
+            "$group": {
+                "_id": {
+                    "hour": "$hour",
+                    "dayOfWeek": "$dayOfWeek"
+                },
+                "count": {"$sum": 1}
+            }
+        }
+    ]
+    
+    results = list(posts.aggregate(pipeline))
+    
+    # Convert to heatmap format: heatmap[day][hour] = count
+    # day: 0=Monday, 1=Tuesday, ..., 6=Sunday
+    heatmap = {}
+    for day in range(7):
+        heatmap[day] = {}
+        for hour in range(24):
+            heatmap[day][hour] = 0
+    
+    for item in results:
+        dow = item["_id"]["dayOfWeek"]
+        hour = item["_id"]["hour"]
+        count = item["count"]
+        
+        # Convert MongoDB dayOfWeek (1=Sunday) to our format (0=Monday)
+        if dow == 1:  # Sunday
+            day = 6
+        else:  # Monday-Saturday
+            day = dow - 2
+        
+        heatmap[day][hour] = count
+    
+    return {
+        "heatmap": heatmap,
+        "period": {
+            "from": from_date.isoformat(),
+            "to": to_date.isoformat()
+        },
+        "total_posts": sum(sum(hours.values()) for hours in heatmap.values())
+    }

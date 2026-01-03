@@ -7,7 +7,9 @@ import {
   fetchTimeline,
   fetchComparison,
   fetchPosts,
+  fetchPostsCount,
   fetchTopics,
+  fetchHeatmap,
 } from '../lib/api.jsx';
 
 // Stats hook
@@ -73,11 +75,29 @@ export function usePosts(params = {}) {
   });
 }
 
+// Posts count hook
+export function usePostsCount(params = {}) {
+  return useQuery({
+    queryKey: ['postsCount', params],
+    queryFn: () => fetchPostsCount(params),
+    staleTime: 2 * 60 * 1000, // 2 minutes
+  });
+}
+
 // Topics hook
 export function useTopics() {
   return useQuery({
     queryKey: ['topics'],
     queryFn: fetchTopics,
     staleTime: 60 * 60 * 1000, // 1 hour (topics don't change often)
+  });
+}
+
+// Heatmap hook
+export function useHeatmap(params = {}) {
+  return useQuery({
+    queryKey: ['heatmap', params],
+    queryFn: () => fetchHeatmap(params),
+    staleTime: 10 * 60 * 1000, // 10 minutes
   });
 }

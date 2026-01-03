@@ -14,7 +14,7 @@ import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { subDays } from 'date-fns';
 import TimelineChart from '../components/charts/TimelineChart.jsx';
 import KeywordsBarChart from '../components/charts/KeywordsBarChart.jsx';
-import { useTimeline, useKeywords, useComparison } from '../hooks/useApi.jsx';
+import { useTimeline, useKeywords, useComparison, useHeatmap } from '../hooks/useApi.jsx';
 import { getTopicColor } from '../theme/colors.jsx';
 
 export default function AnalyticsPage() {
@@ -36,6 +36,10 @@ export default function AnalyticsPage() {
     date_to 
   });
   const { data: comparison, isLoading: comparisonLoading } = useComparison({ 
+    date_from, 
+    date_to 
+  });
+  const { data: heatmapData, isLoading: heatmapLoading } = useHeatmap({ 
     date_from, 
     date_to 
   });
@@ -132,84 +136,181 @@ export default function AnalyticsPage() {
             )}
           </Grid>
 
-        {/* Platform Comparison */}
+        {/* Platform Stats */}
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2, height: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              🆚 Platform Comparison
+          <Paper sx={{ p: 3, height: '100%' }}>
+            <Typography variant="h6" gutterBottom fontWeight="600">
+              📊 Platform Activity
             </Typography>
             {comparisonLoading ? (
-              <CircularProgress size={24} />
+              <Box display="flex" justifyContent="center" py={4}>
+                <CircularProgress size={32} />
+              </Box>
             ) : comparison?.comparison ? (
               <Box sx={{ mt: 2 }}>
-                {Object.entries(comparison.comparison).map(([platform, data]) => (
-                  <Box key={platform} sx={{ mb: 3 }}>
-                    <Typography variant="subtitle1" fontWeight="bold" textTransform="capitalize">
-                      {platform}
-                    </Typography>
-                    <Typography variant="h4" color="primary" fontWeight="bold">
-                      {data.total_posts?.toLocaleString() || 0}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      posts
-                    </Typography>
-                    {data.top_topics && data.top_topics.length > 0 && (
-                      <Box sx={{ mt: 1 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Top Topics:
+                {Object.entries(comparison.comparison)
+                  .filter(([_, data]) => data.total_posts > 0)
+                  .map(([platform, data]) => (
+                    <Box key={platform} sx={{ mb: 3, p: 2, bgcolor: 'background.default', borderRadius: 2 }}>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                        <Typography variant="subtitle1" fontWeight="700" textTransform="capitalize">
+                          {platform === 'telegram' ? '📱 Telegram' : '🐦 Twitter'}
                         </Typography>
-                        {data.top_topics.slice(0, 3).map((topicItem, idx) => {
-                          const topicName = typeof topicItem === 'string' ? topicItem : topicItem.topic;
-                          return (
-                            <Box 
-                              key={idx}
-                              sx={{ 
-                                display: 'inline-block',
-                                bgcolor: getTopicColor(topicName),
-                                color: 'white',
-                                px: 1,
-                                py: 0.5,
-                                borderRadius: 1,
-                                fontSize: '0.75rem',
-                                mr: 0.5,
-                                mt: 0.5,
-                              }}
-                            >
-                              {topicName}
-                            </Box>
-                          );
-                        })}
+                        <Typography variant="caption" sx={{ px: 1, py: 0.5, bgcolor: 'primary.main', color: 'white', borderRadius: 1 }}>
+                          {data.avg_daily} posts/day
+                        </Typography>
                       </Box>
-                    )}
-                  </Box>
-                ))}
+                      <Typography variant="h3" color="primary" fontWeight="bold" mb={0.5}>
+                        {data.total_posts?.toLocaleString() || 0}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block" mb={2}>
+                        Total Posts
+                      </Typography>
+                      {data.top_topics && data.top_topics.length > 0 && (
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+                            Top Topics:
+                          </Typography>
+                          {data.top_topics.slice(0, 3).map((topicItem, idx) => {
+                            const topicName = typeof topicItem === 'string' ? topicItem : topicItem.topic;
+                            const topicCount = typeof topicItem === 'string' ? 0 : topicItem.count;
+                            return (
+                              <Box 
+                                key={idx}
+                                sx={{ 
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  mb: 0.5,
+                                  p: 1,
+                                  borderRadius: 1,
+                                  bgcolor: getTopicColor(topicName),
+                                  color: 'white',
+                                }}
+                              >
+                                <Typography variant="body2" fontWeight="500">
+                                  {topicName}
+                                </Typography>
+                                <Typography variant="caption" fontWeight="600">
+                                  {topicCount.toLocaleString()}
+                                </Typography>
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      )}
+                    </Box>
+                  ))}
+                {Object.values(comparison.comparison).every(d => d.total_posts === 0) && (
+                  <Typography color="text.secondary" textAlign="center" py={4}>
+                    No data available for this period
+                  </Typography>
+                )}
               </Box>
             ) : (
-              <Typography color="text.secondary">No comparison data</Typography>
+              <Typography color="text.secondary" textAlign="center" py={4}>
+                No comparison data
+              </Typography>
             )}
           </Paper>
         </Grid>
       </Grid>
 
-      {/* Activity Heatmap Placeholder */}
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          📅 Activity Heatmap (Coming Soon)
+      {/* Activity Heatmap */}
+      <Paper sx={{ p: 3 }}>
+        <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+          📅 Activity Heatmap
         </Typography>
-        <Box 
-          sx={{ 
-            height: 200, 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            bgcolor: 'background.default',
-            borderRadius: 1,
-          }}
-        >
-          <Typography color="text.secondary">
-            Activity heatmap by day of week & hour
-          </Typography>
+        {heatmapLoading ? (
+          <Box display="flex" justifyContent="center" py={4}>
+            <CircularProgress />
+          </Box>
+        ) : (
+          <Box sx={{ overflowX: 'auto' }}>
+            <Box sx={{ minWidth: 800 }}>
+              {/* Hours header */}
+              <Box sx={{ display: 'flex', mb: 1 }}>
+                <Box sx={{ width: 80 }} /> {/* Spacer for day labels */}
+                {Array.from({ length: 24 }, (_, i) => (
+                  <Box 
+                    key={i} 
+                    sx={{ 
+                      flex: 1, 
+                      textAlign: 'center', 
+                      fontSize: '0.7rem',
+                      color: 'text.secondary'
+                    }}
+                  >
+                    {i}h
+                  </Box>
+                ))}
+              </Box>
+              
+              {/* Heatmap grid */}
+              {['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'CN'].map((day, dayIndex) => {
+                const maxValue = heatmapData ? Math.max(...Object.values(heatmapData.heatmap).flatMap(h => Object.values(h))) : 100;
+                
+                return (
+                  <Box key={day} sx={{ display: 'flex', mb: 0.5, alignItems: 'center' }}>
+                    <Box sx={{ width: 80, fontSize: '0.875rem', fontWeight: 500 }}>
+                      {day}
+                    </Box>
+                    {Array.from({ length: 24 }, (_, hour) => {
+                      const value = heatmapData?.heatmap?.[dayIndex]?.[hour] || 0;
+                      const intensity = maxValue > 0 ? value / maxValue : 0;
+                  return (
+                    <Box
+                      key={hour}
+                      sx={{
+                        flex: 1,
+                        height: 35,
+                        mx: 0.25,
+                        bgcolor: intensity > 0 ? `rgba(59, 130, 246, ${0.2 + intensity * 0.8})` : '#f3f4f6',
+                        borderRadius: 0.5,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '0.7rem',
+                        color: intensity > 0.5 ? 'white' : 'text.secondary',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        '&:hover': {
+                          transform: 'scale(1.1)',
+                          zIndex: 1,
+                          boxShadow: 1,
+                        }
+                      }}
+                      title={`${day} ${hour}h: ${value} bài`}
+                    >
+                      {value > 0 ? value : ''}
+                    </Box>
+                  );
+                })}
+              </Box>
+            );
+          })}
+            
+            {/* Legend */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 2, justifyContent: 'flex-end' }}>
+              <Typography variant="caption" color="text.secondary">Ít</Typography>
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                {[0.2, 0.4, 0.6, 0.8, 1].map((intensity) => (
+                  <Box
+                    key={intensity}
+                    sx={{
+                      width: 20,
+                      height: 20,
+                      bgcolor: `rgba(59, 130, 246, ${intensity})`,
+                      borderRadius: 0.5,
+                    }}
+                  />
+                ))}
+              </Box>
+              <Typography variant="caption" color="text.secondary">Nhiều</Typography>
+            </Box>
+          </Box>
         </Box>
+        )}
       </Paper>
     </Box>
     </Box>
