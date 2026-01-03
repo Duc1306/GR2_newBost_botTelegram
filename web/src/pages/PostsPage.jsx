@@ -21,6 +21,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import TelegramIcon from "@mui/icons-material/Telegram";
 import TwitterIcon from "@mui/icons-material/Twitter";
 import LinkIcon from "@mui/icons-material/Link";
+import ArticleIcon from "@mui/icons-material/Article";
 import { usePosts, useTopics, usePostsCount } from "../hooks/useApi.jsx";
 import { getTopicColor } from "../theme/colors.jsx";
 import { formatDistanceToNow } from "date-fns";
@@ -84,9 +85,12 @@ export default function PostsPage() {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Box>
-          <Typography variant="h4" gutterBottom fontWeight="bold" mb={0.5}>
-            📰 Posts Feed
-          </Typography>
+          <Box display="flex" alignItems="center" gap={1} mb={0.5}>
+            <ArticleIcon sx={{ fontSize: 32, color: 'primary.main' }} />
+            <Typography variant="h4" fontWeight="bold">
+              Posts Feed
+            </Typography>
+          </Box>
           <Typography variant="body1" color="text.secondary">
             Browse and search posts with filters
           </Typography>

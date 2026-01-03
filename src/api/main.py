@@ -264,73 +264,84 @@ async def get_trending_topics(
     platform: Optional[str] = Query("all", description="Filter by platform"),
     limit: int = Query(10, ge=1, le=50, description="Top N trending topics")
 ):
-    """Get trending topics (rising in popularity)"""
+    """Get trending topics (rising in popularity) - Using posts collection"""
     db = get_db()
-    topic_stats = db["topic_stats"]
+    posts = db["posts"]
     
     # Calculate date range
     end_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     start_date = end_date - timedelta(days=days)
     mid_date = end_date - timedelta(days=days//2)
     
-    # Get recent stats
-    recent_stats = list(topic_stats.find({
-        "date": {"$gte": mid_date, "$lt": end_date},
-        "platform": platform
-    }))
+    # Build platform query
+    platform_filter = {} if platform == "all" else {"platform": platform}
     
-    # Get previous stats
-    previous_stats = list(topic_stats.find({
-        "date": {"$gte": start_date, "$lt": mid_date},
-        "platform": platform
-    }))
+    # Get recent posts by topic
+    recent_pipeline = [
+        {"$match": {
+            "created_at": {"$gte": mid_date, "$lt": end_date},
+            "topics": {"$exists": True, "$ne": []},
+            **platform_filter
+        }},
+        {"$unwind": "$topics"},
+        {"$group": {
+            "_id": "$topics",
+            "count": {"$sum": 1}
+        }}
+    ]
+    recent_stats = list(posts.aggregate(recent_pipeline))
     
-    # Aggregate by topic
-    recent_by_topic = {}
-    for stat in recent_stats:
-        topic = stat["topic"]
-        if topic not in recent_by_topic:
-            recent_by_topic[topic] = {"count": 0, "confidence": []}
-        recent_by_topic[topic]["count"] += stat["post_count"]
-        recent_by_topic[topic]["confidence"].append(stat.get("avg_confidence", 0))
+    # Get previous posts by topic
+    previous_pipeline = [
+        {"$match": {
+            "created_at": {"$gte": start_date, "$lt": mid_date},
+            "topics": {"$exists": True, "$ne": []},
+            **platform_filter
+        }},
+        {"$unwind": "$topics"},
+        {"$group": {
+            "_id": "$topics",
+            "count": {"$sum": 1}
+        }}
+    ]
+    previous_stats = list(posts.aggregate(previous_pipeline))
     
-    previous_by_topic = {}
-    for stat in previous_stats:
-        topic = stat["topic"]
-        if topic not in previous_by_topic:
-            previous_by_topic[topic] = {"count": 0}
-        previous_by_topic[topic]["count"] += stat["post_count"]
+    # Build lookup dictionaries
+    recent_by_topic = {stat["_id"]: stat["count"] for stat in recent_stats}
+    previous_by_topic = {stat["_id"]: stat["count"] for stat in previous_stats}
     
     # Calculate trends
     trends = []
-    for topic, data in recent_by_topic.items():
-        current_count = data["count"]
-        previous_count = previous_by_topic.get(topic, {}).get("count", 1)
+    for topic, current_count in recent_by_topic.items():
+        previous_count = previous_by_topic.get(topic, 0)
         
-        growth_rate = (current_count - previous_count) / previous_count if previous_count > 0 else 0
-        trend_score = current_count / previous_count if previous_count > 0 else 1.0
+        # Calculate growth
+        if previous_count > 0:
+            growth_percentage = ((current_count - previous_count) / previous_count) * 100
+            trend_score = current_count / previous_count
+        else:
+            growth_percentage = 100.0  # New topic
+            trend_score = float('inf')
         
-        if trend_score > 1.2:
+        # Determine direction
+        if trend_score > 1.2 or previous_count == 0:
             trend_direction = "up"
         elif trend_score < 0.8:
             trend_direction = "down"
         else:
             trend_direction = "stable"
         
-        avg_confidence = sum(data["confidence"]) / len(data["confidence"]) if data["confidence"] else 0
-        
         trends.append({
             "topic": topic,
             "current_count": current_count,
             "previous_count": previous_count,
-            "growth_rate": round(growth_rate, 2),
+            "growth_percentage": round(growth_percentage, 1),
             "trend_direction": trend_direction,
-            "trend_score": round(trend_score, 2),
-            "avg_confidence": round(avg_confidence, 3)
+            "trend_score": round(trend_score, 2) if trend_score != float('inf') else 999
         })
     
-    # Sort by trend_score and limit
-    trends.sort(key=lambda x: x["trend_score"], reverse=True)
+    # Sort by current count (most popular) and limit
+    trends.sort(key=lambda x: x["current_count"], reverse=True)
     trends = trends[:limit]
     
     return {

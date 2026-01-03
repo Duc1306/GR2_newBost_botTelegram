@@ -8,6 +8,7 @@ import Layout from './components/layout/Layout.jsx';
 import OverviewPage from './pages/OverviewPage.jsx';
 import AnalyticsPage from './pages/AnalyticsPage.jsx';
 import PostsPage from './pages/PostsPage.jsx';
+import TrendingPage from './pages/TrendingPage.jsx';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,6 +30,7 @@ function App() {
               <Route path="/" element={<OverviewPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/posts" element={<PostsPage />} />
+              <Route path="/trending" element={<TrendingPage />} />
               <Route path="/settings" element={<div>Settings page (coming soon)</div>} />
             </Routes>
           </Layout>

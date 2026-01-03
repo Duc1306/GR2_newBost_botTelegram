@@ -16,6 +16,13 @@ import TimelineChart from '../components/charts/TimelineChart.jsx';
 import KeywordsBarChart from '../components/charts/KeywordsBarChart.jsx';
 import { useTimeline, useKeywords, useComparison, useHeatmap } from '../hooks/useApi.jsx';
 import { getTopicColor } from '../theme/colors.jsx';
+import AnalyticsIcon from '@mui/icons-material/Analytics';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import AbcIcon from '@mui/icons-material/Abc';
+import BarChartIcon from '@mui/icons-material/BarChart';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
+import TelegramIcon from '@mui/icons-material/Telegram';
+import TwitterIcon from '@mui/icons-material/Twitter';
 
 export default function AnalyticsPage() {
   const [startDate, setStartDate] = useState(subDays(new Date(), 30));
@@ -68,9 +75,12 @@ export default function AnalyticsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom fontWeight="bold">
-        📈 Analytics
-      </Typography>
+      <Box display="flex" alignItems="center" gap={1} mb={1}>
+        <AnalyticsIcon sx={{ fontSize: 32, color: 'primary.main' }} />
+        <Typography variant="h4" fontWeight="bold">
+          Analytics
+        </Typography>
+      </Box>
       <Typography variant="body1" color="text.secondary" paragraph>
         Deep dive into trends and patterns
       </Typography>
@@ -107,7 +117,8 @@ export default function AnalyticsPage() {
         ) : (
           <TimelineChart
             data={timelineData}
-            title="📊 Topic Trends Over Time"
+            title="Topic Trends Over Time"
+            icon={<TrendingUpIcon />}
             dataKeys={['count']}
             height={400}
           />
@@ -126,7 +137,8 @@ export default function AnalyticsPage() {
             ) : keywordsData.length > 0 ? (
               <KeywordsBarChart
                 data={keywordsData}
-                title="🔤 Top Keywords"
+                title="Top Keywords"
+                icon={<AbcIcon />}
                 height={400}
               />
             ) : (
@@ -139,9 +151,12 @@ export default function AnalyticsPage() {
         {/* Platform Stats */}
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 3, height: '100%' }}>
-            <Typography variant="h6" gutterBottom fontWeight="600">
-              📊 Platform Activity
-            </Typography>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <BarChartIcon sx={{ color: 'primary.main' }} />
+              <Typography variant="h6" fontWeight="600">
+                Platform Activity
+              </Typography>
+            </Box>
             {comparisonLoading ? (
               <Box display="flex" justifyContent="center" py={4}>
                 <CircularProgress size={32} />
@@ -153,9 +168,12 @@ export default function AnalyticsPage() {
                   .map(([platform, data]) => (
                     <Box key={platform} sx={{ mb: 3, p: 2, bgcolor: 'background.default', borderRadius: 2 }}>
                       <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                        <Typography variant="subtitle1" fontWeight="700" textTransform="capitalize">
-                          {platform === 'telegram' ? '📱 Telegram' : '🐦 Twitter'}
-                        </Typography>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          {platform === 'telegram' ? <TelegramIcon /> : <TwitterIcon />}
+                          <Typography variant="subtitle1" fontWeight="700" textTransform="capitalize">
+                            {platform === 'telegram' ? 'Telegram' : 'Twitter'}
+                          </Typography>
+                        </Box>
                         <Typography variant="caption" sx={{ px: 1, py: 0.5, bgcolor: 'primary.main', color: 'white', borderRadius: 1 }}>
                           {data.avg_daily} posts/day
                         </Typography>
@@ -218,9 +236,12 @@ export default function AnalyticsPage() {
 
       {/* Activity Heatmap */}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-          📅 Activity Heatmap
-        </Typography>
+        <Box display="flex" alignItems="center" gap={1} mb={2}>
+          <CalendarMonthIcon sx={{ color: 'primary.main' }} />
+          <Typography variant="h6" fontWeight="bold">
+            Activity Heatmap
+          </Typography>
+        </Box>
         {heatmapLoading ? (
           <Box display="flex" justifyContent="center" py={4}>
             <CircularProgress />

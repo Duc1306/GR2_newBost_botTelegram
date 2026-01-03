@@ -4,6 +4,11 @@ import ArticleIcon from '@mui/icons-material/Article';
 import CategoryIcon from '@mui/icons-material/Category';
 import LabelIcon from '@mui/icons-material/Label';
 import SourceIcon from '@mui/icons-material/Source';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import PieChartIcon from '@mui/icons-material/PieChart';
+import BarChartIcon from '@mui/icons-material/BarChart';
 import StatCard from '../components/cards/StatCard.jsx';
 import TimelineChart from '../components/charts/TimelineChart.jsx';
 import TopicPieChart from '../components/charts/TopicPieChart.jsx';
@@ -78,9 +83,12 @@ export default function OverviewPage() {
     <Box sx={{ pb: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h3" fontWeight="bold" sx={{ mb: 1, color: 'primary.main' }}>
-          📊 Dashboard Overview
-        </Typography>
+        <Box display="flex" alignItems="center" gap={1} mb={1}>
+          <DashboardIcon sx={{ fontSize: 32, color: 'primary.main' }} />
+          <Typography variant="h3" fontWeight="bold" sx={{ color: 'primary.main' }}>
+            Dashboard Overview
+          </Typography>
+        </Box>
         <Typography variant="body1" color="text.secondary">
           Real-time analytics from social media sources
         </Typography>
@@ -139,9 +147,12 @@ export default function OverviewPage() {
               }
             }}
           >
-            <Typography variant="h6" gutterBottom fontWeight="bold">
-              🔥 Top Topics (30 days)
-            </Typography>
+            <Box display="flex" alignItems="center" gap={1} mb={2}>
+              <LocalFireDepartmentIcon sx={{ color: 'error.main' }} />
+              <Typography variant="h6" fontWeight="bold">
+                Top Topics 
+              </Typography>
+            </Box>
             {statsLoading ? (
               <CircularProgress size={24} />
             ) : topicDistribution.length > 0 ? (
@@ -213,7 +224,8 @@ export default function OverviewPage() {
           ) : (
             <TimelineChart
               data={timelineData}
-              title="📈 Post Volume (30 days)"
+              title="Post Activity Over Time"
+              icon={<TrendingUpIcon />}
               dataKeys={['count']}
               height={350}
             />
@@ -296,7 +308,8 @@ export default function OverviewPage() {
           ) : (
             <KeywordCloud
               keywords={keywordData}
-              title="🔥 Trending Keywords"
+              title="Trending Keywords"
+              icon={<LocalFireDepartmentIcon />}
               height={400}
             />
           )}
@@ -308,7 +321,8 @@ export default function OverviewPage() {
         <Grid item xs={12} md={5}>
           <TopicPieChart
             data={topicDistribution.sort((a, b) => b.value - a.value)}
-            title="📊 Topic Distribution"
+            title="Topic Distribution"
+            icon={<PieChartIcon />}
             height={450}
           />
         </Grid>
@@ -322,9 +336,12 @@ export default function OverviewPage() {
               height: '100%',
             }}
           >
-            <Typography variant="h6" gutterBottom fontWeight="bold">
-              📈 Topic Breakdown
-            </Typography>
+            <Box display="flex" alignItems="center" gap={1} mb={3}>
+              <BarChartIcon sx={{ color: 'primary.main' }} />
+              <Typography variant="h6" fontWeight="bold">
+                Topic Breakdown
+              </Typography>
+            </Box>
             <Box sx={{ mt: 3 }}>
               {topicDistribution
                 .sort((a, b) => b.value - a.value)
