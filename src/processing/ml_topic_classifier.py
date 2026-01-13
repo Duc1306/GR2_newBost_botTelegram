@@ -66,7 +66,8 @@ class MLTopicClassifier:
                 C=1.0,
                 max_iter=2000,
                 random_state=42,
-                dual='auto'
+                dual='auto',
+                class_weight='balanced'  # Tự động cân bằng class weights
             ))
         ])
     

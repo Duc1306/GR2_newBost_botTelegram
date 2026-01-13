@@ -54,7 +54,10 @@ def fetch_labeled_data(limit: int = 10000) -> Tuple[List[str], List[str]]:
 def train_from_db(model_path: str = "models/topic_classifier_svm.pkl", 
                   limit: int = 10000,
                   test_size: float = 0.2,
-                  use_sample_data: bool = False):
+                  use_sample_data: bool = False,
+                  balanced: bool = False,
+                  balance_method: str = 'undersample',
+                  target_samples: int = None):
     """
     Train classifier using data from MongoDB.
     
@@ -63,6 +66,9 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
         limit: Maximum training samples
         test_size: Test set proportion
         use_sample_data: If True, use sample data for testing (not recommended for production)
+        balanced: If True, balance dataset to fix class imbalance
+        balance_method: Method to balance ('undersample', 'oversample', 'combined')
+        target_samples: Target samples per class for balancing
     """
     print("="*60)
     print("Training ML Topic Classifier")
@@ -94,6 +100,84 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
     print("\nLabel distribution:")
     for label, count in sorted(label_counts.items(), key=lambda x: -x[1]):
         print(f"  {label}: {count} ({count/len(labels)*100:.1f}%)")
+    
+    # Check for severe imbalance
+    if not use_sample_data:
+        max_count = max(label_counts.values())
+        min_count = min(label_counts.values()) if min(label_counts.values()) > 0 else 1
+        imbalance_ratio = max_count / min_count
+        
+        if imbalance_ratio > 10:
+            print(f"\n⚠️  WARNING: Severe class imbalance detected!")
+            print(f"   Imbalance ratio: {imbalance_ratio:.1f}:1")
+            print(f"   Most common: {max(label_counts, key=label_counts.get)} ({max_count} samples)")
+            print(f"   Least common: {min(label_counts, key=label_counts.get)} ({min_count} samples)")
+            
+            if not balanced:
+                print(f"\n💡 RECOMMENDATION: Use --balanced flag to fix this:")
+                print(f"   python scripts/train_ml_classifier.py --balanced --method undersample")
+                print(f"\n   Or run: python scripts/balance_training_data.py")
+    
+    # Balance dataset if requested
+    if balanced and not use_sample_data:
+        print(f"\n{'='*60}")
+        print(f"Balancing dataset using: {balance_method}")
+        print(f"{'='*60}")
+        
+        from sklearn.utils import resample
+        import numpy as np
+        
+        # Separate by class
+        from collections import defaultdict
+        class_texts = defaultdict(list)
+        for text, label in zip(texts, labels):
+            class_texts[label].append(text)
+        
+        # Determine target size
+        if target_samples is None:
+            if balance_method == 'undersample':
+                target_samples = min(label_counts.values())
+            elif balance_method == 'oversample':
+                target_samples = max(label_counts.values())
+            else:  # combined
+                target_samples = int(np.median(list(label_counts.values())))
+        
+        print(f"Target samples per class: {target_samples}")
+        
+        # Balance each class
+        balanced_texts = []
+        balanced_labels = []
+        
+        for label in class_texts.keys():
+            class_samples = class_texts[label]
+            n_samples = len(class_samples)
+            
+            if n_samples > target_samples:
+                resampled = resample(class_samples, n_samples=target_samples, random_state=42)
+            elif n_samples < target_samples:
+                resampled = resample(class_samples, n_samples=target_samples, replace=True, random_state=42)
+            else:
+                resampled = class_samples
+                
+            balanced_texts.extend(resampled)
+            balanced_labels.extend([label] * len(resampled))
+            
+            print(f"  {label}: {n_samples} → {len(resampled)}")
+        
+        # Shuffle
+        combined = list(zip(balanced_texts, balanced_labels))
+        np.random.seed(42)
+        np.random.shuffle(combined)
+        texts, labels = zip(*combined)
+        texts, labels = list(texts), list(labels)
+        
+        print(f"\n✓ Balanced dataset: {len(texts)} total samples")
+        
+        # Show new distribution
+        balanced_counts = Counter(labels)
+        print("\nBalanced distribution:")
+        for label, count in sorted(balanced_counts.items(), key=lambda x: -x[1]):
+            print(f"  {label}: {count} ({count/len(labels)*100:.1f}%)")
     
     # 2. Train
     print("\n" + "="*60)
@@ -139,6 +223,13 @@ Examples:
                        help="Test set proportion (0.0-1.0)")
     parser.add_argument("--use-sample-data", action="store_true",
                        help="Use sample data instead of DB (only for testing)")
+    parser.add_argument("--balanced", action="store_true",
+                       help="Balance dataset to fix class imbalance")
+    parser.add_argument("--method", type=str, default='undersample',
+                       choices=['undersample', 'oversample', 'combined'],
+                       help="Balancing method (default: undersample)")
+    parser.add_argument("--target-samples", type=int, default=None,
+                       help="Target samples per class for balancing")
     
     args = parser.parse_args()
     
@@ -146,5 +237,8 @@ Examples:
         model_path=args.model_path,
         limit=args.limit,
         test_size=args.test_size,
-        use_sample_data=args.use_sample_data
+        use_sample_data=args.use_sample_data,
+        balanced=args.balanced,
+        balance_method=args.method,
+        target_samples=args.target_samples
     )

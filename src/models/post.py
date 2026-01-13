@@ -13,6 +13,8 @@ class MediaItem(BaseModel):
 
 class TopicPrediction(BaseModel):
     """ML/Rule-based topic prediction with metadata."""
+    model_config = {"protected_namespaces": ()}  # Allow model_* field names
+    
     topic: str
     confidence: float = Field(ge=0.0, le=1.0)
     model_version: str
