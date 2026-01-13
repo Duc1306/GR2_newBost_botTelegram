@@ -58,6 +58,12 @@ class Post(BaseModel):
     # Topic Predictions (NEW - with confidence + version tracking)
     topic_predictions: List[TopicPrediction] = []
     
+    # Manual Labels (Ground Truth)
+    manual_labels: List[str] = Field(default=[], description="Manually verified topic labels (ground truth)")
+    labels_verified: bool = Field(default=False, description="Whether labels have been manually verified")
+    verified_by: Optional[str] = Field(default=None, description="Username who verified the labels")
+    verified_at: Optional[datetime] = Field(default=None, description="When labels were verified")
+    
     # Scoring
     score: float = 0.0
     
@@ -128,8 +134,20 @@ class Post(BaseModel):
         )
         self.topic_predictions.append(prediction)
     
-    def get_primary_topic(self, min_confidence: float = 0.0) -> Optional[str]:
-        """Get highest confidence topic above threshold."""
+    def get_primary_topic(self, min_confidence: float = 0.0, prefer_manual: bool = True) -> Optional[str]:
+        """Get highest confidence topic above threshold.
+        
+        Args:
+            min_confidence: Minimum confidence threshold for predictions
+            prefer_manual: If True, return manual label if available
+            
+        Returns:
+            Primary topic or None
+        """
+        # Prefer manual labels if verified
+        if prefer_manual and self.labels_verified and self.manual_labels:
+            return self.manual_labels[0]
+        
         valid_predictions = [
             p for p in self.topic_predictions 
             if p.confidence >= min_confidence
@@ -146,3 +164,15 @@ class Post(BaseModel):
         )
         
         return sorted_preds[0].topic
+    
+    def set_manual_labels(self, labels: List[str], verified_by: str) -> None:
+        """Set manual labels and mark as verified (ground truth).
+        
+        Args:
+            labels: List of manually assigned topic labels
+            verified_by: Username who verified the labels
+        """
+        self.manual_labels = labels
+        self.labels_verified = True
+        self.verified_by = verified_by
+        self.verified_at = datetime.now(UTC)

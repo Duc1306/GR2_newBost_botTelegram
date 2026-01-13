@@ -1,3 +1,7 @@
+// Primary color for main actions
+export const primary = '#1976d2';
+export const secondary = '#dc004e';
+
 // Topic Colors (consistent across dashboard)
 export const topicColors = {
   'Crypto': '#F7931A',           // Bitcoin orange

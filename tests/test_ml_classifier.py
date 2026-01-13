@@ -8,10 +8,11 @@ import tempfile
 
 def test_topic_labels():
     """Test topic labels are defined correctly."""
-    assert len(TOPIC_LABELS) == 9
-    assert "Crypto/Finance" in TOPIC_LABELS
-    assert "Technology" in TOPIC_LABELS
-    assert "Other" in TOPIC_LABELS
+    assert len(TOPIC_LABELS) == 10
+    assert "Crypto" in TOPIC_LABELS
+    assert "Công nghệ" in TOPIC_LABELS
+    assert "Chính trị" in TOPIC_LABELS
+    assert "Kinh tế" in TOPIC_LABELS
 
 
 def test_create_sample_data():
@@ -50,8 +51,8 @@ def test_train_and_predict():
         # Get sample data
         texts, labels = create_sample_training_data()
         
-        # Train
-        classifier = MLTopicClassifier(model_path=model_path)
+        # Train (disable autoload for new model)
+        classifier = MLTopicClassifier(model_path=model_path, autoload=False)
         accuracy = classifier.train(texts, labels, test_size=0.2)
         
         # Check training
@@ -90,9 +91,9 @@ def test_save_and_load_model():
         model_path = tmp.name
     
     try:
-        # Train and save
+        # Train and save (disable autoload for new model)
         texts, labels = create_sample_training_data()
-        classifier1 = MLTopicClassifier(model_path=model_path)
+        classifier1 = MLTopicClassifier(model_path=model_path, autoload=False)
         classifier1.train(texts, labels, test_size=0.2)
         classifier1.save_model()
         
@@ -116,7 +117,7 @@ def test_get_feature_importance():
     """Test feature importance extraction."""
     texts, labels = create_sample_training_data()
     
-    classifier = MLTopicClassifier()
+    classifier = MLTopicClassifier(model_path="/tmp/test_importance.pkl", autoload=False)
     classifier.train(texts, labels, test_size=0.2)
     
     importance = classifier.get_feature_importance(top_n=10)
@@ -136,7 +137,8 @@ def test_get_feature_importance():
 
 def test_predict_without_model():
     """Test prediction without trained model raises error."""
-    classifier = MLTopicClassifier()
+    # Create classifier without autoload to ensure no model is loaded
+    classifier = MLTopicClassifier(model_path="/tmp/nonexistent.pkl", autoload=False)
     
     with pytest.raises(ValueError, match="Model not trained"):
         classifier.predict("test text")
@@ -145,7 +147,8 @@ def test_predict_without_model():
 def test_empty_text_prediction():
     """Test prediction with empty text."""
     texts, labels = create_sample_training_data()
-    classifier = MLTopicClassifier()
+    # Disable autoload to ensure we use freshly trained model
+    classifier = MLTopicClassifier(model_path="/tmp/test_empty.pkl", autoload=False)
     classifier.train(texts, labels, test_size=0.2)
     
     # Empty text should still return a prediction

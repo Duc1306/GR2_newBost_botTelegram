@@ -15,13 +15,14 @@ Thu thập, phân loại và hiển thị tin tức từ **Telegram & Twitter** 
 ## 📚 Mục Lục
 
 1. [🚀 Quick Start](#-quick-start)
-2. [🤖 ML Topic Classification](#-ml-topic-classification)
-3. [📂 Project Structure](#-project-structure)
-4. [🔧 API Documentation](#-api-documentation)
-5. [💾 Database Design](#-database-design)
-6. [🐦 Twitter Integration](#-twitter-integration)
-7. [⚠️ Troubleshooting](#-troubleshooting)
-8. [📊 Requirements](#-requirements)
+2. [🔒 Security & Authentication](#-security--authentication)
+3. [🤖 ML Topic Classification](#-ml-topic-classification)
+4. [📂 Project Structure](#-project-structure)
+5. [🔧 API Documentation](#-api-documentation)
+6. [💾 Database Design](#-database-design)
+7. [🐦 Twitter Integration](#-twitter-integration)
+8. [⚠️ Troubleshooting](#-troubleshooting)
+9. [📊 Requirements](#-requirements)
 
 ---
 
@@ -44,8 +45,16 @@ TELEGRAM_API_ID=your_id
 TELEGRAM_API_HASH=your_hash
 TELEGRAM_SESSION_STRING=your_session
 
+# Security (IMPORTANT!)
+JWT_SECRET_KEY=your-secret-key-change-in-production
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin123  # CHANGE THIS!
+
 # Create session (1 lần duy nhất)
 python scripts\create_session.py
+
+# Test security features
+scripts\test_security.cmd
 ```
 
 ### 2. Thu Thập & Train ML Model
@@ -82,7 +91,119 @@ scripts\run_fullstack.cmd
 ```
 
 - **Backend:** http://localhost:8000 (API docs: /docs)
-- **Frontend:** http://localhost:3000
+- **Frontend:** http://localhost:5173
+- **Login:** admin / admin123 (change in production!)
+
+---
+
+## 🔒 Security & Authentication
+
+### Tính Năng Bảo Mật
+
+- ✅ **JWT Authentication** - Token-based auth cho dashboard
+- ✅ **API Key Support** - Alternative auth cho external clients
+- ✅ **Rate Limiting** - 60 requests/minute, 1000/hour per IP
+- ✅ **Structured Logging** - Track all requests & errors with loguru
+- ✅ **Frontend Integration** - Login/logout UI với Material-UI
+
+### Quick Test
+
+```bash
+# Test all security features
+scripts\test_security.cmd
+```
+
+**Expected output:**
+```
+✅ PASS - Authentication
+✅ PASS - Logging  
+✅ PASS - Rate Limiting
+🎉 All security features are working correctly!
+```
+
+### Login Credentials (Default)
+
+```
+Username: admin
+Password: admin123
+```
+
+⚠️ **CHANGE IN PRODUCTION!** Edit `.env`:
+```bash
+ADMIN_USERNAME=your_admin
+ADMIN_PASSWORD=StrongPassword123!
+JWT_SECRET_KEY=generate-32-char-random-string
+```
+
+### API Authentication
+
+**Option 1: JWT Token (Recommended)**
+```bash
+# 1. Login
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin123"}'
+
+# Response:
+# {
+#   "access_token": "eyJhbGci...",
+#   "token_type": "bearer",
+#   "expires_in": 86400,
+#   "username": "admin"
+# }
+
+# 2. Use token
+curl http://localhost:8000/posts \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+**Option 2: API Key**
+```bash
+# Set in .env
+API_KEY=your-secret-api-key-2026
+
+# Use X-API-Key header
+curl http://localhost:8000/posts \
+  -H "X-API-Key: your-secret-api-key-2026"
+```
+
+### Rate Limiting
+
+```python
+# Configure in .env
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_PER_MINUTE=60   # Max 60 requests/minute
+RATE_LIMIT_PER_HOUR=1000   # Max 1000 requests/hour
+```
+
+**Response when exceeded:**
+```json
+HTTP/429 - Too Many Requests
+{
+  "error": "Rate limit exceeded"
+}
+```
+
+### Logging
+
+All requests logged to `logs/api.log`:
+
+```
+2026-01-13 23:09:02 | INFO | → GET /posts from 127.0.0.1
+2026-01-13 23:09:02 | INFO | ← GET /posts status=200 duration=0.124s
+2026-01-13 23:09:05 | ERROR | API error: /posts | Unauthorized
+```
+
+**View logs:**
+```bash
+# All logs
+tail -f logs/api.log
+
+# Errors only
+tail -f logs/api.log | grep ERROR
+```
+
+**Full documentation:** [docs/API_SECURITY.md](docs/API_SECURITY.md)
 
 ---
 
@@ -114,6 +235,12 @@ scripts\train_ml_classifier.cmd
 # Train với sample data (demo only)
 scripts\train_ml_classifier.cmd --use-sample-data
 
+# Comprehensive model evaluation (với baseline comparison)
+scripts\evaluate_model.cmd
+
+# Evaluate với verified data only
+scripts\evaluate_model.cmd --verified-only
+
 # Auto retrain khi có data mới (≥100 posts)
 scripts\auto_retrain.cmd
 
@@ -134,6 +261,46 @@ scripts\extract_keyword_trends.cmd --days 7
 
 # Test model
 python -m src.processing.ml_topic_classifier
+```
+
+### Model Evaluation & Metrics
+
+**Đánh giá đầy đủ với baseline comparison:**
+```bash
+# Evaluate all models (Rule-based, Naive Bayes, SVM)
+scripts\evaluate_model.cmd
+
+# Evaluate với nhiều data hơn
+scripts\evaluate_model.cmd --limit 5000
+
+# Evaluate với test split khác
+scripts\evaluate_model.cmd --test-size 0.3
+```
+
+**Metrics được báo cáo:**
+- ✅ **Overall:** Accuracy, Macro-F1, Weighted-F1, Precision, Recall
+- ✅ **Per-Topic:** Precision, Recall, F1-score cho từng topic
+- ✅ **Confusion Matrix:** Ma trận nhầm lẫn với labels
+- ✅ **Baseline Comparison:** So sánh với Rule-based và Naive Bayes
+- ✅ **JSON Report:** Lưu kết quả vào `models/evaluation_report.json`
+
+**Expected output:**
+```
+=== Overall Metrics ===
+Accuracy:          0.7845 (78.45%)
+Macro F1-Score:    0.7532
+Weighted F1-Score: 0.7823
+Macro Precision:   0.7621
+Macro Recall:      0.7445
+
+MODEL COMPARISON
+Model                     Accuracy     Macro-F1     Weighted-F1
+--------------------------------------------------------------------------------
+🏆 Main: SVM              0.7845       0.7532       0.7823
+   Baseline: Naive Bayes  0.7234       0.6891       0.7156
+   Baseline: Rule-Based   0.5678       0.5123       0.5589
+
+📈 Improvement over baseline: +38.1%
 ```
 
 ### Database Schema
@@ -166,6 +333,41 @@ python -m src.processing.ml_topic_classifier
 - Recommended: 5000 samples
 - Target accuracy: > 70%
 - Retrain frequency: Daily/Weekly (dùng `auto_retrain.py`)
+
+### ⚠️ Về Data Quality & Manual Labeling
+
+**QUAN TRỌNG:** Training data hiện tại được gán nhãn TỰ ĐỘNG (pseudo-labels) - không phải ground truth!
+
+**Để đảm bảo chất lượng model:**
+
+1. **Verify labels thủ công** (tối thiểu 500-1000 samples):
+```bash
+# Xem thống kê verification
+scripts\verify_labels.cmd --stats
+
+# Verify 50 posts
+scripts\verify_labels.cmd --limit 50
+
+# Verify với username tracking
+scripts\verify_labels.cmd --limit 100 --username john
+```
+
+2. **Train với verified data:**
+```bash
+# Train với chỉ verified labels (KHUYẾN NGHỊ)
+python scripts\train_ml_classifier.py --verified-only
+
+# Hoặc train mixed nhưng có warning rõ ràng
+python scripts\train_ml_classifier.py
+```
+
+3. **Xem chi tiết quy trình:** [docs/LABELING_PROCESS.md](docs/LABELING_PROCESS.md)
+
+**Data Quality Levels:**
+- ❌ 100% pseudo-labels: Không đảm bảo accuracy
+- ⚠️ 20-50% verified: Chấp nhận được
+- ✅ 50-80% verified: Tốt cho production
+- ⭐ 100% verified: Tốt nhất (ground truth)
 
 ---
 

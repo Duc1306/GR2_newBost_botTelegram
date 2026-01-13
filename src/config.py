@@ -43,3 +43,31 @@ def env_twitter_sources() -> List[str]:
     if not RAW_TWITTER_SOURCES:
         return []
     return [s.strip() for s in RAW_TWITTER_SOURCES.split(";") if s.strip()]
+
+# =============================================================================
+# Security & Authentication Configuration
+# =============================================================================
+
+# JWT Configuration
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-2026")
+JWT_ALGORITHM = "HS256"
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24h
+
+# Admin Credentials (simple auth - for demo purposes)
+# In production, use hashed passwords in database
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # Change in production!
+
+# API Key for external clients (optional)
+API_KEY = os.getenv("API_KEY")  # If set, clients can use this instead of JWT
+
+# Rate Limiting
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+RATE_LIMIT_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "1000"))
+
+# Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FILE = os.getenv("LOG_FILE", "logs/api.log")
+LOG_ROTATION = os.getenv("LOG_ROTATION", "500 MB")  # Rotate when file reaches 500MB
+LOG_RETENTION = os.getenv("LOG_RETENTION", "30 days")  # Keep logs for 30 days

@@ -1,16 +1,39 @@
 from __future__ import annotations
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Depends, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from datetime import datetime, timedelta
 from src.db.mongo import get_db
 from src.models.post import Post
+from src.api.auth import (
+    login, 
+    get_current_user, 
+    get_current_admin_user,
+    LoginRequest,
+    LoginResponse
+)
+from src.api.middleware import (
+    setup_rate_limiting,
+    setup_logging,
+    log_requests_middleware,
+    limiter
+)
+from loguru import logger
+
+# Initialize logging first
+setup_logging()
 
 app = FastAPI(
     title="MXH Aggregator API",
     description="API tổng hợp tin tức từ Telegram & Twitter với ML Analytics",
     version="2.0.0"
 )
+
+# Setup rate limiting
+setup_rate_limiting(app)
+
+# Add request logging middleware
+app.middleware("http")(log_requests_middleware)
 
 # CORS middleware để frontend có thể gọi API
 app.add_middleware(
@@ -28,13 +51,77 @@ app.add_middleware(
 )
 
 
+# =============================================================================
+# Authentication Endpoints (PUBLIC - No rate limit for critical auth)
+# =============================================================================
+
+@app.post("/auth/login", response_model=LoginResponse, tags=["Authentication"])
+async def login_endpoint(request: LoginRequest):
+    """
+    Login endpoint to get JWT token.
+    
+    **Credentials (default):**
+    - Username: admin
+    - Password: admin123
+    
+    **Response:**
+    - access_token: JWT token to use in Authorization header
+    - token_type: "bearer"
+    - expires_in: Token expiration time in seconds
+    - username: Authenticated username
+    
+    **Usage:**
+    ```
+    curl -X POST http://localhost:8000/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"username": "admin", "password": "admin123"}'
+    ```
+    """
+    logger.info(f"Login attempt for user: {request.username}")
+    result = login(request.username, request.password)
+    logger.info(f"Login successful for user: {request.username}")
+    return result
+
+@app.post("/auth/logout", tags=["Authentication"])
+async def logout_endpoint(current_user: str = Depends(get_current_user)):
+    """
+    Logout endpoint (token invalidation handled client-side).
+    
+    In JWT stateless setup, logout is handled by client removing the token.
+    This endpoint is provided for consistency and logging purposes.
+    """
+    logger.info(f"Logout: {current_user}")
+    return {"message": "Logged out successfully", "username": current_user}
+
+@app.get("/auth/me", tags=["Authentication"])
+async def get_current_user_info(current_user: str = Depends(get_current_user)):
+    """
+    Get current authenticated user info.
+    Useful for frontend to verify token validity.
+    """
+    return {"username": current_user, "authenticated": True}
+
+# =============================================================================
+# Public Endpoints
+# =============================================================================
+
 @app.get("/")
 async def root():
     """Trang chủ API"""
     return {
         "message": "🎉 MXH Aggregator API v2.0",
         "docs": "/docs",
+        "security": {
+            "authentication": "JWT Bearer Token or X-API-Key header",
+            "login": "/auth/login",
+            "default_credentials": "admin / admin123 (change in production!)"
+        },
         "endpoints": {
+            "auth": {
+                "login": "/auth/login",
+                "logout": "/auth/logout",
+                "me": "/auth/me"
+            },
             "core": {
                 "health": "/health",
                 "posts": "/posts",
@@ -65,7 +152,9 @@ async def health():
 
 
 @app.get("/posts", response_model=List[dict])
+@limiter.limit("100/minute")
 async def get_posts(
+    request: Request,
     platform: Optional[str] = Query("all", description="Filter by platform (telegram, twitter, all)"),
     source: Optional[str] = Query(None, description="Lọc theo nguồn (telegram, x)"),
     topic: Optional[str] = Query(None, description="Lọc theo chủ đề"),
@@ -74,7 +163,8 @@ async def get_posts(
     link_only: bool = Query(False, description="Chỉ lấy bài có link bên ngoài"),
     topics_only: bool = Query(False, description="Chỉ lấy bài đã phân loại (có ít nhất 1 topic)"),
     limit: int = Query(20, ge=1, le=100, description="Số bài tối đa (1-100)"),
-    skip: int = Query(0, ge=0, description="Bỏ qua N bài đầu")
+    skip: int = Query(0, ge=0, description="Bỏ qua N bài đầu"),
+    current_user: str = Depends(get_current_user)
 ):
     """Lấy danh sách bài viết với filter"""
     db = get_db()
@@ -770,4 +860,170 @@ async def get_activity_heatmap(
             "to": to_date.isoformat()
         },
         "total_posts": sum(sum(hours.values()) for hours in heatmap.values())
+    }
+
+# =============================================================================
+# Notifications Endpoints
+# =============================================================================
+
+@app.get("/notifications", tags=["Notifications"])
+async def get_notifications(
+    request: Request,
+    unread_only: bool = Query(False, description="Only show unread notifications"),
+    limit: int = Query(50, ge=1, le=100),
+    current_user: str = Depends(get_current_user)
+):
+    """Get notifications for current user."""
+    from src.models.notification import Notification
+    
+    db = get_db()
+    coll = db["notifications"]
+    
+    query = {"user": current_user}
+    if unread_only:
+        query["read"] = False
+    
+    cursor = coll.find(query).sort("created_at", -1).limit(limit)
+    notifications = []
+    
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        notifications.append(doc)
+    
+    return {
+        "notifications": notifications,
+        "unread_count": coll.count_documents({"user": current_user, "read": False})
+    }
+
+@app.post("/notifications/{notification_id}/read", tags=["Notifications"])
+async def mark_notification_read(
+    notification_id: str,
+    current_user: str = Depends(get_current_user)
+):
+    """Mark a notification as read."""
+    from bson import ObjectId
+    
+    db = get_db()
+    coll = db["notifications"]
+    
+    result = coll.update_one(
+        {"_id": ObjectId(notification_id), "user": current_user},
+        {"$set": {"read": True}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    return {"success": True}
+
+@app.post("/notifications/mark-all-read", tags=["Notifications"])
+async def mark_all_read(current_user: str = Depends(get_current_user)):
+    """Mark all notifications as read."""
+    db = get_db()
+    coll = db["notifications"]
+    
+    result = coll.update_many(
+        {"user": current_user, "read": False},
+        {"$set": {"read": True}}
+    )
+    
+    return {"success": True, "updated": result.modified_count}
+
+@app.delete("/notifications/{notification_id}", tags=["Notifications"])
+async def delete_notification(
+    notification_id: str,
+    current_user: str = Depends(get_current_user)
+):
+    """Delete a notification."""
+    from bson import ObjectId
+    
+    db = get_db()
+    coll = db["notifications"]
+    
+    result = coll.delete_one({"_id": ObjectId(notification_id), "user": current_user})
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    return {"success": True}
+
+# =============================================================================
+# Settings Endpoints
+# =============================================================================
+
+@app.get("/settings", tags=["Settings"])
+async def get_settings(current_user: str = Depends(get_current_user)):
+    """Get user settings."""
+    from src.models.settings import UserSettings
+    
+    db = get_db()
+    coll = db["user_settings"]
+    
+    settings = coll.find_one({"username": current_user})
+    
+    if not settings:
+        # Create default settings
+        default_settings = UserSettings(username=current_user).dict()
+        coll.insert_one(default_settings)
+        return default_settings
+    
+    settings.pop("_id", None)
+    return settings
+
+@app.put("/settings", tags=["Settings"])
+async def update_settings(
+    settings: dict,
+    current_user: str = Depends(get_current_user)
+):
+    """Update user settings."""
+    from src.models.settings import UpdateSettingsRequest
+    
+    db = get_db()
+    coll = db["user_settings"]
+    
+    # Remove None values
+    updates = {k: v for k, v in settings.items() if v is not None and k != "username"}
+    
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    
+    result = coll.update_one(
+        {"username": current_user},
+        {"$set": updates},
+        upsert=True
+    )
+    
+    logger.info(f"Settings updated for {current_user}: {list(updates.keys())}")
+    
+    return {"success": True, "updated_fields": list(updates.keys())}
+
+@app.post("/settings/change-password", tags=["Settings"])
+async def change_password(
+    request: dict,
+    current_user: str = Depends(get_current_user)
+):
+    """Change user password."""
+    from src.config import ADMIN_USERNAME, ADMIN_PASSWORD
+    from src.api.auth import authenticate_user, get_password_hash
+    
+    current_password = request.get("current_password")
+    new_password = request.get("new_password")
+    
+    if not current_password or not new_password:
+        raise HTTPException(status_code=400, detail="Current and new password are required")
+    
+    # Verify current password
+    if not authenticate_user(current_user, current_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    
+    # Validate new password
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    
+    # In production, update in database
+    # For now, just log it
+    logger.info(f"Password change requested for {current_user}")
+    
+    return {
+        "message": "Password changed successfully! (Demo mode - not persisted)"
     }

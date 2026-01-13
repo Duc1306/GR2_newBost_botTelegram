@@ -32,19 +32,29 @@ TOPIC_LABELS = [
 class MLTopicClassifier:
     """Machine Learning Topic Classifier using TF-IDF + SVM."""
     
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: Optional[str] = None, autoload: bool = True):
         """
         Initialize classifier.
         
         Args:
             model_path: Path to saved model file. If None, creates new model.
+            autoload: Whether to automatically load model if it exists. Default True.
         """
         self.model_path = model_path or "models/topic_classifier_svm.pkl"
         self.pipeline: Optional[Pipeline] = None
         self.labels = TOPIC_LABELS
         
-        if Path(self.model_path).exists():
-            self.load_model()
+        # Auto-load model if exists and autoload=True
+        if autoload and Path(self.model_path).exists():
+            try:
+                # Check if file is not empty and valid
+                if Path(self.model_path).stat().st_size > 0:
+                    self.load_model()
+                else:
+                    print(f"⚠️  Model file exists but is empty: {self.model_path}")
+            except (EOFError, pickle.UnpicklingError) as e:
+                print(f"⚠️  Failed to load model: {e}")
+                print("   Will train new model when needed.")
     
     def build_pipeline(self) -> Pipeline:
         """
@@ -98,12 +108,27 @@ class MLTopicClassifier:
         # Preprocess all texts
         cleaned_texts = [self.preprocess_text(t) for t in texts]
         
+        # Check if we have enough samples for stratified split
+        from collections import Counter
+        label_counts = Counter(labels)
+        min_samples = min(label_counts.values())
+        n_classes = len(label_counts)
+        
+        # For stratified split to work:
+        # - Each class needs at least 2 samples
+        # - test_size must be >= number of classes
+        use_stratify = min_samples >= 2 and len(texts) * test_size >= n_classes
+        
+        if not use_stratify:
+            print(f"⚠️  Sample size too small for stratified split. Using random split.")
+            print(f"   Classes: {n_classes}, Min samples per class: {min_samples}")
+        
         # Split train/test
         X_train, X_test, y_train, y_test = train_test_split(
             cleaned_texts, labels, 
             test_size=test_size, 
             random_state=42,
-            stratify=labels  # đảm bảo tỷ lệ label đều
+            stratify=labels if use_stratify else None
         )
         
         print(f"Train: {len(X_train)}, Test: {len(X_test)}")
@@ -115,15 +140,63 @@ class MLTopicClassifier:
         # Evaluate on test set
         y_pred = self.pipeline.predict(X_test)
         
-        print("\n=== Classification Report ===")
+        # Import metrics
+        from sklearn.metrics import f1_score, precision_score, recall_score
+        
+        # Calculate all metrics
+        accuracy = (y_pred == y_test).sum() / len(y_test)
+        macro_f1 = f1_score(y_test, y_pred, average='macro', zero_division=0)
+        weighted_f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
+        macro_precision = precision_score(y_test, y_pred, average='macro', zero_division=0)
+        macro_recall = recall_score(y_test, y_pred, average='macro', zero_division=0)
+        
+        # Display results
+        print("\n" + "="*60)
+        print("EVALUATION RESULTS")
+        print("="*60)
+        
+        print("\n=== Overall Metrics ===")
+        print(f"Accuracy:          {accuracy:.4f} ({accuracy:.2%})")
+        print(f"Macro F1-Score:    {macro_f1:.4f}")
+        print(f"Weighted F1-Score: {weighted_f1:.4f}")
+        print(f"Macro Precision:   {macro_precision:.4f}")
+        print(f"Macro Recall:      {macro_recall:.4f}")
+        
+        print("\n=== Per-Topic Classification Report ===")
         print(classification_report(y_test, y_pred, zero_division=0))
         
         print("\n=== Confusion Matrix ===")
-        print(confusion_matrix(y_test, y_pred))
+        cm = confusion_matrix(y_test, y_pred)
+        print(cm)
         
-        # Calculate accuracy
-        accuracy = (y_pred == y_test).sum() / len(y_test)
-        print(f"\nTest Accuracy: {accuracy:.2%}")
+        # Pretty print confusion matrix with labels
+        print("\n=== Confusion Matrix (with labels) ===")
+        unique_labels = sorted(list(set(y_test) | set(y_pred)))
+        print(f"{'':15s}", end="")
+        for label in unique_labels:
+            print(f"{label[:12]:>12s}", end=" ")
+        print()
+        for i, label in enumerate(unique_labels):
+            print(f"{label[:15]:15s}", end="")
+            for j in range(len(unique_labels)):
+                if i < cm.shape[0] and j < cm.shape[1]:
+                    print(f"{cm[i][j]:12d}", end=" ")
+                else:
+                    print(f"{0:12d}", end=" ")
+            print()
+        
+        # Store metrics for later retrieval
+        self.last_metrics = {
+            'accuracy': accuracy,
+            'macro_f1': macro_f1,
+            'weighted_f1': weighted_f1,
+            'macro_precision': macro_precision,
+            'macro_recall': macro_recall,
+            'confusion_matrix': cm.tolist(),
+            'classification_report': classification_report(y_test, y_pred, zero_division=0, output_dict=True)
+        }
+        
+        print("\n" + "="*60)
         
         return accuracy
     
@@ -260,70 +333,88 @@ def create_sample_training_data() -> Tuple[List[str], List[str]]:
     You should replace this with real labeled data.
     
     Returns:
-        Tuple of (texts, labels)
+        Tuple of (texts, labels) - Using Vietnamese labels matching TOPIC_LABELS
     """
     samples = [
-        # Crypto/Finance
-        ("Bitcoin tăng vọt lên 50000 USD, nhà đầu tư crypto hào hứng", "Crypto/Finance"),
-        ("Ethereum ra mắt bản nâng cấp mới, giá ETH tăng 20%", "Crypto/Finance"),
-        ("Chứng khoán Việt Nam giảm điểm, VN-Index mất mốc 1200", "Crypto/Finance"),
-        ("Lãi suất ngân hàng tăng, người vay gặp khó khăn", "Crypto/Finance"),
-        ("Binance công bố giao dịch khối lượng lớn, thị trường sôi động", "Crypto/Finance"),
+        # Crypto (5 samples)
+        ("Bitcoin tăng vọt lên 50000 USD, nhà đầu tư crypto hào hứng", "Crypto"),
+        ("Ethereum ra mắt bản nâng cấp mới, giá ETH tăng 20%", "Crypto"),
+        ("Binance công bố giao dịch khối lượng lớn, thị trường sôi động", "Crypto"),
+        ("NFT market cap reaches new all-time high", "Crypto"),
+        ("DeFi protocol launches new staking rewards", "Crypto"),
         
-        # Technology  
-        ("Apple ra mắt iPhone 16 với chip AI mới, camera 200MP", "Technology"),
-        ("ChatGPT-5 có khả năng xử lý video, cộng đồng phấn khích", "Technology"),
-        ("Samsung phát triển màn hình gập mới, độ bền tăng gấp đôi", "Technology"),
-        ("Google công bố AI Gemini 2.0, vượt trội GPT-4", "Technology"),
-        ("Tesla ra mắt robot hình người Optimus Gen 3", "Technology"),
+        # Kinh tế (5 samples)
+        ("Chứng khoán Việt Nam giảm điểm, VN-Index mất mốc 1200", "Kinh tế"),
+        ("Lãi suất ngân hàng tăng, người vay gặp khó khăn", "Kinh tế"),
+        ("GDP Việt Nam tăng trưởng 6.5% trong quý 3", "Kinh tế"),
+        ("Xuất khẩu nông sản đạt kỷ lục mới", "Kinh tế"),
+        ("Startup Việt gọi vốn thành công 50 triệu USD", "Kinh tế"),
         
-        # Politics
-        ("Tổng thống Mỹ công bố chính sách mới về thuế quan", "Politics"),
-        ("Quốc hội Việt Nam thông qua luật đất đai sửa đổi", "Politics"),
-        ("Liên hợp quốc họp khẩn cấp về xung đột Trung Đông", "Politics"),
-        ("Bầu cử tổng thống Pháp: ứng viên cánh tả dẫn đầu", "Politics"),
-        ("NATO mở rộng thành viên, Thụy Điển chính thức gia nhập", "Politics"),
+        # Công nghệ (5 samples)  
+        ("Apple ra mắt iPhone 16 với chip AI mới, camera 200MP", "Công nghệ"),
+        ("ChatGPT-5 có khả năng xử lý video, cộng đồng phấn khích", "Công nghệ"),
+        ("Samsung phát triển màn hình gập mới, độ bền tăng gấp đôi", "Công nghệ"),
+        ("Google công bố AI Gemini 2.0, vượt trội GPT-4", "Công nghệ"),
+        ("Tesla ra mắt robot hình người Optimus Gen 3", "Công nghệ"),
         
-        # Sports
-        ("Messi ghi 3 bàn, Inter Miami thắng đậm 5-0", "Sports"),
-        ("Ronaldo chuyển đến Al Nassr, lương khủng 200 triệu euro/năm", "Sports"),
-        ("Đội tuyển Việt Nam thắng Thái Lan 2-1 tại vòng loại World Cup", "Sports"),
-        ("Novak Djokovic vô địch Wimbledon lần thứ 25", "Sports"),
-        ("Olympic Paris 2024: Mỹ dẫn đầu bảng xếp hạng huy chương", "Sports"),
+        # Chính trị (5 samples)
+        ("Tổng thống Mỹ công bố chính sách mới về thuế quan", "Chính trị"),
+        ("Quốc hội Việt Nam thông qua luật đất đai sửa đổi", "Chính trị"),
+        ("Liên hợp quốc họp khẩn cấp về xung đột Trung Đông", "Chính trị"),
+        ("Bầu cử tổng thống Pháp: ứng viên cánh tả dẫn đầu", "Chính trị"),
+        ("NATO mở rộng thành viên, Thụy Điển chính thức gia nhập", "Chính trị"),
         
-        # Entertainment
-        ("BTS comeback với album mới, phá kỷ lục YouTube", "Entertainment"),
-        ("Blackpink tổ chức concert tại Việt Nam, vé bán hết trong 5 phút", "Entertainment"),
-        ("Phim Avengers mới thu về 1 tỷ USD sau 3 ngày công chiếu", "Entertainment"),
-        ("Netflix ra mắt series Squid Game 2, rating phá đảo", "Entertainment"),
-        ("Ca sĩ Sơn Tùng MTP phát hành MV mới, trending #1 YouTube", "Entertainment"),
+        # Thể thao (5 samples)
+        ("Messi ghi 3 bàn, Inter Miami thắng đậm 5-0", "Thể thao"),
+        ("Ronaldo chuyển đến Al Nassr, lương khủng 200 triệu euro/năm", "Thể thao"),
+        ("Đội tuyển Việt Nam thắng Thái Lan 2-1 tại vòng loại World Cup", "Thể thao"),
+        ("Novak Djokovic vô địch Wimbledon lần thứ 25", "Thể thao"),
+        ("Olympic Paris 2024: Mỹ dẫn đầu bảng xếp hạng huy chương", "Thể thao"),
         
-        # Health
-        ("Phát hiện thuốc mới chữa ung thư phổi, hiệu quả 85%", "Health"),
-        ("WHO cảnh báo biến thể COVID-19 mới lây lan nhanh", "Health"),
-        ("Vaccine HIV đầu tiên trên thế giới sắp được phê duyệt", "Health"),
-        ("Tập yoga 30 phút mỗi ngày giảm nguy cơ đau tim 40%", "Health"),
-        ("Bệnh viện K phát triển kỹ thuật xạ trị ung thư tiên tiến", "Health"),
+        # Giải trí (5 samples)
+        ("BTS comeback với album mới, phá kỷ lục YouTube", "Giải trí"),
+        ("Blackpink tổ chức concert tại Việt Nam, vé bán hết trong 5 phút", "Giải trí"),
+        ("Phim Avengers mới thu về 1 tỷ USD sau 3 ngày công chiếu", "Giải trí"),
+        ("Netflix ra mắt series Squid Game 2, rating phá đảo", "Giải trí"),
+        ("Ca sĩ Sơn Tùng MTP phát hành MV mới, trending #1 YouTube", "Giải trí"),
         
-        # Education
-        ("ĐH Quốc gia Hà Nội công bố phương án tuyển sinh 2024", "Education"),
-        ("Học bổng toàn phần du học Mỹ dành cho sinh viên Việt Nam", "Education"),
-        ("Thi tốt nghiệp THPT 2024: 1 triệu thí sinh đăng ký", "Education"),
-        ("EdTech startup Việt gọi vốn thành công 10 triệu USD", "Education"),
-        ("Coursera mở khóa học AI miễn phí, 500k người đăng ký", "Education"),
+        # Sức khỏe (5 samples)
+        ("Phát hiện thuốc mới chữa ung thư phổi, hiệu quả 85%", "Sức khỏe"),
+        ("WHO cảnh báo biến thể COVID-19 mới lây lan nhanh", "Sức khỏe"),
+        ("Vaccine HIV đầu tiên trên thế giới sắp được phê duyệt", "Sức khỏe"),
+        ("Tập yoga 30 phút mỗi ngày giảm nguy cơ đau tim 40%", "Sức khỏe"),
+        ("Bệnh viện K phát triển kỹ thuật xạ trị ung thư tiên tiến", "Sức khỏe"),
         
-        # Travel/Food
-        ("Đà Nẵng vào top 10 điểm đến tốt nhất châu Á 2024", "Travel/Food"),
-        ("Mở cửa trở lại visa du lịch Nhật Bản, tour đầy khách", "Travel/Food"),
-        ("Phở Việt Nam được CNN bình chọn món ăn ngon nhất thế giới", "Travel/Food"),
-        ("Khách sạn 5 sao Phú Quốc giảm giá 50% dịp hè", "Travel/Food"),
-        ("Nhà hàng Michelin đầu tiên tại Việt Nam khai trương", "Travel/Food"),
+        # Giáo dục (5 samples)
+        ("ĐH Quốc gia Hà Nội công bố phương án tuyển sinh 2024", "Giáo dục"),
+        ("Học bổng toàn phần du học Mỹ dành cho sinh viên Việt Nam", "Giáo dục"),
+        ("Thi tốt nghiệp THPT 2024: 1 triệu thí sinh đăng ký", "Giáo dục"),
+        ("EdTech startup Việt gọi vốn thành công 10 triệu USD", "Giáo dục"),
+        ("Coursera mở khóa học AI miễn phí, 500k người đăng ký", "Giáo dục"),
         
-        # Other
-        ("Dự báo thời tiết: Bão số 5 đổ bộ miền Trung trong 24h", "Other"),
-        ("Giá xăng tăng 2000đ/lít, người dân bức xúc", "Other"),
-        ("Triển lãm nghệ thuật đương đại tại Hà Nội thu hút đông đảo khán giả", "Other"),
-        ("Động đất 5.5 độ Richter tại Nhật Bản, không có thiệt hại", "Other"),
+        # Du lịch (10 samples)
+        ("Đà Nẵng vào top 10 điểm đến tốt nhất châu Á 2024", "Du lịch"),
+        ("Mở cửa trở lại visa du lịch Nhật Bản, tour đầy khách", "Du lịch"),
+        ("Khách sạn 5 sao Phú Quốc giảm giá 50% dịp hè", "Du lịch"),
+        ("Hội An được UNESCO công nhận di sản văn hóa thế giới", "Du lịch"),
+        ("Tour du lịch Sapa giảm giá, khách tăng đột biến", "Du lịch"),
+        ("Vịnh Hạ Long đón 10 triệu du khách quốc tế năm 2024", "Du lịch"),
+        ("Mở đường bay thẳng Việt Nam - Mỹ, vé rẻ bất ngờ", "Du lịch"),
+        ("Phú Quốc xây casino mới, thu hút đầu tư khủng", "Du lịch"),
+        ("Du lịch Đà Lạt tăng trưởng 200% trong mùa lễ", "Du lịch"),
+        ("Nha Trang khai trương công viên biển lớn nhất VN", "Du lịch"),
+        
+        # Ẩm thực (10 samples)
+        ("Phở Việt Nam được CNN bình chọn món ăn ngon nhất thế giới", "Ẩm thực"),
+        ("Nhà hàng Michelin đầu tiên tại Việt Nam khai trương", "Ẩm thực"),
+        ("Bánh mì Việt Nam nổi tiếng khắp thế giới", "Ẩm thực"),
+        ("Món bún chả Hà Nội được Obama thưởng thức", "Ẩm thực"),
+        ("Quán cà phê trứng ở phố cổ Hà Nội đông khách", "Ẩm thực"),
+        ("Gỏi cuốn Việt Nam vào top món ăn healthy nhất", "Ẩm thực"),
+        ("Masterchef Vietnam mùa 5 tìm kiếm tài năng ẩm thực", "Ẩm thực"),
+        ("Street food Sài Gòn thu hút du khách quốc tế", "Ẩm thực"),
+        ("Lẩu Thái Tom Yum mở chi nhánh tại Việt Nam", "Ẩm thực"),
+        ("Món nem rán Việt Nam chinh phục thực khách Hàn Quốc", "Ẩm thực"),
     ]
     
     texts, labels = zip(*samples)

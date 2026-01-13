@@ -1,16 +1,16 @@
 @echo off
-REM Run both FastAPI backend and Next.js frontend
+REM Run both FastAPI backend and Vite frontend
 echo ========================================
 echo  Starting NewsBot Full Stack
 echo ========================================
 echo.
 
 echo Starting FastAPI backend on port 8000...
-start "FastAPI Backend" cmd /k "cd /d c:\Users\84328\botTele && venv\Scripts\activate && python -m uvicorn src.api.main:app --reload"
+start "FastAPI Backend" cmd /k "cd /d c:\Users\84328\botTele && python -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000"
 
 timeout /t 3 /nobreak >nul
 
-echo Starting Vite frontend on port 5173...
+echo Starting Vite frontend on port 5174...
 cd /d c:\Users\84328\botTele\web
 start "Vite Frontend" cmd /k "npm run dev"
 
