@@ -57,7 +57,7 @@ python scripts\create_session.py
 scripts\test_security.cmd
 ```
 
-### 2. Thu Thập & Train ML Model
+### 2. Thu Thập & Phân Loại Tự Động
 
 ```bash
 # Thu thập từ Telegram
@@ -71,16 +71,94 @@ scripts\fetch_twitter.cmd --full    # Full mode (500 tweets)
 # Hoặc dùng trực tiếp
 python -m src.ingestion.telegram_worker          # Telegram
 python -m src.ingestion.twitter_worker           # Twitter
+```
 
+### 2.1. 🎯 Phân Loại Topic Tự Động
+
+**Phương pháp 1: Classify từ TEXT CONTENT (Recommended - 99% success)**
+
+```bash
+# Dry run (test trước, không lưu database)
+python scripts\classify_by_content.py --limit 100
+
+# Apply cho 1000 posts đầu tiên
+python scripts\classify_by_content.py --limit 1000 --apply
+
+# Apply cho TẤT CẢ posts (61,000+)
+python scripts\classify_by_content.py --apply
+```
+
+**Phương pháp 2: Extract từ URL (Chỉ cho news sites - 2-10% success)**
+
+```bash
+# Dry run (test 500 URLs)
+python scripts\extract_categories_from_urls.py --limit 500
+
+# Apply và lưu vào database
+python scripts\extract_categories_from_urls.py --limit 5000 --apply
+```
+
+**So sánh:**
+- **classify_by_content.py**: 
+  - ✅ Success rate ~99%
+  - ✅ Hoạt động với MỌI post (YouTube, Telegram, etc.)
+  - ✅ Nhanh (~3-5 phút cho 61k posts)
+  - ✅ Sử dụng keywords Tiếng Việt + English
+  
+- **extract_categories_from_urls.py**:
+  - ⚠️ Success rate chỉ 2-10%
+  - ⚠️ Chỉ hoạt động với news URLs
+  - ⚠️ Chậm (cần resolve shorteners)
+  - ✅ Ground truth từ trang báo chính thống
+
+**🎯 Khuyến nghị: Chạy CÙNG LÚC cả 2 scripts:**
+1. Chạy `classify_by_content.py` trước → 99% posts có topic
+2. Chạy `extract_categories_from_urls.py` sau → Override với ground truth từ news sites
+
+```bash
+# Best practice workflow
+python scripts\classify_by_content.py --apply
+python scripts\extract_categories_from_urls.py --limit 10000 --apply
+```
+
+### 2.2. Train ML Model
+
+```bash
 # Train ML topic classifier (từ cả Telegram + Twitter data)
 scripts\train_ml_classifier.cmd
 
+# Hoặc train với balanced data
+python scripts\train_ml_classifier.py --balanced --target-samples 500
+
+# Evaluate model accuracy
+scripts\evaluate_model.cmd
+```
+
+### 2.3. Database Maintenance
+
+```bash
 # Migrate database schema (1 lần duy nhất)
 scripts\migrate_db_schema.cmd
 
+# Create indexes for performance
+scripts\create_indexes.cmd
+
+# Check database labels
+scripts\check_db_labels.cmd
+
+# Balance training data
+scripts\balance_training_data.cmd
+```
+
+### 2.4. Analytics & Reporting
+
+```bash
 # Generate analytics data
 scripts\aggregate_topic_stats.cmd --days 7
 scripts\extract_keyword_trends.cmd --days 7
+
+# Predict topics for unlabeled posts
+scripts\predict_topics.cmd
 ```
 
 ### 3. Chạy Ứng Dụng
@@ -209,13 +287,64 @@ tail -f logs/api.log | grep ERROR
 
 ## 🤖 ML Topic Classification
 
+### 14 Topics Được Hỗ Trợ
+
+Hệ thống phân loại **14 chủ đề** bao gồm các lĩnh vực chính:
+
+1. 💰 **Crypto** - Bitcoin, Ethereum, blockchain, DeFi, NFT
+2. 📈 **Kinh tế** - Tài chính, chứng khoán, ngân hàng, thương mại
+3. 💻 **Công nghệ** - AI, smartphone, software, cloud computing
+4. 🏛️ **Chính trị** - Chính phủ, nghị viện, chính sách, bầu cử
+5. 🌍 **Thế giới** - Tin tức quốc tế, quan hệ ngoại giao, xung đột
+6. ⚖️ **Pháp luật** - Tòa án, luật pháp, tội phạm, công an
+7. 🚗 **Ô tô - Xe máy** - Xe hơi, xe điện, thị trường ô tô
+8. 🔬 **Khoa học** - Nghiên cứu khoa học, khám phá, công nghệ mới
+9. ⚽ **Thể thao** - Bóng đá, World Cup, Olympic, thể thao điện tử
+10. 🎬 **Giải trí** - Phim ảnh, âm nhạc, showbiz, celebrity
+11. 💊 **Sức khỏe** - Y tế, dinh dưỡng, fitness, tâm lý
+12. 📚 **Giáo dục** - Đào tạo, học tập, trường học, giáo dục
+13. ✈️ **Du lịch** - Điểm đến, khách sạn, tour, du lịch
+14. 🍜 **Ẩm thực** - Món ăn, nhà hàng, công thức nấu ăn
+
+**Frontend Support:**
+- ✅ 14 màu sắc riêng biệt cho mỗi topic
+- ✅ 14 icons Material-UI tương ứng
+- ✅ Filter sidebar với tất cả topics
+- ✅ Dynamic topic fetching từ API
+
+### Phương Pháp Phân Loại
+
+**1. URL-based Classification (Ground Truth - 10% posts)**
+- Extract category từ URL path: `/kinh-te/`, `/phap-luat/`, `/the-gioi/`
+- Domain mapping: `tradingview.com` → Crypto, `bloom.bg` → Kinh tế
+- Resolve URL shorteners: `ift.tt` → VnExpress, `bloom.bg` → Bloomberg
+- **Ưu điểm:** Chính xác 100% cho news sites
+- **Nhược điểm:** Chỉ hoạt động với 10% URLs (news sites)
+
+**2. Content-based Classification (AI/Keywords - 99% posts)**
+- Keyword matching với 300+ keywords tiếng Việt + English
+- Multi-topic detection (1 post có thể có nhiều topics)
+- Scoring system dựa trên frequency + context
+- **Ưu điểm:** Hoạt động với MỌI post (YouTube, Telegram, GitHub, etc.)
+- **Nhược điểm:** Có thể sai với posts ngắn hoặc technical content
+
+**3. ML Classification (TF-IDF + SVM - Fallback)**
+- Machine learning dựa trên training data
+- TF-IDF vectorization + LinearSVC classifier
+- Auto-retrain khi có data mới
+- **Ưu điểm:** Học từ patterns, cải thiện theo thời gian
+- **Nhược điểm:** Cần training data đủ lớn (≥500 posts per topic)
+
 ### Tính Năng
 
-- **TF-IDF + SVM** baseline classifier
-- **10 Topics:** Crypto, Kinh tế, Công nghệ, Chính trị, Thể thao, Giải trí, Sức khỏe, Giáo dục, Du lịch, Ẩm thực
+- **Multi-method Classification:** URL → Content → ML (cascade)
 - **Auto-predict:** Mỗi post mới tự động được phân loại
 - **Confidence tracking:** Lưu topic với confidence + model version + timestamp
 - **Multi-platform:** Hỗ trợ Telegram & Twitter (chuẩn bị sẵn)
+- **Data Quality Tiers:**
+  1. **Ground Truth** (source_topic từ news sites)
+  2. **Manual Labels** (manual_labels từ admin)
+  3. **ML Predictions** (topics từ classifier)
 
 ### Workflow
 
@@ -477,7 +606,134 @@ python scripts/train_ml_classifier.py
 
 ---
 
-## 📊 Requirements
+## � Scripts Reference
+
+### 🎯 Classification Scripts (Phân loại tự động)
+
+#### classify_by_content.py ⭐ RECOMMENDED
+Phân loại posts dựa trên TEXT CONTENT (success rate ~99%)
+
+```bash
+# Dry run - Test trước, không lưu database
+python scripts\classify_by_content.py --limit 100
+
+# Apply cho 1000 posts
+python scripts\classify_by_content.py --limit 1000 --apply
+
+# Apply cho TẤT CẢ posts
+python scripts\classify_by_content.py --apply
+```
+
+**Khi nào dùng:**
+- ✅ Posts không có URL hoặc URL không phải news (YouTube, Telegram, GitHub)
+- ✅ Muốn classify nhanh toàn bộ database
+- ✅ Cần success rate cao (~99%)
+- ✅ Posts có text content đủ dài (>20 chars)
+
+#### extract_categories_from_urls.py
+Extract category từ NEWS URLs (success rate 2-10%)
+
+```bash
+# Dry run - Test 500 URLs
+python scripts\extract_categories_from_urls.py --limit 500
+
+# Apply và lưu database
+python scripts\extract_categories_from_urls.py --limit 5000 --apply
+```
+
+**Khi nào dùng:**
+- ✅ Posts có URLs từ news sites chính thống (VnExpress, Bloomberg, etc.)
+- ✅ Muốn ground truth từ trang báo
+- ✅ Override ML predictions với data chính xác hơn
+
+**Best Practice Workflow:**
+```bash
+# 1. Classify tất cả posts bằng content (nhanh, 99% success)
+python scripts\classify_by_content.py --apply
+
+# 2. Override với ground truth từ URLs (chậm, 10% success)
+python scripts\extract_categories_from_urls.py --limit 10000 --apply
+
+# 3. Train ML model
+python scripts\train_ml_classifier.py --verified-only
+```
+
+### 🤖 ML Training & Evaluation
+
+```bash
+# Train model
+scripts\train_ml_classifier.cmd
+python scripts\train_ml_classifier.py --balanced --target-samples 500
+
+# Evaluate model
+scripts\evaluate_model.cmd
+python scripts\evaluate_model.py --verified-only
+
+# Auto retrain
+scripts\auto_retrain.cmd
+python scripts\auto_retrain.py --force
+```
+
+### 📊 Analytics & Stats
+
+```bash
+# Topic statistics
+scripts\aggregate_topic_stats.cmd --days 7
+
+# Keyword trends
+scripts\extract_keyword_trends.cmd --days 7
+
+# Predict topics
+scripts\predict_topics.cmd
+```
+
+### 🔧 Maintenance
+
+```bash
+# Database migration (1 lần duy nhất)
+scripts\migrate_db_schema.cmd
+
+# Create indexes
+scripts\create_indexes.cmd
+
+# Check labels
+scripts\check_db_labels.cmd
+
+# Balance data
+scripts\balance_training_data.cmd
+
+# Verify labels
+scripts\verify_labels.cmd --limit 50
+```
+
+### 🌐 Data Collection
+
+```bash
+# Telegram
+scripts\fetch_telegram.cmd          # Quick (200 posts)
+scripts\fetch_telegram.cmd --full   # Full (1000 posts)
+
+# Twitter
+scripts\fetch_twitter.cmd           # Quick (100 tweets)
+scripts\fetch_twitter.cmd --full    # Full (500 tweets)
+```
+
+### 🚀 Application
+
+```bash
+# Full stack
+scripts\run_fullstack.cmd
+
+# API only
+scripts\run_api.cmd
+
+# Security test
+scripts\test_security.cmd
+```
+
+---
+
+## �📊 Requirements
 
 - Python 3.12+
 - MongoDB (local or Atlas)

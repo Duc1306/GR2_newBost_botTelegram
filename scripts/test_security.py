@@ -12,7 +12,7 @@ from loguru import logger
 def test_authentication():
     """Test JWT authentication system."""
     print("\n" + "="*60)
-    print("🔐 Testing Authentication System")
+    print(" Testing Authentication System")
     print("="*60)
     
     # Test 1: Valid login
@@ -46,13 +46,13 @@ def test_authentication():
         print(f"  ✗ Token decode failed: {e}")
         return False
     
-    print("\n✅ All authentication tests passed!")
+    print("\n All authentication tests passed!")
     return True
 
 def test_logging():
     """Test logging system."""
     print("\n" + "="*60)
-    print("📝 Testing Logging System")
+    print(" Testing Logging System")
     print("="*60)
     
     from src.api.middleware import setup_logging, log_ingestion_error, log_api_error
@@ -81,13 +81,13 @@ def test_logging():
         user="admin"
     )
     
-    print("\n✅ Logging tests completed! Check logs/api.log")
+    print("\n Logging tests completed! Check logs/api.log")
     return True
 
 def test_rate_limiting():
     """Test rate limiting configuration."""
     print("\n" + "="*60)
-    print("🚦 Testing Rate Limiting Configuration")
+    print(" Testing Rate Limiting Configuration")
     print("="*60)
     
     from src.config import (
@@ -101,16 +101,16 @@ def test_rate_limiting():
     print(f"✓ Limit per hour: {RATE_LIMIT_PER_HOUR}")
     
     if RATE_LIMIT_ENABLED:
-        print("\n✅ Rate limiting is configured and enabled!")
+        print("\n Rate limiting is configured and enabled!")
     else:
-        print("\n⚠️  Rate limiting is disabled (enable in .env)")
+        print("\n  Rate limiting is disabled (enable in .env)")
     
     return True
 
 def main():
     """Run all security tests."""
     print("\n" + "="*60)
-    print("🔒 API SECURITY TEST SUITE")
+    print(" API SECURITY TEST SUITE")
     print("="*60)
     
     results = []
@@ -122,17 +122,17 @@ def main():
     
     # Summary
     print("\n" + "="*60)
-    print("📊 TEST SUMMARY")
+    print(" TEST SUMMARY")
     print("="*60)
     
     for name, passed in results:
-        status = "✅ PASS" if passed else "❌ FAIL"
+        status = " PASS" if passed else "❌ FAIL"
         print(f"{status} - {name}")
     
     all_passed = all(result[1] for result in results)
     
     if all_passed:
-        print("\n🎉 All security features are working correctly!")
+        print("\n All security features are working correctly!")
         print("\nNext steps:")
         print("1. Start API: scripts\\run_api.cmd")
         print("2. Start frontend: cd web && npm run dev")
@@ -140,7 +140,7 @@ def main():
         print("4. Login with: admin / admin123")
         return 0
     else:
-        print("\n❌ Some tests failed. Please fix the issues above.")
+        print("\n Some tests failed. Please fix the issues above.")
         return 1
 
 if __name__ == "__main__":

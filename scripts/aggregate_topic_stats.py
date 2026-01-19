@@ -151,12 +151,12 @@ def aggregate_last_n_days(days: int = 7):
     
     for i in range(days):
         date = today - timedelta(days=i)
-        print(f"\n📅 {date.strftime('%Y-%m-%d')}:")
+        print(f"\ {date.strftime('%Y-%m-%d')}:")
         
         # Aggregate for "all" platforms
         aggregate_topic_stats_for_date(date, platform="all")
     
-    print("\n✅ Aggregation completed!")
+    print("\ Aggregation completed!")
 
 
 def main():

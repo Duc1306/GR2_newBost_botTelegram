@@ -92,7 +92,7 @@ def auto_retrain(min_new_samples: int = 100,
     print("="*60)
     
     if force:
-        print("\n⚡ FORCE RETRAIN mode enabled")
+        print("\n FORCE RETRAIN mode enabled")
         should_train = True
         reason = "Forced retrain by user"
     else:
@@ -107,7 +107,7 @@ def auto_retrain(min_new_samples: int = 100,
         print(f"  Current model age: {(datetime.now() - model_last_modified).total_seconds() / 3600:.1f} hours")
     
     if should_train:
-        print(f"\n✅ Retraining: {reason}")
+        print(f"\n Retraining: {reason}")
         
         # Import and run training
         from scripts.train_ml_classifier import train_from_db
@@ -123,7 +123,7 @@ def auto_retrain(min_new_samples: int = 100,
         print("✓ Retrain completed successfully!")
         print("="*60)
     else:
-        print(f"\n⏭️  Skipping: {reason}")
+        print(f"\n  Skipping: {reason}")
         print("\nTo force retrain, use: --force")
 
 

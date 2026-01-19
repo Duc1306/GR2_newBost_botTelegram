@@ -51,21 +51,21 @@ def main():
     print("="*80)
     print("TRAIN ML CLASSIFIER WITH CLASS_WEIGHT='BALANCED'")
     print("="*80)
-    print("\n💡 Phương pháp này:")
-    print("   ✅ Giữ TOÀN BỘ 10,000 mẫu (không bỏ dữ liệu)")
-    print("   ✅ SVM tự động cân bằng class weights")
-    print("   ✅ Class nhỏ được coi trọng hơn trong training")
-    print("   ✅ Model vẫn học được ngôn ngữ từ class lớn")
-    print("   ✅ KHÔNG bị overfitting như oversample")
-    print("   ✅ KHÔNG mất data như undersample\n")
+    print("\n Phương pháp này:")
+    print("    Giữ TOÀN BỘ 10,000 mẫu (không bỏ dữ liệu)")
+    print("    SVM tự động cân bằng class weights")
+    print("    Class nhỏ được coi trọng hơn trong training")
+    print("    Model vẫn học được ngôn ngữ từ class lớn")
+    print("    KHÔNG bị overfitting như oversample")
+    print("    KHÔNG mất data như undersample\n")
     
     # Fetch data
     print(f"Fetching labeled data from MongoDB (limit=10000)...")
     texts, labels = fetch_labeled_data(limit=10000)
     
     if not texts:
-        print("\n❌ Không tìm thấy dữ liệu đã label trong database!")
-        print("\n📝 Các bước cần làm:")
+        print("\n Không tìm thấy dữ liệu đã label trong database!")
+        print("\n Các bước cần làm:")
         print("   1. Thu thập dữ liệu: scripts\\fetch_telegram.cmd --full")
         print("   2. Label dữ liệu bằng rule-based classifier (tự động)")
         return
@@ -85,14 +85,14 @@ def main():
     min_count = min(label_counts.values()) if min(label_counts.values()) > 0 else 1
     imbalance_ratio = max_count / min_count
     
-    print(f"\n📊 Imbalance ratio: {imbalance_ratio:.1f}:1")
+    print(f"\n Imbalance ratio: {imbalance_ratio:.1f}:1")
     print(f"   Most common: {max(label_counts, key=label_counts.get)} ({max_count:,} samples)")
     print(f"   Least common: {min(label_counts, key=label_counts.get)} ({min_count:,} samples)")
     
     if imbalance_ratio > 10:
-        print(f"\n⚠️  SEVERE CLASS IMBALANCE DETECTED!")
-        print(f"   ✅ Đang dùng class_weight='balanced' để xử lý")
-        print(f"   💡 SVM sẽ tự động tăng weight cho class nhỏ")
+        print(f"\n  SEVERE CLASS IMBALANCE DETECTED!")
+        print(f"    Đang dùng class_weight='balanced' để xử lý")
+        print(f"    SVM sẽ tự động tăng weight cho class nhỏ")
     
     # Train
     print("\n" + "="*80)
@@ -115,12 +115,12 @@ def main():
     print("\n" + "="*80)
     print("TRAINING COMPLETED")
     print("="*80)
-    print(f"✅ Accuracy: {accuracy:.2%}")
-    print(f"✅ Trained on: {len(texts):,} samples")
-    print(f"✅ Class weight: balanced (automatic)")
-    print(f"✅ Model saved: {model_path}")
+    print(f" Accuracy: {accuracy:.2%}")
+    print(f" Trained on: {len(texts):,} samples")
+    print(f" Class weight: balanced (automatic)")
+    print(f" Model saved: {model_path}")
     
-    print("\n💡 GIẢI THÍCH:")
+    print("\n GIẢI THÍCH:")
     print("   - Accuracy có thể thấp hơn undersample (OK)")
     print("   - Nhưng model học được TẤT CẢ dữ liệu")
     print("   - Class nhỏ được coi trọng hơn tự động")

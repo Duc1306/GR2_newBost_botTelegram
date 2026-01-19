@@ -68,14 +68,14 @@ def create_test_notifications():
     # Insert new notifications
     result = db.notifications.insert_many(notifications)
     
-    print(f"✅ Created {len(result.inserted_ids)} test notifications:")
+    print(f" Created {len(result.inserted_ids)} test notifications:")
     for notif in notifications:
         status = "📖 Read" if notif["read"] else "🔔 Unread"
         print(f"  {status} [{notif['type'].upper()}] {notif['title']}")
     
     # Count unread
     unread_count = db.notifications.count_documents({"user": "admin", "read": False})
-    print(f"\n📊 Total unread notifications: {unread_count}")
+    print(f"\n Total unread notifications: {unread_count}")
 
 if __name__ == "__main__":
     create_test_notifications()

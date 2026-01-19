@@ -20,6 +20,10 @@ TOPIC_LABELS = [
     "Kinh tế",
     "Công nghệ", 
     "Chính trị",
+    "Thế giới",
+    "Pháp luật",
+    "Ô tô - Xe máy",
+    "Khoa học",
     "Thể thao",
     "Giải trí",
     "Sức khỏe",
@@ -51,9 +55,9 @@ class MLTopicClassifier:
                 if Path(self.model_path).stat().st_size > 0:
                     self.load_model()
                 else:
-                    print(f"⚠️  Model file exists but is empty: {self.model_path}")
+                    print(f"  Model file exists but is empty: {self.model_path}")
             except (EOFError, pickle.UnpicklingError) as e:
-                print(f"⚠️  Failed to load model: {e}")
+                print(f"  Failed to load model: {e}")
                 print("   Will train new model when needed.")
     
     def build_pipeline(self) -> Pipeline:
@@ -120,7 +124,7 @@ class MLTopicClassifier:
         use_stratify = min_samples >= 2 and len(texts) * test_size >= n_classes
         
         if not use_stratify:
-            print(f"⚠️  Sample size too small for stratified split. Using random split.")
+            print(f"  Sample size too small for stratified split. Using random split.")
             print(f"   Classes: {n_classes}, Min samples per class: {min_samples}")
         
         # Split train/test
@@ -426,13 +430,13 @@ def create_sample_training_data() -> Tuple[List[str], List[str]]:
 # ===========================================
 if __name__ == "__main__":
     print("=== ML Topic Classifier - Test Predictions ===")
-    print("\n⚠️  Để train model với dữ liệu thật, sử dụng:")
+    print("\n  Để train model với dữ liệu thật, sử dụng:")
     print("   python scripts/train_ml_classifier.py\n")
     
     # Check if model exists
     model_path = Path("models/topic_classifier_svm.pkl")
     if not model_path.exists():
-        print("❌ Model chưa được train!")
+        print(" Model chưa được train!")
         print("\nChạy lệnh sau để train model:")
         print("   python scripts/train_ml_classifier.py")
         print("\nHoặc để test với sample data:")

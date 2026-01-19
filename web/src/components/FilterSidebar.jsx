@@ -16,6 +16,10 @@ import MonetizationOnIcon from '@mui/icons-material/MonetizationOn';
 import ComputerIcon from '@mui/icons-material/Computer';
 import CurrencyBitcoinIcon from '@mui/icons-material/CurrencyBitcoin';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
+import PublicIcon from '@mui/icons-material/Public';
+import GavelIcon from '@mui/icons-material/Gavel';
+import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
+import ScienceIcon from '@mui/icons-material/Science';
 import SportsSoccerIcon from '@mui/icons-material/SportsSoccer';
 import MovieIcon from '@mui/icons-material/Movie';
 import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
@@ -24,10 +28,14 @@ import FlightIcon from '@mui/icons-material/Flight';
 import RestaurantIcon from '@mui/icons-material/Restaurant';
 
 const TOPIC_ICONS = {
+  'Crypto': <CurrencyBitcoinIcon fontSize="small" />,
   'Kinh tế': <MonetizationOnIcon fontSize="small" />,
   'Công nghệ': <ComputerIcon fontSize="small" />,
-  'Crypto': <CurrencyBitcoinIcon fontSize="small" />,
   'Chính trị': <AccountBalanceIcon fontSize="small" />,
+  'Thế giới': <PublicIcon fontSize="small" />,
+  'Pháp luật': <GavelIcon fontSize="small" />,
+  'Ô tô - Xe máy': <DirectionsCarIcon fontSize="small" />,
+  'Khoa học': <ScienceIcon fontSize="small" />,
   'Thể thao': <SportsSoccerIcon fontSize="small" />,
   'Giải trí': <MovieIcon fontSize="small" />,
   'Sức khỏe': <LocalHospitalIcon fontSize="small" />,

@@ -41,7 +41,7 @@ async def verify_channels(channels: list[str], check_activity: bool = True):
         await client.connect()
         
         if not await client.is_user_authorized():
-            print("❌ Session not authorized!")
+            print(" Session not authorized!")
             print("Please run: python scripts/create_session.py")
             return
             
@@ -90,10 +90,10 @@ async def verify_channels(channels: list[str], check_activity: bool = True):
                             if post_count_7days == 0:
                                 is_active = False
                     except Exception as e:
-                        print(f"⚠️  {i}. @{channel_username} - Cannot check activity: {e}")
+                        print(f"  {i}. @{channel_username} - Cannot check activity: {e}")
                 
                 # Print result
-                status = "✓" if is_active else "⚠️ "
+                status = "✓" if is_active else " "
                 print(f"{status} {i}. @{channel_username}")
                 print(f"     Title: {title}")
                 if member_count is not None:
@@ -106,20 +106,20 @@ async def verify_channels(channels: list[str], check_activity: bool = True):
                     valid_channels.append(channel_username)
                 else:
                     inactive_channels.append(channel_username)
-                    print(f"     ⚠️  INACTIVE (no posts in 7 days)")
+                    print(f"       INACTIVE (no posts in 7 days)")
                 
                 print()
                 
             except (UsernameInvalidError, UsernameNotOccupiedError):
-                print(f"❌ {i}. @{channel_username} - NOT FOUND (invalid username)")
+                print(f" {i}. @{channel_username} - NOT FOUND (invalid username)")
                 invalid_channels.append(channel_username)
                 print()
             except ChannelPrivateError:
-                print(f"❌ {i}. @{channel_username} - PRIVATE (cannot access)")
+                print(f" {i}. @{channel_username} - PRIVATE (cannot access)")
                 invalid_channels.append(channel_username)
                 print()
             except Exception as e:
-                print(f"❌ {i}. @{channel_username} - ERROR: {e}")
+                print(f" {i}. @{channel_username} - ERROR: {e}")
                 invalid_channels.append(channel_username)
                 print()
             
@@ -128,28 +128,28 @@ async def verify_channels(channels: list[str], check_activity: bool = True):
         
         # Summary
         print("="*80)
-        print("\n📊 SUMMARY")
+        print("\n SUMMARY")
         print("="*80)
         print(f"✓ Valid & Active: {len(valid_channels)}")
-        print(f"⚠️  Inactive: {len(inactive_channels)}")
-        print(f"❌ Invalid/Private: {len(invalid_channels)}")
+        print(f"  Inactive: {len(inactive_channels)}")
+        print(f" Invalid/Private: {len(invalid_channels)}")
         print(f"Total checked: {len(channels)}")
         
         # Show invalid channels
         if invalid_channels:
-            print("\n❌ INVALID/PRIVATE CHANNELS (remove from .env):")
+            print("\n INVALID/PRIVATE CHANNELS (remove from .env):")
             for ch in invalid_channels:
                 print(f"   - {ch}")
         
         # Show inactive channels
         if inactive_channels:
-            print("\n⚠️  INACTIVE CHANNELS (no posts in 7 days):")
+            print("\n  INACTIVE CHANNELS (no posts in 7 days):")
             for ch in inactive_channels:
                 print(f"   - {ch}")
         
         # Generate updated .env line
         if valid_channels:
-            print("\n✅ RECOMMENDED TELEGRAM_CHANNELS for .env:")
+            print("\n RECOMMENDED TELEGRAM_CHANNELS for .env:")
             print("="*80)
             # Group by 5 channels per line for readability
             grouped = [valid_channels[i:i+5] for i in range(0, len(valid_channels), 5)]
@@ -181,7 +181,7 @@ def main():
         channels = env_channels()
     
     if not channels:
-        print("❌ No channels to check!")
+        print(" No channels to check!")
         print("Add channels to .env TELEGRAM_CHANNELS or use --channels flag")
         return
     

@@ -13,16 +13,16 @@ from src.ingestion.sources import CHANNELS
 
 async def check_channels():
     if not TELEGRAM_API_ID or not TELEGRAM_API_HASH:
-        print("❌ Thiếu TELEGRAM_API_ID hoặc TELEGRAM_API_HASH trong .env")
+        print(" Thiếu TELEGRAM_API_ID hoặc TELEGRAM_API_HASH trong .env")
         return
     
     if TELEGRAM_SESSION_STRING:
         client = TelegramClient(StringSession(TELEGRAM_SESSION_STRING), int(TELEGRAM_API_ID), TELEGRAM_API_HASH)
     else:
-        print("❌ Thiếu TELEGRAM_SESSION_STRING. Chạy create_session.py trước.")
+        print(" Thiếu TELEGRAM_SESSION_STRING. Chạy create_session.py trước.")
         return
     
-    print(f"🔍 Kiểm tra {len(CHANNELS)} kênh...\n")
+    print(f" Kiểm tra {len(CHANNELS)} kênh...\n")
     
     async with client:
         valid_channels = []
@@ -33,17 +33,17 @@ async def check_channels():
                 entity = await client.get_entity(ch)
                 title = getattr(entity, 'title', ch)
                 valid_channels.append((ch, title))
-                print(f"✅ {ch} → {title}")
+                print(f" {ch} → {title}")
             except Exception as e:
                 invalid_channels.append((ch, str(e)))
-                print(f"❌ {ch} → {e}")
+                print(f" {ch} → {e}")
         
-        print(f"\n📊 Tổng kết:")
-        print(f"   ✅ Hợp lệ: {len(valid_channels)}/{len(CHANNELS)}")
-        print(f"   ❌ Không tìm thấy: {len(invalid_channels)}/{len(CHANNELS)}")
+        print(f"\ Tổng kết:")
+        print(f"    Hợp lệ: {len(valid_channels)}/{len(CHANNELS)}")
+        print(f"    Không tìm thấy: {len(invalid_channels)}/{len(CHANNELS)}")
         
         if invalid_channels:
-            print(f"\n💡 Gợi ý sửa các kênh không hợp lệ:")
+            print(f"\ Gợi ý sửa các kênh không hợp lệ:")
             print(f"   1. Mở Telegram → tìm kiếm kênh")
             print(f"   2. Vào kênh → xem username (@ ở trên cùng)")
             print(f"   3. Cập nhật tên kênh đúng vào .env")

@@ -168,7 +168,7 @@ def show_verification_stats():
     print("="*60)
     
     if verified < 500:
-        print(f"\n💡 RECOMMENDATION:")
+        print(f"\n RECOMMENDATION:")
         print(f"   Verify at least 500 samples for reliable training")
         print(f"   Currently: {verified}/500")
         print(f"\n   Run: python scripts/verify_labels.py --limit 500")

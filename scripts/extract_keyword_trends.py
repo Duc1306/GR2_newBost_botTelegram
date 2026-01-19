@@ -185,10 +185,10 @@ def extract_last_n_days(days: int = 7):
     
     for i in range(days):
         date = today - timedelta(days=i)
-        print(f"\n📅 {date.strftime('%Y-%m-%d')}:")
+        print(f"\n {date.strftime('%Y-%m-%d')}:")
         extract_keyword_trends_for_date(date)
     
-    print("\n✅ Extraction completed!")
+    print("\n Extraction completed!")
 
 
 def main():

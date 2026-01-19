@@ -19,15 +19,15 @@ def main():
     
     # Total posts
     total = collection.count_documents({})
-    print(f"\n📊 Total posts in DB: {total:,}")
+    print(f"\ Total posts in DB: {total:,}")
     
     # Posts with topics field
     with_topics = collection.count_documents({"topics": {"$exists": True}})
-    print(f"📌 Posts with topics field: {with_topics:,}")
+    print(f" Posts with topics field: {with_topics:,}")
     
     # Posts with non-empty topics
     with_labels = collection.count_documents({"topics": {"$exists": True, "$ne": []}})
-    print(f"✅ Posts with labels (non-empty topics): {with_labels:,}")
+    print(f" Posts with labels (non-empty topics): {with_labels:,}")
     
     if with_labels > 0:
         # Sample post
@@ -52,8 +52,8 @@ def main():
         for result in collection.aggregate(pipeline):
             print(f"  {result['_id']}: {result['count']:,}")
     else:
-        print("\n⚠️ No labeled data found!")
-        print("\n💡 Run rule-based classifier first:")
+        print("\n No labeled data found!")
+        print("\n Run rule-based classifier first:")
         print("   scripts\\fetch_telegram.cmd full")
 
 if __name__ == "__main__":

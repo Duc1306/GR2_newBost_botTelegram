@@ -56,7 +56,8 @@ export default function OverviewPage() {
   const topicStats = stats?.by_topic || {};
   const totalTopics = Object.keys(topicStats).length;
   const totalSources = stats?.by_source ? Object.keys(stats.by_source).length : 0;
-  const labeledPosts = Object.values(topicStats).reduce((sum, count) => sum + count, 0);
+  // Use the correct labeled_posts field from API (unique posts with topics)
+  const labeledPosts = stats?.labeled_posts || 0;
 
   // Prepare pie chart data
   const topicDistribution = Object.entries(topicStats).map(([name, value]) => ({

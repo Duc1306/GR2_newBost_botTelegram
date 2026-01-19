@@ -13,28 +13,28 @@ def check_rate_limits():
     """Check current rate limit status for Twitter API."""
     
     if not TWITTER_BEARER_TOKEN:
-        print("❌ TWITTER_BEARER_TOKEN not found in .env")
+        print(" TWITTER_BEARER_TOKEN not found in .env")
         return
     
     try:
         client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN)
         
         print("\n" + "="*60)
-        print("📊 TWITTER API RATE LIMIT STATUS")
+        print(" TWITTER API RATE LIMIT STATUS")
         print("="*60)
         
         # Try to get rate limit info by making a simple call
         current_time = datetime.now()
         try:
             user = client.get_user(username="Twitter")
-            print("✅ API Connection: OK")
+            print(" API Connection: OK")
             print(f"   Test user: @{user.data.username}")
         except tweepy.TweepyException as e:
             if "429" in str(e):
-                print("🚨 RATE LIMIT EXCEEDED!")
-                print("   Status: ❌ Over limit")
+                print(" RATE LIMIT EXCEEDED!")
+                print("   Status:  Over limit")
                 print()
-                print("📅 Thời gian:")
+                print(" Thời gian:")
                 print(f"   • Hiện tại: {current_time.strftime('%H:%M:%S')}")
                 
                 # Twitter rate limit resets every 15 minutes
@@ -52,21 +52,21 @@ def check_rate_limits():
                 print(f"   • Reset sau: ~{int(wait_time)} phút")
                 print(f"   • Thử lại lúc: {next_reset.strftime('%H:%M:%S')}")
                 print()
-                print("💡 Hành động:")
+                print(" Hành động:")
                 print("   1. Đợi đến thời gian trên")
                 print("   2. Chạy lại: python -m src.ingestion.twitter_worker")
                 print()
-                print("⚠️  Lưu ý:")
+                print("  Lưu ý:")
                 print("   • Đã giảm xuống 10 sources → An toàn hơn")
                 print("   • Nếu vẫn bị limit: Tăng interval giữa các lần chạy")
                 print("   • Khuyên: Chạy mỗi 2-3 giờ thay vì liên tục")
                 print("="*60 + "\n")
                 return
             else:
-                print(f"❌ API Error: {e}")
+                print(f" API Error: {e}")
                 return
         
-        print("\n📈 Endpoint Limits (Twitter API v2 Essential):")
+        print("\ Endpoint Limits (Twitter API v2 Essential):")
         print("-" * 60)
         print("User timeline (get_users_tweets):")
         print("   • Requests: 1,500 per 15 min (100 per min)")
@@ -77,7 +77,7 @@ def check_rate_limits():
         print("   • Results: 100 tweets per request")
         print()
         
-        print("💡 Tips:")
+        print(" Tips:")
         print("   • With 10 sources: ~10 requests = safe")
         print("   • With 50 sources: ~50 requests = use carefully")
         print("   • With 87 sources: ~87 requests = likely to hit limit")
@@ -88,7 +88,7 @@ def check_rate_limits():
         print("="*60 + "\n")
         
     except Exception as e:
-        print(f"❌ Error checking rate limits: {e}")
+        print(f" Error checking rate limits: {e}")
 
 
 if __name__ == "__main__":

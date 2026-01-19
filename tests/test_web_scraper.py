@@ -15,8 +15,8 @@ def test_scrape_vnexpress():
         assert 'title' in result
         assert 'content' in result
         assert len(result['content']) > 100  # Nội dung phải có ít nhất 100 ký tự
-        print(f"\n✅ Scraped title: {result['title']}")
-        print(f"✅ Content length: {len(result['content'])} chars")
+        print(f"\n Scraped title: {result['title']}")
+        print(f" Content length: {len(result['content'])} chars")
 
 
 def test_scrape_invalid_url():
@@ -56,9 +56,9 @@ def test_enrich_post_with_links():
 if __name__ == "__main__":
     print("Testing web scraper...")
     test_scrape_invalid_url()
-    print("✅ Invalid URL test passed")
+    print(" Invalid URL test passed")
     
     test_enrich_post_without_links()
-    print("✅ Enrich without links test passed")
+    print(" Enrich without links test passed")
     
     print("\nAll tests passed!")

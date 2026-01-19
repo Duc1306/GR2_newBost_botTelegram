@@ -16,7 +16,7 @@ def fetch_labeled_data(limit: int = 10000, verified_only: bool = False) -> Tuple
     """
     Fetch labeled posts from MongoDB.
     
-    ⚠️  WARNING: Training data quality is critical!
+      WARNING: Training data quality is critical!
     
     Args:
         limit: Maximum number of posts to fetch
@@ -34,22 +34,46 @@ def fetch_labeled_data(limit: int = 10000, verified_only: bool = False) -> Tuple
     texts = []
     labels = []
     metadata = {
-        "verified_count": 0,
-        "pseudo_label_count": 0,
+        "source_topic_count": 0,  # Ground truth from news URLs
+        "verified_count": 0,       # Manually verified
+        "pseudo_label_count": 0,   # Auto-generated (lowest quality)
         "total_count": 0,
         "verified_only": verified_only
     }
     
-    # Strategy 1: Try to get verified labels first (GROUND TRUTH)
-    if verified_only:
-        print("\n🎯 Fetching VERIFIED labels only (ground truth)...")
+    # Strategy 1: Get source_topic from news URLs (BEST - Ground truth from news sites)
+    print("\n🎯 Fetching GROUND TRUTH from news URLs (source_topic)...")
+    cursor = collection.find(
+        {
+            "source_topic": {"$exists": True, "$ne": None},
+            "text": {"$exists": True, "$ne": ""}
+        },
+        {"text": 1, "source_topic": 1}
+    ).limit(limit)
+    
+    for doc in cursor:
+        text = doc.get("text", "").strip()
+        source_topic = doc.get("source_topic")
+        
+        if text and source_topic and source_topic in TOPIC_LABELS:
+            texts.append(text)
+            labels.append(source_topic)
+            metadata["source_topic_count"] += 1
+    
+    print(f"   ✅ Found {metadata['source_topic_count']} posts with ground truth from news URLs")
+    
+    # Strategy 2: Try to get verified labels (GOOD - Manual verification)
+    if not verified_only and len(texts) < limit:
+        remaining = limit - len(texts)
+        print(f"\n✓ Fetching MANUALLY VERIFIED labels...")
         cursor = collection.find(
             {
                 "labels_verified": True,
-                "manual_labels": {"$exists": True, "$ne": []}
+                "manual_labels": {"$exists": True, "$ne": []},
+                "source_topic": {"$exists": False}  # Don't duplicate source_topic entries
             },
             {"text": 1, "manual_labels": 1}
-        ).limit(limit)
+        ).limit(remaining)
         
         for doc in cursor:
             text = doc.get("text", "").strip()
@@ -61,12 +85,14 @@ def fetch_labeled_data(limit: int = 10000, verified_only: bool = False) -> Tuple
                     texts.append(text)
                     labels.append(primary_label)
                     metadata["verified_count"] += 1
+        
+        print(f"   ✅ Found {metadata['verified_count']} manually verified posts")
     
-    # Strategy 2: Fallback to pseudo-labels from rule-based/ML (NOT IDEAL)
-    if not verified_only or len(texts) < 100:
+    # Strategy 3: Fallback to pseudo-labels from rule-based/ML (NOT IDEAL - May contain errors)
+    if not verified_only and len(texts) < limit:
         remaining_limit = limit - len(texts)
-        print(f"\n⚠️  Fetching PSEUDO-LABELS from rule-based/ML predictions...")
-        print(f"   (These are NOT manually verified - may contain errors!)")
+        print(f"\n⚠️  Fetching PSEUDO-LABELS from auto-classification...")
+        print(f"   (These may contain errors - lowest quality!)")
         
         cursor = collection.find(
             {
@@ -74,7 +100,8 @@ def fetch_labeled_data(limit: int = 10000, verified_only: bool = False) -> Tuple
                     {"topics": {"$exists": True, "$ne": []}},
                     {"topic_predictions": {"$exists": True, "$ne": []}}
                 ],
-                "labels_verified": {"$ne": True}  # Exclude already verified
+                "labels_verified": {"$ne": True},
+                "source_topic": {"$exists": False}  # Don't duplicate
             },
             {"text": 1, "topics": 1, "topic_predictions": 1, "manual_labels": 1}
         ).limit(remaining_limit)
@@ -124,7 +151,7 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
     """
     Train classifier using data from MongoDB.
     
-    ⚠️  IMPORTANT: Training data quality is CRITICAL for model performance!
+      IMPORTANT: Training data quality is CRITICAL for model performance!
     
     Pseudo-labels (from rule-based/old ML) are NOT ground truth and may contain errors.
     For production, use manually verified labels (--verified-only flag).
@@ -147,7 +174,7 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
     metadata = {"verified_count": 0, "pseudo_label_count": 0, "total_count": 0}
     
     if use_sample_data:
-        print("\n⚠️  Using SAMPLE DATA (only for testing)")
+        print("\n  Using SAMPLE DATA (only for testing)")
         print("For production, remove --use-sample-data flag\n")
         texts, labels = create_sample_training_data()
         print(f"Loaded {len(texts)} sample training examples")
@@ -163,11 +190,11 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
         texts, labels, metadata = fetch_labeled_data(limit=limit, verified_only=verified_only)
         
         if not texts:
-            print("\n❌ Không tìm thấy dữ liệu đã label trong database!")
-            print("\n📝 Các bước cần làm:")
+            print("\n Không tìm thấy dữ liệu đã label trong database!")
+            print("\n Các bước cần làm:")
             print("   1. Thu thập dữ liệu: python -m src.ingestion.telegram_worker --full")
             print("   2. Label dữ liệu bằng rule-based classifier (tự động)")
-            print("   3. ⚠️  RECOMMENDED: Verify labels manually for high quality training")
+            print("   3.   RECOMMENDED: Verify labels manually for high quality training")
             print("   4. Hoặc chạy: python scripts/train_ml_classifier.py --use-sample-data (demo)")
             return
     
@@ -175,25 +202,30 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
     print("DATA QUALITY REPORT")
     print(f"{'='*60}")
     print(f"Total samples: {metadata['total_count']}")
-    print(f"Verified labels (ground truth): {metadata['verified_count']} ({metadata['verified_count']/max(metadata['total_count'],1)*100:.1f}%)")
-    print(f"Pseudo-labels (auto-generated): {metadata['pseudo_label_count']} ({metadata['pseudo_label_count']/max(metadata['total_count'],1)*100:.1f}%)")
+    print(f"🎯 Ground truth from news URLs: {metadata['source_topic_count']} ({metadata['source_topic_count']/max(metadata['total_count'],1)*100:.1f}%)")
+    print(f"✅ Manually verified labels: {metadata['verified_count']} ({metadata['verified_count']/max(metadata['total_count'],1)*100:.1f}%)")
+    print(f"⚠️  Pseudo-labels (auto-generated): {metadata['pseudo_label_count']} ({metadata['pseudo_label_count']/max(metadata['total_count'],1)*100:.1f}%)")
+    
+    high_quality_count = metadata['source_topic_count'] + metadata['verified_count']
+    high_quality_pct = high_quality_count / max(metadata['total_count'], 1) * 100
+    
+    print(f"\n📊 High-quality labels (ground truth + verified): {high_quality_count} ({high_quality_pct:.1f}%)")
     
     # Show warning if using mostly pseudo-labels
-    if metadata['pseudo_label_count'] > metadata['verified_count'] * 5:
-        print(f"\n⚠️  ⚠️  ⚠️  CRITICAL WARNING ⚠️  ⚠️  ⚠️")
-        print(f"Training data contains mostly PSEUDO-LABELS (not verified)!")
-        print(f"This may result in:")
-        print(f"  - Model learning from noisy/incorrect labels")
-        print(f"  - Poor generalization to real data")
-        print(f"  - Propagating errors from rule-based classifier")
-        print(f"\n💡 RECOMMENDATION:")
-        print(f"  1. Create manual labeling tool in dashboard")
-        print(f"  2. Manually verify at least 500-1000 samples")
-        print(f"  3. Retrain with verified data only")
-        print(f"  4. Use --verified-only flag for high-quality training")
-    elif metadata['verified_count'] > 0:
-        print(f"\n✅ Good! Using some verified labels.")
-        print(f"💡 TIP: More verified labels = better model quality")
+    if metadata['pseudo_label_count'] > high_quality_count:
+        print(f"\n⚠️  WARNING: Training data quality is LOW")
+        print(f"   Most labels are auto-generated (may contain errors)")
+        print(f"\n💡 RECOMMENDED ACTIONS:")
+        print(f"   1. Extract categories from news URLs:")
+        print(f"      python scripts\\extract_categories_from_urls.py --apply")
+        print(f"   2. Manually verify important samples in dashboard")
+        print(f"   3. Retrain with higher quality data")
+    elif high_quality_pct >= 80:
+        print(f"\n✅ EXCELLENT! Training with high-quality ground truth data!")
+    elif high_quality_pct >= 50:
+        print(f"\n✓ GOOD! Majority of data is from reliable sources")
+    else:
+        print(f"\n⚠️  Consider improving data quality (current: {high_quality_pct:.1f}% high-quality)")
     
     print(f"{'='*60}\n")
     
@@ -211,13 +243,13 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
         imbalance_ratio = max_count / min_count
         
         if imbalance_ratio > 10:
-            print(f"\n⚠️  WARNING: Severe class imbalance detected!")
+            print(f"\n  WARNING: Severe class imbalance detected!")
             print(f"   Imbalance ratio: {imbalance_ratio:.1f}:1")
             print(f"   Most common: {max(label_counts, key=label_counts.get)} ({max_count} samples)")
             print(f"   Least common: {min(label_counts, key=label_counts.get)} ({min_count} samples)")
             
             if not balanced:
-                print(f"\n💡 RECOMMENDATION: Use --balanced flag to fix this:")
+                print(f"\n RECOMMENDATION: Use --balanced flag to fix this:")
                 print(f"   python scripts/train_ml_classifier.py --balanced --method undersample")
                 print(f"\n   Or run: python scripts/balance_training_data.py")
     

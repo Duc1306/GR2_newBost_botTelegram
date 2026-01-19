@@ -22,7 +22,7 @@ def create_indexes():
     
     # ========== POSTS COLLECTION ==========
     posts = db["posts"]
-    print("\n📋 posts collection:")
+    print("\n posts collection:")
     
     # Unique constraint - content-based deduplication
     # NOTE: Removed (platform, source, source_id) unique index because:
@@ -36,29 +36,29 @@ def create_indexes():
             unique=True,
             name="idx_dedupe_key_unique"
         )
-        print("  ✅ idx_dedupe_key_unique (content-based deduplication)")
+        print("   idx_dedupe_key_unique (content-based deduplication)")
     except Exception as e:
-        print(f"  ⚠️  idx_dedupe_key_unique already exists: {e}")
+        print(f"    idx_dedupe_key_unique already exists: {e}")
     
     # Composite index for querying (non-unique)
     posts.create_index(
         [("platform", 1), ("source", 1), ("source_id", 1)],
         name="idx_platform_source_id"
     )
-    print("  ✅ idx_platform_source_id (query index, non-unique)")
+    print("   idx_platform_source_id (query index, non-unique)")
     
     # Query indexes
     posts.create_index([("platform", 1), ("created_at", -1)], name="idx_platform_created")
-    print("  ✅ idx_platform_created")
+    print("   idx_platform_created")
     
     posts.create_index([("topics", 1), ("created_at", -1)], name="idx_topics_created")
-    print("  ✅ idx_topics_created")
+    print("   idx_topics_created")
     
     posts.create_index([("topic_predictions.topic", 1), ("created_at", -1)], name="idx_topic_predictions_created")
-    print("  ✅ idx_topic_predictions_created")
+    print("   idx_topic_predictions_created")
     
     posts.create_index([("lang", 1), ("platform", 1)], name="idx_lang_platform")
-    print("  ✅ idx_lang_platform")
+    print("   idx_lang_platform")
     
     # Text search
     try:
@@ -66,16 +66,16 @@ def create_indexes():
             [("text", "text"), ("text_cleaned", "text")],
             name="idx_fulltext_search"
         )
-        print("  ✅ idx_fulltext_search")
+        print("   idx_fulltext_search")
     except Exception as e:
-        print(f"  ⚠️  idx_fulltext_search: {e}")
+        print(f"    idx_fulltext_search: {e}")
     
     # Removed idx_topics_predictions_retrain - MongoDB cannot index 2 arrays in compound
     # Use separate indexes instead (already created above)
     
     # ========== SOURCES COLLECTION ==========
     sources = db["sources"]
-    print("\n📋 sources collection:")
+    print("\n sources collection:")
     
     try:
         sources.create_index(
@@ -83,19 +83,19 @@ def create_indexes():
             unique=True,
             name="idx_platform_source_id_unique"
         )
-        print("  ✅ idx_platform_source_id_unique")
+        print("   idx_platform_source_id_unique")
     except Exception as e:
-        print(f"  ⚠️  idx_platform_source_id_unique already exists: {e}")
+        print(f"    idx_platform_source_id_unique already exists: {e}")
     
     sources.create_index([("is_active", 1), ("platform", 1)], name="idx_active_platform")
-    print("  ✅ idx_active_platform")
+    print("   idx_active_platform")
     
     sources.create_index([("source_type", 1), ("platform", 1)], name="idx_type_platform")
-    print("  ✅ idx_type_platform")
+    print("   idx_type_platform")
     
     # ========== TOPIC_STATS COLLECTION ==========
     topic_stats = db["topic_stats"]
-    print("\n📋 topic_stats collection:")
+    print("\n topic_stats collection:")
     
     try:
         topic_stats.create_index(
@@ -103,19 +103,19 @@ def create_indexes():
             unique=True,
             name="idx_topic_date_platform_unique"
         )
-        print("  ✅ idx_topic_date_platform_unique")
+        print("   idx_topic_date_platform_unique")
     except Exception as e:
-        print(f"  ⚠️  idx_topic_date_platform_unique already exists: {e}")
+        print(f"    idx_topic_date_platform_unique already exists: {e}")
     
     topic_stats.create_index([("date", -1), ("topic", 1)], name="idx_date_topic")
-    print("  ✅ idx_date_topic")
+    print("   idx_date_topic")
     
     topic_stats.create_index([("trend_score", -1), ("date", -1)], name="idx_trending")
-    print("  ✅ idx_trending")
+    print("   idx_trending")
     
     # ========== KEYWORD_TRENDS COLLECTION ==========
     keyword_trends = db["keyword_trends"]
-    print("\n📋 keyword_trends collection:")
+    print("\n keyword_trends collection:")
     
     try:
         keyword_trends.create_index(
@@ -123,22 +123,22 @@ def create_indexes():
             unique=True,
             name="idx_keyword_date_unique"
         )
-        print("  ✅ idx_keyword_date_unique")
+        print("   idx_keyword_date_unique")
     except Exception as e:
-        print(f"  ⚠️  idx_keyword_date_unique already exists: {e}")
+        print(f"    idx_keyword_date_unique already exists: {e}")
     
     keyword_trends.create_index([("trend_velocity", -1), ("date", -1)], name="idx_trending_velocity")
-    print("  ✅ idx_trending_velocity")
+    print("   idx_trending_velocity")
     
     keyword_trends.create_index([("date", -1), ("total_count", -1)], name="idx_date_count")
-    print("  ✅ idx_date_count")
+    print("   idx_date_count")
     
     keyword_trends.create_index([("keyword_normalized", 1)], name="idx_keyword")
-    print("  ✅ idx_keyword")
+    print("   idx_keyword")
     
     # ========== ML_MODEL_VERSIONS COLLECTION ==========
     ml_models = db["ml_model_versions"]
-    print("\n📋 ml_model_versions collection:")
+    print("\n ml_model_versions collection:")
     
     try:
         ml_models.create_index(
@@ -146,14 +146,14 @@ def create_indexes():
             unique=True,
             name="idx_version_unique"
         )
-        print("  ✅ idx_version_unique")
+        print("   idx_version_unique")
     except Exception as e:
-        print(f"  ⚠️  idx_version_unique already exists: {e}")
+        print(f"    idx_version_unique already exists: {e}")
     
     ml_models.create_index([("is_active", 1), ("trained_at", -1)], name="idx_active_trained")
-    print("  ✅ idx_active_trained")
+    print("   idx_active_trained")
     
-    print("\n✅ All indexes created successfully!")
+    print("\n All indexes created successfully!")
 
 
 def backfill_platform_field():
@@ -170,7 +170,7 @@ def backfill_platform_field():
         {"$set": {"platform": "telegram"}}
     )
     
-    print(f"✅ Updated {result.modified_count:,} posts with platform='telegram'")
+    print(f" Updated {result.modified_count:,} posts with platform='telegram'")
 
 
 def backfill_text_cleaned():
@@ -189,8 +189,8 @@ def backfill_text_cleaned():
         [{"$set": {"text_cleaned": "$text"}}]
     )
     
-    print(f"✅ Updated {result.modified_count:,} posts with text_cleaned")
-    print("⚠️  Note: Using raw text. Run cleaning script for proper preprocessing.")
+    print(f" Updated {result.modified_count:,} posts with text_cleaned")
+    print("  Note: Using raw text. Run cleaning script for proper preprocessing.")
 
 
 def migrate_topics_to_predictions():
@@ -198,16 +198,16 @@ def migrate_topics_to_predictions():
     print("\n" + "=" * 60)
     print("Migrating topics to topic_predictions")
     print("=" * 60)
-    print("\n⚠️  DEPRECATION: 'topics' field is kept for backward compatibility.")
+    print("\n  DEPRECATION: 'topics' field is kept for backward compatibility.")
     print("   Use 'topic_predictions' for new code (includes confidence + version).")
     print("   Migration: SKIPPED - MongoDB cannot index 2 arrays simultaneously.\n")
     
-    print("📝 To migrate existing posts:")
+    print(" To migrate existing posts:")
     print("   1. Use predict_topics.py to add ML predictions")
     print("   2. Or wait for auto-predict on next ingestion")
     print("   3. Old 'topics' field will remain for backward compatibility\n")
     
-    print("✅ Migration step skipped (safe)")
+    print(" Migration step skipped (safe)")
 
 
 def generate_sources_from_posts():
@@ -267,7 +267,7 @@ def generate_sources_from_posts():
             upsert=True
         )
     
-    print(f"✅ Created/updated {len(results):,} sources")
+    print(f" Created/updated {len(results):,} sources")
 
 
 def register_current_ml_model():
@@ -283,7 +283,7 @@ def register_current_ml_model():
     model_path = Path(__file__).parent.parent / "models" / "topic_classifier_svm.pkl"
     
     if not model_path.exists():
-        print("⚠️  Model file not found. Train model first:")
+        print("  Model file not found. Train model first:")
         print("   scripts\\train_ml_classifier.cmd")
         return
     
@@ -298,7 +298,7 @@ def register_current_ml_model():
             f1_score = metrics.get('f1_score', 0.0)
             training_samples = model_data.get('training_samples', 0)
     except:
-        print("⚠️  Could not extract metrics from model file. Using placeholders.")
+        print("  Could not extract metrics from model file. Using placeholders.")
         accuracy = 0.0
         f1_score = 0.0
         training_samples = 0
@@ -334,7 +334,7 @@ def register_current_ml_model():
     # Insert new model
     ml_models.insert_one(model_doc)
     
-    print(f"✅ Registered model: {model_doc['version']}")
+    print(f" Registered model: {model_doc['version']}")
 
 
 def show_stats():
@@ -356,7 +356,7 @@ def show_stats():
     for name, collection in collections.items():
         count = collection.count_documents({})
         indexes = collection.index_information()
-        print(f"\n📊 {name}:")
+        print(f"\n {name}:")
         print(f"   Documents: {count:,}")
         print(f"   Indexes: {len(indexes)}")
         for idx_name, idx_info in indexes.items():
@@ -389,16 +389,16 @@ def main():
         show_stats()
         
         print("\n" + "=" * 60)
-        print("✅ Migration completed successfully!")
+        print(" Migration completed successfully!")
         print("=" * 60)
-        print("\n📖 Next steps:")
+        print("\n Next steps:")
         print("   1. Review docs/database_design.md for schema details")
         print("   2. Update ingestion code to use new schema")
         print("   3. Implement aggregation scripts for topic_stats")
         print("   4. Implement keyword extraction for keyword_trends")
         
     except Exception as e:
-        print(f"\n❌ Migration failed: {e}")
+        print(f"\n Migration failed: {e}")
         import traceback
         traceback.print_exc()
 

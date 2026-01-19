@@ -51,7 +51,7 @@ def fetch_labeled_data_by_topic(limit_per_topic: int = None) -> Tuple[List[str],
                 texts.append(text)
                 
         if not texts:
-            print(f"⚠️  {topic}: 0 samples (SKIP)")
+            print(f"  {topic}: 0 samples (SKIP)")
             continue
             
         # Limit if specified
@@ -170,7 +170,7 @@ def main():
     texts, labels = fetch_labeled_data_by_topic(limit_per_topic=args.limit_per_topic)
     
     if not texts:
-        print("\n❌ No labeled data found!")
+        print("\n No labeled data found!")
         return
     
     # Balance

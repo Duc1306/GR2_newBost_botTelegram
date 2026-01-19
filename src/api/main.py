@@ -312,6 +312,12 @@ async def get_stats(
         {"$sort": {"count": -1}}
     ]
     topics = list(coll.aggregate(topics_pipeline))
+    
+    # Count UNIQUE posts with topics (not total topic assignments)
+    labeled_posts_count = coll.count_documents({
+        **base_query, 
+        "topics": {"$exists": True, "$ne": []}
+    })
 
     # Latest post theo filter
     latest = coll.find_one(base_query, sort=[("created_at", -1)])
@@ -319,6 +325,7 @@ async def get_stats(
 
     return {
         "total_posts": total_filtered,
+        "labeled_posts": labeled_posts_count,  # NEW: unique posts with topics
         "filter": base_query,
         "by_source": {s["_id"]: s["count"] for s in sources if s["_id"] is not None},
         "by_language": {l["_id"]: l["count"] for l in languages if l["_id"] is not None},

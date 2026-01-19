@@ -55,10 +55,14 @@ class Post(BaseModel):
     # Topics (Legacy - for backward compatibility)
     topics: List[str] = []
     
+    # Ground Truth from News Source (BEST quality)
+    source_category: Optional[str] = Field(default=None, description="Original category from news website (e.g., 'kinh-te', 'suc-khoe')")
+    source_topic: Optional[str] = Field(default=None, description="Topic extracted from news URL/page (ground truth)")
+    
     # Topic Predictions (NEW - with confidence + version tracking)
     topic_predictions: List[TopicPrediction] = []
     
-    # Manual Labels (Ground Truth)
+    # Manual Labels (Ground Truth - Fallback)
     manual_labels: List[str] = Field(default=[], description="Manually verified topic labels (ground truth)")
     labels_verified: bool = Field(default=False, description="Whether labels have been manually verified")
     verified_by: Optional[str] = Field(default=None, description="Username who verified the labels")

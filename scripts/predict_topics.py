@@ -34,7 +34,7 @@ def predict_for_unlabeled_posts(model_path: str = "models/topic_classifier_svm.p
     try:
         classifier = MLTopicClassifier(model_path=model_path)
     except FileNotFoundError:
-        print(f"❌ Model not found: {model_path}")
+        print(f" Model not found: {model_path}")
         print("Train model first: python scripts/train_ml_classifier.py")
         return
     
@@ -105,7 +105,7 @@ def process_batch(collection, classifier, batch, confidence_threshold):
     try:
         predictions = classifier.predict_batch(texts)
     except Exception as e:
-        print(f"\n⚠️  Batch prediction error: {e}")
+        print(f"\n  Batch prediction error: {e}")
         return 0
     
     updated_count = 0

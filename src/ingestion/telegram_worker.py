@@ -49,11 +49,11 @@ def get_ml_classifier() -> MLTopicClassifier | None:
                 _ml_classifier = MLTopicClassifier(model_path=str(model_path))
                 print("✓ ML Topic Classifier loaded successfully")
             except Exception as e:
-                print(f"⚠️  Failed to load ML classifier: {e}")
+                print(f"  Failed to load ML classifier: {e}")
                 print("   Falling back to rule-based classifier")
                 _ml_classifier = None
         else:
-            print("\n⚠️  ML model not found!")
+            print("\n  ML model not found!")
             print("   → Using rule-based classifier (fallback)")
             print("   → To train ML model: python scripts/train_ml_classifier.py\n")
             _ml_classifier = None
@@ -82,7 +82,7 @@ async def fetch_channel_messages(client: TelegramClient, channel: str, limit: in
         count += 1
         # Hiển thị tiến trình mỗi 500 tin
         if count % 500 == 0:
-            print(f"      📊 Đã lấy {count} tin từ {channel}...")
+            print(f"       Đã lấy {count} tin từ {channel}...")
     return msgs
 
 async def process_message(m: Message) -> Post:
@@ -105,26 +105,44 @@ async def process_message(m: Message) -> Post:
     if lang:
         post.lang = lang
     
-    # Classify topics using ML model (preferred)
-    ml_classifier = get_ml_classifier()
-    if ml_classifier and cleaned_text:
+    # Try to get ground truth topic from news URL first (BEST method)
+    source_topic = None
+    if links:
+        from src.processing.web_scraper import ArticleScraper
         try:
-            predicted_topic, confidence = ml_classifier.predict(cleaned_text)
-            # Chỉ lưu nếu confidence >= 0.3 (có thể điều chỉnh threshold)
-            if confidence >= 0.3:
-                post.topics = [predicted_topic]
-                post.score = confidence  # Lưu confidence vào score field
-        except Exception as e:
-            print(f"   ⚠️  ML prediction error: {e}")
+            # Fast extraction from URL pattern (no HTTP request needed)
+            category = ArticleScraper._extract_category_from_url(links[0])
+            if category:
+                source_topic = ArticleScraper._map_category_to_topic(category)
+                if source_topic:
+                    post.topics = [source_topic]
+                    # Store metadata for training validation
+                    post.source_category = category
+                    post.source_topic = source_topic
+        except Exception:
+            pass
+    
+    # If no ground truth from URL, use ML classifier
+    if not source_topic:
+        ml_classifier = get_ml_classifier()
+        if ml_classifier and cleaned_text:
+            try:
+                predicted_topic, confidence = ml_classifier.predict(cleaned_text)
+                # Chỉ lưu nếu confidence >= 0.3 (có thể điều chỉnh threshold)
+                if confidence >= 0.3:
+                    post.topics = [predicted_topic]
+                    post.score = confidence  # Lưu confidence vào score field
+            except Exception as e:
+                print(f"     ML prediction error: {e}")
+                # Fallback to rule-based classifier
+                topics = classify_post_topics(cleaned_text, lang)
+                if topics:
+                    post.topics = topics
+        else:
             # Fallback to rule-based classifier
             topics = classify_post_topics(cleaned_text, lang)
             if topics:
                 post.topics = topics
-    else:
-        # Fallback to rule-based classifier
-        topics = classify_post_topics(cleaned_text, lang)
-        if topics:
-            post.topics = topics
     
     return post
 
@@ -198,24 +216,24 @@ async def ingest_once(full_mode: bool = False, scrape_articles: bool = False, li
     scrape_str = " + SCRAPING bài báo đầy đủ" if scrape_articles else ""
     links_only_str = " + CHỈ BÀI CÓ LINK" if links_only else ""
     
-    print(f"\n🚀 Bắt đầu ingestion - {mode_str}{scrape_str}{links_only_str}")
-    print(f"📊 Limit: {limit} tin/kênh | Tổng {len(CHANNELS)} kênh\n")
+    print(f"\n Bắt đầu ingestion - {mode_str}{scrape_str}{links_only_str}")
+    print(f" Limit: {limit} tin/kênh | Tổng {len(CHANNELS)} kênh\n")
     
     client = build_client()
     async with client:
         all_posts: List[Post] = []
         for idx, ch in enumerate(CHANNELS, 1):
-            print(f"📥 [{idx}/{len(CHANNELS)}] Đang lấy dữ liệu từ kênh: {ch}")
+            print(f" [{idx}/{len(CHANNELS)}] Đang lấy dữ liệu từ kênh: {ch}")
             try:
                 msgs = await fetch_channel_messages(client, ch, limit)
-                print(f"   ✅ Lấy được {len(msgs)} tin từ {ch}")
+                print(f"    Lấy được {len(msgs)} tin từ {ch}")
             except FloodWaitError as e:
-                print(f"   ⏳ FloodWait trên kênh {ch}, chờ {e.seconds}s")
+                print(f"    FloodWait trên kênh {ch}, chờ {e.seconds}s")
                 await asyncio.sleep(e.seconds)
                 continue
             except Exception as e:
-                print(f"   ❌ Lỗi kênh {ch}: {e}")
-                print(f"   💡 Kiểm tra tên kênh có đúng không (thử @{ch} trong Telegram)")
+                print(f"   Lỗi kênh {ch}: {e}")
+                print(f"    Kiểm tra tên kênh có đúng không (thử @{ch} trong Telegram)")
                 continue
             
             # Xử lý và lưu từng batch
@@ -227,7 +245,7 @@ async def ingest_once(full_mode: bool = False, scrape_articles: bool = False, li
                         continue
                     batch_posts.append(post)
                 except Exception as ex:  # pragma: no cover
-                    print(f"   ⚠️  Lỗi xử lý message {m.id}: {ex}")
+                    print(f"     Lỗi xử lý message {m.id}: {ex}")
             
             # Lưu batch này ngay
             if batch_posts:
@@ -236,8 +254,8 @@ async def ingest_once(full_mode: bool = False, scrape_articles: bool = False, li
             
             print()  # Dòng trống giữa các kênh
         
-        print(f"\n🎉 Hoàn tất! Tổng cộng đã xử lý {len(all_posts)} posts từ {len(CHANNELS)} kênh.")
-        print(f"💾 Dữ liệu đã được lưu vào MongoDB database: {get_posts_collection().database.name}")
+        print(f"\n Hoàn tất! Tổng cộng đã xử lý {len(all_posts)} posts từ {len(CHANNELS)} kênh.")
+        print(f" Dữ liệu đã được lưu vào MongoDB database: {get_posts_collection().database.name}")
 
 if __name__ == "__main__":
     # Kiểm tra tham số --full, --scrape, --links-only

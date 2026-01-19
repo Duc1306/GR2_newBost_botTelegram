@@ -5,9 +5,13 @@ export const secondary = '#dc004e';
 // Topic Colors (consistent across dashboard)
 export const topicColors = {
   'Crypto': '#F7931A',           // Bitcoin orange
-  'Chính trị': '#DC143C',        // Red
-  'Công nghệ': '#1E90FF',        // Blue
   'Kinh tế': '#228B22',          // Green
+  'Công nghệ': '#1E90FF',        // Blue
+  'Chính trị': '#DC143C',        // Red
+  'Thế giới': '#008080',         // Teal (Quốc tế)
+  'Pháp luật': '#8B4513',        // Saddle brown (Công lý)
+  'Ô tô - Xe máy': '#FF4500',    // Orange red (Năng động)
+  'Khoa học': '#9932CC',         // Dark orchid (Tri thức)
   'Thể thao': '#FF6347',         // Tomato
   'Giải trí': '#9370DB',         // Purple
   'Sức khỏe': '#FF1493',         // Deep pink

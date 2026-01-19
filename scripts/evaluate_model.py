@@ -197,12 +197,12 @@ def compare_models(metrics_list: List[Dict]):
     sorted_metrics = sorted(metrics_list, key=lambda x: x['accuracy'], reverse=True)
     
     for i, m in enumerate(sorted_metrics):
-        marker = "🏆" if i == 0 else "  "
+        marker = "" if i == 0 else "  "
         print(f"{marker} {m['name']:<23} {m['accuracy']:.4f}       {m['macro_f1']:.4f}       {m['weighted_f1']:.4f}")
     
     # Best model
     best = sorted_metrics[0]
-    print(f"\n🏆 Best Model: {best['name']}")
+    print(f"\n Best Model: {best['name']}")
     print(f"   Accuracy: {best['accuracy']:.2%}")
     print(f"   Macro F1: {best['macro_f1']:.4f}")
     
@@ -210,7 +210,7 @@ def compare_models(metrics_list: List[Dict]):
     if len(sorted_metrics) > 1:
         baseline = sorted_metrics[-1]  # Worst is baseline
         improvement = (best['accuracy'] - baseline['accuracy']) / baseline['accuracy'] * 100
-        print(f"\n📈 Improvement over baseline: +{improvement:.1f}%")
+        print(f"\n Improvement over baseline: +{improvement:.1f}%")
         print(f"   Baseline: {baseline['name']} ({baseline['accuracy']:.2%})")
         print(f"   Best: {best['name']} ({best['accuracy']:.2%})")
 
@@ -233,7 +233,7 @@ def save_evaluation_report(metrics_list: List[Dict], output_file: str = "evaluat
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     
-    print(f"\n💾 Evaluation report saved to: {output_path}")
+    print(f"\n Evaluation report saved to: {output_path}")
 
 
 def main(limit: int = 2000, verified_only: bool = False, test_size: float = 0.2):
@@ -247,7 +247,7 @@ def main(limit: int = 2000, verified_only: bool = False, test_size: float = 0.2)
     texts, labels = fetch_evaluation_data(limit=limit, verified_only=verified_only)
     
     if len(texts) < 100:
-        print(f"\n❌ Not enough data for evaluation: {len(texts)} samples")
+        print(f"\n Not enough data for evaluation: {len(texts)} samples")
         print("Need at least 100 samples. Collect more data first.")
         return
     
@@ -343,7 +343,7 @@ def main(limit: int = 2000, verified_only: bool = False, test_size: float = 0.2)
     print(f"\n{'='*60}")
     print(f"EVALUATION COMPLETE")
     print(f"{'='*60}")
-    print(f"\n📊 View detailed report: models/evaluation_report.json")
+    print(f"\n View detailed report: models/evaluation_report.json")
 
 
 if __name__ == "__main__":

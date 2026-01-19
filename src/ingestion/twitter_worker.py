@@ -46,11 +46,11 @@ def get_ml_classifier() -> MLTopicClassifier | None:
                 _ml_classifier = MLTopicClassifier(model_path=str(model_path))
                 print("✓ ML Topic Classifier loaded successfully")
             except Exception as e:
-                print(f"⚠️  Failed to load ML classifier: {e}")
+                print(f"  Failed to load ML classifier: {e}")
                 print("   Falling back to rule-based classifier")
                 _ml_classifier = None
         else:
-            print("\n⚠️  ML model not found!")
+            print("\n  ML model not found!")
             print("   → Using rule-based classifier (fallback)")
             print("   → To train ML model: python scripts/train_ml_classifier.py\n")
             _ml_classifier = None
@@ -89,7 +89,7 @@ def fetch_tweets_from_user(client: tweepy.Client, username: str, limit: int) -> 
         # Lấy user ID từ username
         user = client.get_user(username=username.lstrip('@'), user_fields=['id', 'username'])
         if not user.data:
-            print(f"   ⚠️  Không tìm thấy user: {username}")
+            print(f"     Không tìm thấy user: {username}")
             return tweets_data
         
         user_id = user.data.id
@@ -105,7 +105,7 @@ def fetch_tweets_from_user(client: tweepy.Client, username: str, limit: int) -> 
         )
         
         if not tweets.data:
-            print(f"   ℹ️  Không có tweets mới từ @{user_handle}")
+            print(f"     Không có tweets mới từ @{user_handle}")
             return tweets_data
         
         # Parse media nếu có
@@ -143,10 +143,10 @@ def fetch_tweets_from_user(client: tweepy.Client, username: str, limit: int) -> 
             
             tweets_data.append(tweet_data)
         
-        print(f"   ✓ Lấy được {len(tweets_data)} tweets từ @{user_handle}")
+        print(f"    Lấy được {len(tweets_data)} tweets từ @{user_handle}")
         
     except tweepy.TweepyException as e:
-        print(f"   ❌ Lỗi khi lấy tweets từ {username}: {e}")
+        print(f"    Lỗi khi lấy tweets từ {username}: {e}")
     
     return tweets_data
 
@@ -169,7 +169,7 @@ def fetch_tweets_from_hashtag(client: tweepy.Client, hashtag: str, limit: int) -
         )
         
         if not tweets.data:
-            print(f"   ℹ️  Không có tweets mới cho {query}")
+            print(f"     Không có tweets mới cho {query}")
             return tweets_data
         
         # Parse users
@@ -218,7 +218,7 @@ def fetch_tweets_from_hashtag(client: tweepy.Client, hashtag: str, limit: int) -
         print(f"   ✓ Lấy được {len(tweets_data)} tweets cho {query}")
         
     except tweepy.TweepyException as e:
-        print(f"   ❌ Lỗi khi search hashtag {hashtag}: {e}")
+        print(f"    Lỗi khi search hashtag {hashtag}: {e}")
     
     return tweets_data
 
@@ -285,7 +285,7 @@ def classify_and_enrich_post(post: Post) -> Post:
                         method="rule-based"
                     )
         except Exception as e:
-            print(f"   ⚠️  ML classification failed: {e}, using rule-based")
+            print(f"     ML classification failed: {e}, using rule-based")
             rule_topics = classify_post_topics(post)
             if rule_topics:
                 post.add_topic_prediction(
@@ -310,7 +310,7 @@ def classify_and_enrich_post(post: Post) -> Post:
         try:
             post = enrich_post_with_article(post)
         except Exception as e:
-            print(f"   ⚠️  Failed to enrich tweet {post.source_id}: {e}")
+            print(f"     Failed to enrich tweet {post.source_id}: {e}")
     
     return post
 
@@ -335,7 +335,7 @@ def main():
     limit = FULL_MODE_LIMIT if full_mode else TWITTER_FETCH_LIMIT
     
     print("\n" + "="*60)
-    print("🐦 TWITTER INGESTION WORKER")
+    print(" TWITTER INGESTION WORKER")
     print("="*60)
     print(f"Mode: {'FULL (Training)' if full_mode else 'NORMAL (Incremental)'}")
     print(f"Limit per source: {limit} tweets")
@@ -343,7 +343,7 @@ def main():
     print("="*60 + "\n")
     
     if not TWITTER_SOURCES:
-        print("⚠️  Không có Twitter sources được cấu hình!")
+        print("  Không có Twitter sources được cấu hình!")
         print("   Thêm vào TWITTER_SOURCES trong .env hoặc sources.py")
         print("   Ví dụ: @BBCBreaking;@Reuters;#technology\n")
         return
@@ -353,7 +353,7 @@ def main():
         client = build_twitter_client()
         print("✓ Twitter API client đã được khởi tạo\n")
     except Exception as e:
-        print(f"❌ Không thể khởi tạo Twitter client: {e}")
+        print(f" Không thể khởi tạo Twitter client: {e}")
         return
     
     total_fetched = 0
@@ -361,7 +361,7 @@ def main():
     
     # Process each source
     for source in TWITTER_SOURCES:
-        print(f"\n📥 Đang xử lý: {source}")
+        print(f"\n Đang xử lý: {source}")
         print("-" * 60)
         
         # Determine if username or hashtag
@@ -370,7 +370,7 @@ def main():
         elif source.startswith('#'):
             tweets_data = fetch_tweets_from_hashtag(client, source, limit)
         else:
-            print(f"   ⚠️  Source không hợp lệ: {source} (cần bắt đầu @ hoặc #)")
+            print(f"     Source không hợp lệ: {source} (cần bắt đầu @ hoặc #)")
             continue
         
         if not tweets_data:
@@ -394,14 +394,14 @@ def main():
                     new_count += 1
                     
             except Exception as e:
-                print(f"   ❌ Lỗi xử lý tweet {tweet_data['id']}: {e}")
+                print(f"    Lỗi xử lý tweet {tweet_data['id']}: {e}")
                 continue
         
         total_new += new_count
-        print(f"   💾 Đã lưu {new_count} tweets mới từ {source}")
+        print(f"    Đã lưu {new_count} tweets mới từ {source}")
     
     print("\n" + "="*60)
-    print("📊 KẾT QUẢ")
+    print(" KẾT QUẢ")
     print("="*60)
     print(f"Tổng tweets đã lấy: {total_fetched}")
     print(f"Tweets mới được lưu: {total_new}")
