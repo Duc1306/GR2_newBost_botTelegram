@@ -85,16 +85,30 @@ async def fetch_channel_messages(client: TelegramClient, channel: str, limit: in
             print(f"       Đã lấy {count} tin từ {channel}...")
     return msgs
 
-async def process_message(m: Message) -> Post:
+async def process_message(m: Message, channel_name: str = "telegram") -> Post:
     raw_text = m.message or ""
     cleaned_text, links = clean_text(raw_text)
     media_items: List[MediaItem] = []
     if m.media:
-        # đơn giản: ghi nhận có media, không phân loại sâu
-        media_items.append(MediaItem(type="other", url="(embedded)") )
+        # Phân loại media type
+        from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+        if isinstance(m.media, MessageMediaPhoto):
+            media_items.append(MediaItem(type="photo", url="(embedded)"))
+        elif isinstance(m.media, MessageMediaDocument):
+            # Check if video/gif/sticker
+            doc = m.media.document
+            mime = getattr(doc, 'mime_type', '')
+            if 'video' in mime:
+                media_items.append(MediaItem(type="video", url="(embedded)"))
+            elif 'image/gif' in mime:
+                media_items.append(MediaItem(type="gif", url="(embedded)"))
+            else:
+                media_items.append(MediaItem(type="document", url="(embedded)"))
+        else:
+            media_items.append(MediaItem(type="other", url="(embedded)"))
     lang = detect_language(cleaned_text)
     post = Post.from_raw(
-        source="telegram",
+        source=channel_name,
         source_id=str(m.id),
         author=getattr(m.sender, "username", None) if m.sender else None,
         text=cleaned_text,
@@ -240,7 +254,7 @@ async def ingest_once(full_mode: bool = False, scrape_articles: bool = False, li
             batch_posts: List[Post] = []
             for m in msgs:
                 try:
-                    post = await process_message(m)
+                    post = await process_message(m, channel_name=ch)
                     if links_only and not _has_external_link(post.links):
                         continue
                     batch_posts.append(post)

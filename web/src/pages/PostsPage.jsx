@@ -26,6 +26,7 @@ import { usePosts, useTopics, usePostsCount } from "../hooks/useApi.jsx";
 import { getTopicColor } from "../theme/colors.jsx";
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
+import PostDetailModal from "../components/PostDetailModal.jsx";
 
 export default function PostsPage() {
   const [selectedTopic, setSelectedTopic] = useState("");
@@ -33,6 +34,7 @@ export default function PostsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [selectedPost, setSelectedPost] = useState(null);
   const postsPerPage = 20;
 
   const { data: topicsData } = useTopics();
@@ -41,8 +43,7 @@ export default function PostsPage() {
     topic: selectedTopic || undefined,
     lang: selectedLang || undefined,
     q: debouncedSearch || undefined,
-    link_only: true,
-    topics_only: true,
+    // Removed link_only and topics_only to show ALL posts (100%)
   };
   
   const { data: postsData, isLoading } = usePosts({
@@ -174,7 +175,14 @@ export default function PostsPage() {
                     width: "100%",
                     display: "flex",
                     flexDirection: "column",
+                    cursor: "pointer",
+                    transition: "transform 0.2s, box-shadow 0.2s",
+                    "&:hover": {
+                      transform: "translateY(-4px)",
+                      boxShadow: 4,
+                    },
                   }}
+                  onClick={() => setSelectedPost(post)}
                 >
                   <CardContent
                     sx={{
@@ -383,6 +391,13 @@ export default function PostsPage() {
           </Box>
         </>
       )}
+      
+      {/* Modal */}
+      <PostDetailModal
+        post={selectedPost}
+        open={!!selectedPost}
+        onClose={() => setSelectedPost(null)}
+      />
     </Box>
   );
 }

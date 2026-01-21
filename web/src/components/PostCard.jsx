@@ -73,59 +73,42 @@ export function PostCard({ post, onClick }) {
 
         {/* Main Content */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {/* Post Text - Always show, clickable if has link */}
-          {post.links && post.links.length > 0 ? (
+          {/* Post Text - Always show */}
+          <p style={{
+            fontSize: '1rem',
+            color: '#1f2937',
+            lineHeight: '1.6',
+            display: '-webkit-box',
+            WebkitLineClamp: 4,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden'
+          }}>
+            {post.text}
+          </p>
+          
+          {/* Show "Đọc thêm" button if has external link */}
+          {post.links && post.links.length > 0 && !post.links[0].includes('t.me') && (
             <a
               href={post.links[0]}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
-              style={{ 
-                display: 'block', 
-                textDecoration: 'none',
-                position: 'relative'
-              }}
-            >
-              <p style={{
-                fontSize: '1rem',
-                color: '#1f2937',
-                lineHeight: '1.6',
-                display: '-webkit-box',
-                WebkitLineClamp: 4,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                transition: 'color 0.2s'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.color = '#2563eb'}
-              onMouseLeave={(e) => e.currentTarget.style.color = '#1f2937'}
-              >
-                {post.text}
-              </p>
-              <div style={{
+              style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.25rem',
-                marginTop: '0.5rem',
                 fontSize: '0.875rem',
                 color: '#2563eb',
-                fontWeight: 500
-              }}>
-                <LinkIcon sx={{ fontSize: 16 }} />
-                Đọc thêm
-              </div>
+                fontWeight: 500,
+                textDecoration: 'none',
+                width: 'fit-content'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
+              onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+            >
+              <LinkIcon sx={{ fontSize: 16 }} />
+              Đọc bài gốc
             </a>
-          ) : (
-            <p style={{
-              fontSize: '1rem',
-              color: '#1f2937',
-              lineHeight: '1.6',
-              display: '-webkit-box',
-              WebkitLineClamp: 4,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden'
-            }}>
-              {post.text}
-            </p>
           )}
 
           {/* Full article snippet if available */}

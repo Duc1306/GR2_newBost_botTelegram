@@ -171,6 +171,18 @@ class TopicClassifier:
                    'scholarship', 'study abroad', 'teacher', 'professor', 'graduation',
                    'degree', 'certificate', 'learning', 'course', 'online learning']
         },
+        'Việc làm': {
+            'vi': ['tuyển dụng', 'việc làm', 'công việc', 'nhân viên', 'ứng viên', 'phỏng vấn',
+                   'cv', 'hồ sơ', 'lương', 'thu nhập', 'thưởng', 'bảo hiểm', 'hợp đồng',
+                   'full-time', 'part-time', 'remote', 'freelance', 'intern', 'thực tập'],
+            'en': ['job', 'career', 'hiring', 'recruitment', 'position', 'vacancy', 'opening',
+                   'developer', 'engineer', 'designer', 'manager', 'specialist', 'analyst',
+                   'full_time', 'part_time', 'remote', 'freelance', 'contract', 'intern',
+                   'salary', 'compensation', 'benefits', 'resume', 'cv', 'interview',
+                   'full-time', 'part-time', 'full time', 'part time', 'we need', 'we are looking',
+                   'apply', 'application', 'candidate', 'experience', 'level', 'junior',
+                   'senior', 'lead', 'staff', 'principal', 'company', 'location', 'anywhere']
+        },
         'Du lịch': {
             'vi': ['du lịch', 'travel', 'khách sạn', 'resort', 'nghỉ dưỡng', 'visa', 'hộ chiếu',
                    'vé máy bay', 'đặt phòng', 'tour', 'điểm đến', 'phượt', 'check in'],
