@@ -119,44 +119,57 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
     if lang:
         post.lang = lang
     
-    # Try to get ground truth topic from news URL first (BEST method)
-    source_topic = None
-    if links:
-        from src.processing.web_scraper import ArticleScraper
-        try:
-            # Fast extraction from URL pattern (no HTTP request needed)
-            category = ArticleScraper._extract_category_from_url(links[0])
-            if category:
-                source_topic = ArticleScraper._map_category_to_topic(category)
-                if source_topic:
-                    post.topics = [source_topic]
-                    # Store metadata for training validation
-                    post.source_category = category
-                    post.source_topic = source_topic
-        except Exception:
-            pass
+    # PRIORITY 1: Check channel category from database (BEST for consistent categorization)
+    channel_topic = None
+    try:
+        from src.db.mongo import get_db
+        db = get_db()
+        ch_meta = db['channel_metadata'].find_one({"username": channel_name})
+        if ch_meta and ch_meta.get('category'):
+            channel_topic = ch_meta['category']
+            post.topics = [channel_topic]
+    except Exception:
+        pass
     
-    # If no ground truth from URL, use ML classifier
-    if not source_topic:
-        ml_classifier = get_ml_classifier()
-        if ml_classifier and cleaned_text:
+    # PRIORITY 2: Try to get topic from news URL pattern (for channels without category)
+    if not channel_topic:
+        source_topic = None
+        if links:
+            from src.processing.web_scraper import ArticleScraper
             try:
-                predicted_topic, confidence = ml_classifier.predict(cleaned_text)
-                # Chỉ lưu nếu confidence >= 0.3 (có thể điều chỉnh threshold)
-                if confidence >= 0.3:
-                    post.topics = [predicted_topic]
-                    post.score = confidence  # Lưu confidence vào score field
-            except Exception as e:
-                print(f"     ML prediction error: {e}")
-                # Fallback to rule-based classifier
+                # Fast extraction from URL pattern (no HTTP request needed)
+                category = ArticleScraper._extract_category_from_url(links[0])
+                if category:
+                    source_topic = ArticleScraper._map_category_to_topic(category)
+                    if source_topic:
+                        post.topics = [source_topic]
+                        # Store metadata for training validation
+                        post.source_category = category
+                        post.source_topic = source_topic
+            except Exception:
+                pass
+        
+        # PRIORITY 3: Use ML classifier (for channels without category and no URL pattern)
+        if not source_topic:
+            ml_classifier = get_ml_classifier()
+            if ml_classifier and cleaned_text:
+                try:
+                    predicted_topic, confidence = ml_classifier.predict(cleaned_text)
+                    # Chỉ lưu nếu confidence >= 0.3 (có thể điều chỉnh threshold)
+                    if confidence >= 0.3:
+                        post.topics = [predicted_topic]
+                        post.score = confidence  # Lưu confidence vào score field
+                except Exception as e:
+                    print(f"     ML prediction error: {e}")
+                    # Fallback to rule-based classifier
+                    topics = classify_post_topics(cleaned_text, lang)
+                    if topics:
+                        post.topics = topics
+            else:
+                # PRIORITY 4: Fallback to rule-based classifier
                 topics = classify_post_topics(cleaned_text, lang)
                 if topics:
                     post.topics = topics
-        else:
-            # Fallback to rule-based classifier
-            topics = classify_post_topics(cleaned_text, lang)
-            if topics:
-                post.topics = topics
     
     return post
 

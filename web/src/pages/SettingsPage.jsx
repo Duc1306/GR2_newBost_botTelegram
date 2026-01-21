@@ -303,20 +303,6 @@ export default function SettingsPage() {
             }
             label="Enable Telegram data collection"
           />
-          
-          <FormControlLabel
-            control={
-              <Switch
-                checked={settings.twitter_enabled}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setSettings({ ...settings, twitter_enabled: enabled });
-                  updateSettings({ twitter_enabled: enabled });
-                }}
-              />
-            }
-            label="Enable Twitter data collection"
-          />
 
           <Divider sx={{ my: 3 }} />
 

@@ -59,6 +59,11 @@ export default function OverviewPage() {
   // Use the correct labeled_posts field from API (unique posts with topics)
   const labeledPosts = stats?.labeled_posts || 0;
 
+  // Calculate platform stats (all posts are from Telegram since Twitter was removed)
+  const platformStats = {
+    telegram: totalPosts,
+  };
+
   // Prepare pie chart data
   const topicDistribution = Object.entries(topicStats).map(([name, value]) => ({
     name,
@@ -250,13 +255,13 @@ export default function OverviewPage() {
               }
             }}
           >
-            <Typography variant="h6" gutterBottom fontWeight="bold"> Platform Split</Typography>
+            <Typography variant="h6" gutterBottom fontWeight="bold">Platform Split</Typography>
             <Box sx={{ mt: 4 }}>
               <Box sx={{ mb: 3 }}>
                 <Box display="flex" justifyContent="space-between" mb={1}>
                   <Typography variant="body1">Telegram</Typography>
                   <Typography variant="body1" fontWeight="bold">
-                    {(stats?.by_source?.telegram || 0).toLocaleString()} ({((stats?.by_source?.telegram || 0) / (stats?.total_posts || 1) * 100).toFixed(1)}%)
+                    {(platformStats.telegram || 0).toLocaleString()} ({((platformStats.telegram || 0) / (totalPosts || 1) * 100).toFixed(1)}%)
                   </Typography>
                 </Box>
                 <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 24 }}>
@@ -265,25 +270,7 @@ export default function OverviewPage() {
                       bgcolor: '#0088cc', 
                       height: '100%', 
                       borderRadius: 1,
-                      width: `${(stats?.by_source?.telegram || 0) / (stats?.total_posts || 1) * 100}%`,
-                    }}
-                  />
-                </Box>
-              </Box>
-              <Box>
-                <Box display="flex" justifyContent="space-between" mb={1}>
-                  <Typography variant="body1">Twitter</Typography>
-                  <Typography variant="body1" fontWeight="bold">
-                    {(stats?.by_source?.twitter || 0).toLocaleString()} ({((stats?.by_source?.twitter || 0) / (stats?.total_posts || 1) * 100).toFixed(1)}%)
-                  </Typography>
-                </Box>
-                <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 24 }}>
-                  <Box 
-                    sx={{ 
-                      bgcolor: '#1DA1F2', 
-                      height: '100%', 
-                      borderRadius: 1,
-                      width: `${(stats?.by_source?.twitter || 0) / (stats?.total_posts || 1) * 100}%`,
+                      width: `${(platformStats.telegram || 0) / (totalPosts || 1) * 100}%`,
                     }}
                   />
                 </Box>
@@ -324,7 +311,7 @@ export default function OverviewPage() {
             data={topicDistribution.sort((a, b) => b.value - a.value)}
             title="Topic Distribution"
             icon={<PieChartIcon />}
-            height={450}
+            height={520}
           />
         </Grid>
         <Grid item xs={12} md={7}>
@@ -335,49 +322,182 @@ export default function OverviewPage() {
               borderRadius: 2, 
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
               height: '100%',
+              transition: 'box-shadow 0.3s',
+              '&:hover': {
+                boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+              }
             }}
           >
-            <Box display="flex" alignItems="center" gap={1} mb={3}>
-              <BarChartIcon sx={{ color: 'primary.main' }} />
-              <Typography variant="h6" fontWeight="bold">
-                Topic Breakdown
+            {/* Header */}
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
+              <Box display="flex" alignItems="center" gap={1}>
+                <BarChartIcon sx={{ color: 'primary.main' }} />
+                <Typography variant="h6" fontWeight="bold">
+                  Detailed Breakdown
+                </Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                Last 30 days
               </Typography>
             </Box>
-            <Box sx={{ mt: 3 }}>
+
+            {/* Topic List with Enhanced Design */}
+            <Box sx={{ 
+              maxHeight: 440, 
+              overflowY: 'auto',
+              pr: 1,
+              '&::-webkit-scrollbar': {
+                width: '6px',
+              },
+              '&::-webkit-scrollbar-track': {
+                background: '#f1f1f1',
+                borderRadius: '10px',
+              },
+              '&::-webkit-scrollbar-thumb': {
+                background: '#888',
+                borderRadius: '10px',
+                '&:hover': {
+                  background: '#555',
+                }
+              }
+            }}>
               {topicDistribution
                 .sort((a, b) => b.value - a.value)
                 .map((topic, index) => {
                   const percentage = ((topic.value / totalPosts) * 100).toFixed(1);
+                  const isTop3 = index < 3;
+                  
                   return (
-                    <Box key={topic.name} sx={{ mb: 3 }}>
-                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                        <Box display="flex" alignItems="center" gap={1}>
+                    <Box 
+                      key={topic.name} 
+                      sx={{ 
+                        mb: 2.5,
+                        p: 2,
+                        borderRadius: 2,
+                        bgcolor: isTop3 ? 'action.hover' : 'transparent',
+                        border: '1px solid',
+                        borderColor: isTop3 ? getTopicColor(topic.name) + '40' : 'divider',
+                        transition: 'all 0.3s',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        '&:hover': {
+                          bgcolor: 'action.hover',
+                          borderColor: getTopicColor(topic.name) + '60',
+                          transform: 'translateX(4px)',
+                          boxShadow: `0 4px 12px ${getTopicColor(topic.name)}30`,
+                        }
+                      }}
+                    >
+                      {/* Rank Badge */}
+                      {isTop3 && (
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            top: 0,
+                            right: 0,
+                            bgcolor: getTopicColor(topic.name),
+                            color: 'white',
+                            px: 1.5,
+                            py: 0.5,
+                            borderBottomLeftRadius: 8,
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold',
+                          }}
+                        >
+                          #{index + 1}
+                        </Box>
+                      )}
+
+                      {/* Topic Header */}
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
+                        <Box display="flex" alignItems="center" gap={1.5}>
+                          {!isTop3 && (
+                            <Typography 
+                              variant="caption" 
+                              sx={{ 
+                                width: 24,
+                                height: 24,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                borderRadius: '50%',
+                                bgcolor: 'action.selected',
+                                fontWeight: 'bold',
+                                fontSize: '0.7rem'
+                              }}
+                            >
+                              {index + 1}
+                            </Typography>
+                          )}
                           <Box
                             sx={{
                               width: 16,
                               height: 16,
                               borderRadius: '50%',
                               bgcolor: getTopicColor(topic.name),
+                              boxShadow: `0 2px 8px ${getTopicColor(topic.name)}60`,
                             }}
                           />
-                          <Typography variant="body1" fontWeight="600">
-                            {index + 1}. {topic.name}
+                          <Typography 
+                            variant="body1" 
+                            fontWeight={isTop3 ? 700 : 600}
+                            sx={{ 
+                              fontSize: isTop3 ? '1rem' : '0.95rem',
+                              color: isTop3 ? 'primary.main' : 'text.primary'
+                            }}
+                          >
+                            {topic.name}
                           </Typography>
                         </Box>
-                        <Typography variant="body2" color="text.secondary">
-                          {topic.value.toLocaleString()} posts ({percentage}%)
-                        </Typography>
+                        <Box textAlign="right">
+                          <Typography 
+                            variant="h6" 
+                            fontWeight="bold" 
+                            color="primary"
+                            sx={{ fontSize: isTop3 ? '1.1rem' : '1rem' }}
+                          >
+                            {topic.value.toLocaleString()}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" fontWeight="500">
+                            {percentage}%
+                          </Typography>
+                        </Box>
                       </Box>
-                      <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 10, overflow: 'hidden' }}>
-                        <Box
-                          sx={{
-                            bgcolor: getTopicColor(topic.name),
-                            height: '100%',
-                            width: `${percentage}%`,
-                            borderRadius: 1,
-                            transition: 'width 0.3s ease',
-                          }}
-                        />
+
+                      {/* Progress Bar */}
+                      <Box sx={{ position: 'relative' }}>
+                        <Box sx={{ 
+                          bgcolor: 'grey.200', 
+                          borderRadius: 1, 
+                          height: isTop3 ? 12 : 10,
+                          overflow: 'hidden',
+                          boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)'
+                        }}>
+                          <Box
+                            sx={{
+                              bgcolor: getTopicColor(topic.name),
+                              height: '100%',
+                              width: `${percentage}%`,
+                              borderRadius: 1,
+                              transition: 'width 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+                              position: 'relative',
+                              '&::after': {
+                                content: '""',
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+                                animation: 'shimmer 2s infinite',
+                              },
+                              '@keyframes shimmer': {
+                                '0%': { transform: 'translateX(-100%)' },
+                                '100%': { transform: 'translateX(100%)' }
+                              }
+                            }}
+                          />
+                        </Box>
                       </Box>
                     </Box>
                   );

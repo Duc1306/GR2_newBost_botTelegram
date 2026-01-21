@@ -26,6 +26,11 @@ import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 import SchoolIcon from '@mui/icons-material/School';
 import FlightIcon from '@mui/icons-material/Flight';
 import RestaurantIcon from '@mui/icons-material/Restaurant';
+import WorkIcon from '@mui/icons-material/Work';
+import BusinessCenterIcon from '@mui/icons-material/BusinessCenter';
+import SportsEsportsIcon from '@mui/icons-material/SportsEsports';
+import NewspaperIcon from '@mui/icons-material/Newspaper';
+import CategoryIcon from '@mui/icons-material/Category';
 
 const TOPIC_ICONS = {
   'Crypto': <CurrencyBitcoinIcon fontSize="small" />,
@@ -42,6 +47,11 @@ const TOPIC_ICONS = {
   'Giáo dục': <SchoolIcon fontSize="small" />,
   'Du lịch': <FlightIcon fontSize="small" />,
   'Ẩm thực': <RestaurantIcon fontSize="small" />,
+  'Việc làm': <WorkIcon fontSize="small" />,
+  'Kinh doanh & Khởi nghiệp': <BusinessCenterIcon fontSize="small" />,
+  'Trò chơi & Ứng dụng': <SportsEsportsIcon fontSize="small" />,
+  'Tin tức & Truyền thông': <NewspaperIcon fontSize="small" />,
+  'Khác': <CategoryIcon fontSize="small" />,
 };
 
 export const FilterSidebar = memo(function FilterSidebar({

@@ -19,7 +19,6 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import TelegramIcon from "@mui/icons-material/Telegram";
-import TwitterIcon from "@mui/icons-material/Twitter";
 import LinkIcon from "@mui/icons-material/Link";
 import ArticleIcon from "@mui/icons-material/Article";
 import { usePosts, useTopics, usePostsCount } from "../hooks/useApi.jsx";
@@ -200,11 +199,7 @@ export default function PostsPage() {
                       mb={1}
                     >
                       <Box display="flex" alignItems="center" gap={1}>
-                        {post.platform === "telegram" ? (
-                          <TelegramIcon sx={{ color: "#0088cc" }} />
-                        ) : (
-                          <TwitterIcon sx={{ color: "#1DA1F2" }} />
-                        )}
+                        <TelegramIcon sx={{ color: "#0088cc" }} />
                         <Typography variant="body2" color="text.secondary">
                           {post.source || "Unknown"}
                         </Typography>

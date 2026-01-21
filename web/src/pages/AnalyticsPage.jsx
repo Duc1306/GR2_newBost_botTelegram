@@ -22,7 +22,6 @@ import AbcIcon from '@mui/icons-material/Abc';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import TelegramIcon from '@mui/icons-material/Telegram';
-import TwitterIcon from '@mui/icons-material/Twitter';
 
 export default function AnalyticsPage() {
   const [startDate, setStartDate] = useState(subDays(new Date(), 30));
@@ -164,14 +163,14 @@ export default function AnalyticsPage() {
             ) : comparison?.comparison ? (
               <Box sx={{ mt: 2 }}>
                 {Object.entries(comparison.comparison)
-                  .filter(([_, data]) => data.total_posts > 0)
+                  .filter(([platform, data]) => platform === 'telegram' && data.total_posts > 0)
                   .map(([platform, data]) => (
                     <Box key={platform} sx={{ mb: 3, p: 2, bgcolor: 'background.default', borderRadius: 2 }}>
                       <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
                         <Box display="flex" alignItems="center" gap={1}>
-                          {platform === 'telegram' ? <TelegramIcon /> : <TwitterIcon />}
+                          <TelegramIcon />
                           <Typography variant="subtitle1" fontWeight="700" textTransform="capitalize">
-                            {platform === 'telegram' ? 'Telegram' : 'Twitter'}
+                            Telegram
                           </Typography>
                         </Box>
                         <Typography variant="caption" sx={{ px: 1, py: 0.5, bgcolor: 'primary.main', color: 'white', borderRadius: 1 }}>

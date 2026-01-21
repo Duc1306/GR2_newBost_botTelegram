@@ -1,10 +1,9 @@
-"""Danh sách kênh Telegram ban đầu và Twitter sources.
+"""Danh sách kênh Telegram từ database.
 Lấy trực tiếp từ database (channel_metadata).
 Chạy scripts/migrate_env_to_db.py để chuyển kênh từ .env vào database.
 """
 from __future__ import annotations
 from typing import List
-from src.config import env_twitter_sources
 
 
 def get_channels_from_db() -> List[str]:
@@ -58,14 +57,3 @@ def reload_channels() -> List[str]:
         print("⚠️ Không tìm thấy kênh nào trong database!")
     
     return CHANNELS
-
-# ============ TWITTER SOURCES ============
-# Có thể là username (bắt đầu @) hoặc hashtag (bắt đầu #)
-# Config trong file .env với TWITTER_SOURCES=@user1;@user2;#hashtag1
-DEFAULT_TWITTER_SOURCES: List[str] = [
-    # Để trống - config tất cả trong .env
-    # Ví dụ trong .env:
-    # TWITTER_SOURCES=@BBCBreaking;@Reuters;@TechCrunch;#Technology;#AI
-]
-
-TWITTER_SOURCES: List[str] = env_twitter_sources() or DEFAULT_TWITTER_SOURCES

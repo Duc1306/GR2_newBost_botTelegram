@@ -22,7 +22,6 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CommentIcon from '@mui/icons-material/Comment';
 import ShareIcon from '@mui/icons-material/Share';
 import TelegramIcon from '@mui/icons-material/Telegram';
-import TwitterIcon from '@mui/icons-material/Twitter';
 import LinkIcon from '@mui/icons-material/Link';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
@@ -332,16 +331,12 @@ export default function TrendingPage() {
                         <Box display="flex" alignItems="center" gap={2} mb={2}>
                           <Avatar
                             sx={{
-                              bgcolor: post.platform === 'telegram' ? '#0088cc' : '#1DA1F2',
+                              bgcolor: '#0088cc',
                               width: 48,
                               height: 48,
                             }}
                           >
-                            {post.platform === 'telegram' ? (
                               <TelegramIcon />
-                            ) : (
-                              <TwitterIcon />
-                            )}
                           </Avatar>
                           <Box flex={1}>
                             <Box display="flex" alignItems="center" gap={1}>

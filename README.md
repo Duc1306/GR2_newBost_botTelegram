@@ -1,14 +1,13 @@
-# 🤖 NewsBot - Multi-Platform News Aggregator
+# 🤖 NewsBot - Telegram News Aggregator
 
-Thu thập, phân loại và hiển thị tin tức từ **Telegram & Twitter** với AI/ML.
+Thu thập, phân loại và hiển thị tin tức từ **Telegram** với AI/ML.
 
-**Pipeline:** Telegram/Twitter → Clean → ML Topic Classification → Web UI
+**Pipeline:** Telegram → Clean → ML Topic Classification → Web UI
 
 **Tech:** Python 3.12, FastAPI, MongoDB, React 18, scikit-learn (TF-IDF + SVM)
 
 **Platforms:** 
 - ✅ **Telegram** - Channels & Groups
-- ✅ **Twitter** - Users & Hashtags
 
 ---
 
@@ -20,9 +19,8 @@ Thu thập, phân loại và hiển thị tin tức từ **Telegram & Twitter** 
 4. [📂 Project Structure](#-project-structure)
 5. [🔧 API Documentation](#-api-documentation)
 6. [💾 Database Design](#-database-design)
-7. [🐦 Twitter Integration](#-twitter-integration)
-8. [⚠️ Troubleshooting](#-troubleshooting)
-9. [📊 Requirements](#-requirements)
+7. [⚠️ Troubleshooting](#-troubleshooting)
+8. [📊 Requirements](#-requirements)
 
 ---
 
@@ -57,111 +55,106 @@ python scripts\create_session.py
 scripts\test_security.cmd
 ```
 
-### 2. Thu Thập & Phân Loại Tự Động
+### 2. Thu Thập Dữ Liệu (Tự Động Phân Loại Topic)
 
 ```bash
-# Thu thập từ Telegram
-scripts\fetch_telegram.cmd          # Quick mode (200 posts)
-scripts\fetch_telegram.cmd --full   # Full mode (1000 posts)
+# Thu thập từ Telegram với TỰ ĐỘNG phân loại topic
+scripts\fetch_telegram.cmd          # Quick mode: 200 posts/kênh
+scripts\fetch_telegram.cmd --full   # Full mode: 1000 posts/kênh
 
-# Thu thập từ Twitter (NEW!)
-scripts\fetch_twitter.cmd           # Quick mode (100 tweets)
-scripts\fetch_twitter.cmd --full    # Full mode (500 tweets)
-
-# Hoặc dùng trực tiếp
-python -m src.ingestion.telegram_worker          # Telegram
-python -m src.ingestion.twitter_worker           # Twitter
+# Hoặc dùng trực tiếp Python
+python -m src.ingestion.telegram_worker          # Quick mode
+python -m src.ingestion.telegram_worker --full   # Full mode
 ```
 
-### 2.1. 🎯 Phân Loại Topic Tự Động
+**✨ Phân Loại Topic Tự Động (4 Cấp Ưu Tiên):**
 
-**Phương pháp 1: Classify từ TEXT CONTENT (Recommended - 99% success)**
+Khi fetch dữ liệu, hệ thống TỰ ĐỘNG phân loại topic theo thứ tự:
 
+1. 🎯 **Channel Category** (từ channel.json) - Chính xác nhất
+2. 📰 **URL Pattern** (từ domain news site) - Cho bài có link
+3. 🤖 **ML Classifier** (TF-IDF + SVM) - Phân tích nội dung text
+4. 📋 **Rule-based** (Keywords) - Fallback cuối cùng
+
+**Kết quả:** ~99% posts có topic ngay sau khi fetch!
+
+### 2.1. Quản Lý Channel Categories
+
+Để tăng độ chính xác, thêm category cho channels trong [channel.json](channel.json):
+
+```json
+{
+  "platform": "telegram",
+  "username": "channelname",
+  "category": "Crypto"  // ← Thêm category
+}
+```
+
+**Import vào database:**
 ```bash
-# Dry run (test trước, không lưu database)
-python scripts\classify_by_content.py --limit 100
-
-# Apply cho 1000 posts đầu tiên
-python scripts\classify_by_content.py --limit 1000 --apply
-
-# Apply cho TẤT CẢ posts (61,000+)
-python scripts\classify_by_content.py --apply
+python scripts\reclassify_with_channel_categories.py --apply
 ```
 
-**Phương pháp 2: Extract từ URL (Chỉ cho news sites - 2-10% success)**
+### 2.2. Scripts Quan Trọng
 
-```bash
-# Dry run (test 500 URLs)
-python scripts\extract_categories_from_urls.py --limit 500
+#### 📥 Thu Thập & Quản Lý Kênh
 
-# Apply và lưu vào database
-python scripts\extract_categories_from_urls.py --limit 5000 --apply
-```
+| Script | Mô tả | Sử dụng |
+|--------|-------|---------|
+| `fetch_telegram.cmd` | Thu thập tin từ Telegram (tự động classify) | `scripts\fetch_telegram.cmd [--full]` |
+| `auto_join_channels.cmd` | Tự động join kênh mới từ channel.json | `scripts\auto_join_channels.cmd` |
+| `list_channels_from_db.cmd` | Liệt kê channels trong database | `scripts\list_channels_from_db.cmd` |
+| `create_session.cmd` | Tạo session Telegram (1 lần duy nhất) | `scripts\create_session.cmd` |
 
-**So sánh:**
-- **classify_by_content.py**: 
-  - ✅ Success rate ~99%
-  - ✅ Hoạt động với MỌI post (YouTube, Telegram, etc.)
-  - ✅ Nhanh (~3-5 phút cho 61k posts)
-  - ✅ Sử dụng keywords Tiếng Việt + English
-  
-- **extract_categories_from_urls.py**:
-  - ⚠️ Success rate chỉ 2-10%
-  - ⚠️ Chỉ hoạt động với news URLs
-  - ⚠️ Chậm (cần resolve shorteners)
-  - ✅ Ground truth từ trang báo chính thống
+#### 🤖 ML Model & Training
 
-**🎯 Khuyến nghị: Chạy CÙNG LÚC cả 2 scripts:**
-1. Chạy `classify_by_content.py` trước → 99% posts có topic
-2. Chạy `extract_categories_from_urls.py` sau → Override với ground truth từ news sites
+| Script | Mô tả | Sử dụng |
+|--------|-------|---------|
+| `train_ml_classifier.cmd` | Train ML model từ data | `scripts\train_ml_classifier.cmd` |
+| `evaluate_model.cmd` | Đánh giá độ chính xác model | `scripts\evaluate_model.cmd` |
+| `auto_retrain.cmd` | Tự động retrain khi có data mới | `scripts\auto_retrain.cmd` |
+| `balance_training_data.cmd` | Cân bằng data giữa các topics | `scripts\balance_training_data.cmd` |
+| `predict_topics.cmd` | Predict topics cho posts cũ | `scripts\predict_topics.cmd` |
 
-```bash
-# Best practice workflow
-python scripts\classify_by_content.py --apply
-python scripts\extract_categories_from_urls.py --limit 10000 --apply
-```
+#### 🔧 Bảo Trì Database
 
-### 2.2. Train ML Model
+| Script | Mô tả | Sử dụng |
+|--------|-------|---------|
+| `migrate_db_schema.cmd` | Migrate schema (1 lần) | `scripts\migrate_db_schema.cmd` |
+| `create_indexes.cmd` | Tạo indexes cho performance | `scripts\create_indexes.cmd` |
+| `migrate_env_to_db.cmd` | Import config từ .env vào DB | `scripts\migrate_env_to_db.cmd` |
+| `verify_labels.cmd` | Verify tính hợp lệ của labels | `scripts\verify_labels.cmd` |
 
-```bash
-# Train ML topic classifier (từ cả Telegram + Twitter data)
-scripts\train_ml_classifier.cmd
+#### 📊 Analytics & Reports
 
-# Hoặc train với balanced data
-python scripts\train_ml_classifier.py --balanced --target-samples 500
+| Script | Mô tả | Sử dụng |
+|--------|-------|---------|
+| `aggregate_topic_stats.cmd` | Tạo thống kê topics | `scripts\aggregate_topic_stats.cmd --days 7` |
+| `extract_keyword_trends.cmd` | Phân tích từ khóa trending | `scripts\extract_keyword_trends.cmd --days 7` |
 
-# Evaluate model accuracy
-scripts\evaluate_model.cmd
-```
+#### 🔐 Security & Testing
 
-### 2.3. Database Maintenance
+| Script | Mô tả | Sử dụng |
+|--------|-------|---------|
+| `test_security.cmd` | Test authentication & rate limiting | `scripts\test_security.cmd` |
 
-```bash
-# Migrate database schema (1 lần duy nhất)
-scripts\migrate_db_schema.cmd
+#### 🚀 Chạy Ứng Dụng
 
-# Create indexes for performance
-scripts\create_indexes.cmd
+| Script | Mô tả | Sử dụng |
+|--------|-------|---------|
+| `run_fullstack.cmd` | Chạy Backend + Frontend cùng lúc | `scripts\run_fullstack.cmd` |
+| `run_api.cmd` | Chỉ chạy Backend API | `scripts\run_api.cmd` |
 
-# Check database labels
-scripts\check_db_labels.cmd
+#### ⚠️ Advanced (Chỉ Khi Cần)
 
-# Balance training data
-scripts\balance_training_data.cmd
-```
+| Script | Mô tả | Khi Nào Dùng |
+|--------|-------|--------------|
+| `reclassify_with_channel_categories.py` | Re-classify toàn bộ posts theo channel category | Khi update channel.json hoặc thêm categories mới |
+| `classify_by_content.py` | Classify posts thiếu topics | Khi có posts chưa có topics |
+| `fix_misclassified_topics.cmd` | Fix topics bị phân loại sai | Khi phát hiện lỗi phân loại |
+| `full_retrain_pipeline.cmd` | Full pipeline: balance → train → evaluate | Khi cần retrain toàn bộ từ đầu |
 
-### 2.4. Analytics & Reporting
-
-```bash
-# Generate analytics data
-scripts\aggregate_topic_stats.cmd --days 7
-scripts\extract_keyword_trends.cmd --days 7
-
-# Predict topics for unlabeled posts
-scripts\predict_topics.cmd
-```
-
-### 3. Chạy Ứng Dụng
+### 2.3. Chạy Ứng Dụng
 
 ```bash
 # Backend + Frontend
@@ -289,7 +282,7 @@ tail -f logs/api.log | grep ERROR
 
 ### 14 Topics Được Hỗ Trợ
 
-Hệ thống phân loại **14 chủ đề** bao gồm các lĩnh vực chính:
+Hệ thống phân loại **19 chủ đề** bao gồm các lĩnh vực chính:
 
 1. 💰 **Crypto** - Bitcoin, Ethereum, blockchain, DeFi, NFT
 2. 📈 **Kinh tế** - Tài chính, chứng khoán, ngân hàng, thương mại
@@ -305,10 +298,15 @@ Hệ thống phân loại **14 chủ đề** bao gồm các lĩnh vực chính:
 12. 📚 **Giáo dục** - Đào tạo, học tập, trường học, giáo dục
 13. ✈️ **Du lịch** - Điểm đến, khách sạn, tour, du lịch
 14. 🍜 **Ẩm thực** - Món ăn, nhà hàng, công thức nấu ăn
+15. 💼 **Việc làm** - Tuyển dụng, career, jobs, freelance
+16. 🚀 **Kinh doanh & Khởi nghiệp** - Startup, business, entrepreneur
+17. 🎮 **Trò chơi & Ứng dụng** - Games, apps, gaming, mobile
+18. 📰 **Tin tức & Truyền thông** - News, media, journalism
+19. 📦 **Khác** - Các chủ đề khác
 
 **Frontend Support:**
-- ✅ 14 màu sắc riêng biệt cho mỗi topic
-- ✅ 14 icons Material-UI tương ứng
+- ✅ 19 màu sắc riêng biệt cho mỗi topic
+- ✅ 19 icons Material-UI tương ứng
 - ✅ Filter sidebar với tất cả topics
 - ✅ Dynamic topic fetching từ API
 
@@ -340,7 +338,6 @@ Hệ thống phân loại **14 chủ đề** bao gồm các lĩnh vực chính:
 - **Multi-method Classification:** URL → Content → ML (cascade)
 - **Auto-predict:** Mỗi post mới tự động được phân loại
 - **Confidence tracking:** Lưu topic với confidence + model version + timestamp
-- **Multi-platform:** Hỗ trợ Telegram & Twitter (chuẩn bị sẵn)
 - **Data Quality Tiers:**
   1. **Ground Truth** (source_topic từ news sites)
   2. **Manual Labels** (manual_labels từ admin)
@@ -712,10 +709,6 @@ scripts\verify_labels.cmd --limit 50
 # Telegram
 scripts\fetch_telegram.cmd          # Quick (200 posts)
 scripts\fetch_telegram.cmd --full   # Full (1000 posts)
-
-# Twitter
-scripts\fetch_twitter.cmd           # Quick (100 tweets)
-scripts\fetch_twitter.cmd --full    # Full (500 tweets)
 ```
 
 ### 🚀 Application
@@ -750,116 +743,7 @@ scripts\test_security.cmd
 
 ---
 
-## 🐦 Twitter Integration
-
-### Tính năng
-- ✅ Thu thập tweets từ user accounts (@username)
-- ✅ Thu thập tweets từ hashtags (#keyword)
-- ✅ Tự động phân loại topic với ML
-- ✅ Deduplicate và clean data
-- ✅ Enrich với full articles
-- ✅ Store vào MongoDB
-- ✅ Expose qua REST API
-
-### Cài đặt nhanh
-
-#### 1. Lấy Twitter API Credentials
-
-1. **Đăng ký Twitter Developer Account**
-   - Truy cập: https://developer.twitter.com/
-   - Chọn "Essential" (Free)
-   - Chờ phê duyệt (~5 phút)
-
-2. **Tạo App và lấy Bearer Token**
-   - Vào Dashboard → Create Project → Create App
-   - Vào "Keys and tokens" → Generate Bearer Token
-   - **LƯU TOKEN NGAY** (chỉ hiện 1 lần!)
-
-3. **Thêm vào .env**
-```env
-TWITTER_BEARER_TOKEN=AAAAAAAAAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-#### 2. Cấu hình Sources
-
-Thêm vào `.env`:
-```env
-# @ = theo dõi user, # = theo dõi hashtag
-TWITTER_SOURCES=@BBCBreaking;@Reuters;@VNExpress;#technology;#vietnam;#AI
-```
-
-**Gợi ý sources hay:**
-- Tin tức: `@BBCBreaking;@Reuters;@CNN;@VNExpress`
-- Tech: `@TechCrunch;@TheVerge;#startup;#AI`
-- Business: `@business;@Forbes;@CNBC`
-
-#### 3. Thu thập dữ liệu
-
-```bash
-# Lần đầu: Full mode (500 tweets/source)
-scripts\fetch_twitter.cmd --full
-
-# Thường xuyên: Quick mode (100 tweets/source)
-scripts\fetch_twitter.cmd
-```
-
-#### 4. Xem kết quả
-
-```bash
-# Qua API
-scripts\run_api.cmd
-# http://localhost:8000/posts?platform=twitter
-
-# Qua Web Dashboard
-scripts\run_fullstack.cmd
-# http://localhost:5173
-```
-
-### Twitter Rate Limits
-
-- ✅ 500,000 tweets/month (Essential tier)
-- ⚠️ ~16,000 tweets/day
-- 🔄 450 requests/15 minutes
-
-**Khuyến nghị:**
-- Chạy mỗi 1-2 giờ
-- 5-10 sources tối ưu
-- Avoid quá nhiều sources (>20)
-
-### Schedule tự động
-
-**Windows Task Scheduler:**
-1. Mở Task Scheduler
-2. Create Basic Task → Name: `Twitter Bot Fetch`
-3. Trigger: Daily, repeat every 1 hour
-4. Action: Start program → `C:\Users\84328\botTele\scripts\fetch_twitter.cmd`
-
-**Linux/Mac Cron:**
-```bash
-crontab -e
-# Thêm dòng (chạy mỗi giờ)
-0 * * * * cd /path/to/botTele && python -m src.ingestion.twitter_worker
-```
-
-### Twitter Troubleshooting
-
-**❌ "401 Unauthorized"**
-- Check Bearer Token trong `.env`
-- Regenerate token nếu cần
-
-**❌ "Rate limit exceeded"**
-- Chờ 15 phút
-- Giảm số sources
-- Tăng interval
-
-**❌ Không lấy được tweets**
-- Check `TWITTER_SOURCES` có được config?
-- Sources đúng format (@user hoặc #hashtag)?
-- User/hashtag có public không?
-
----
-
-## 🔧 API Documentation
+##  API Documentation
 
 ### Base URL
 `http://localhost:8000`
@@ -882,7 +766,7 @@ crontab -e
 
 ```typescript
 {
-  platform?: "telegram" | "twitter" | "all"  // Default: "all"
+  platform?: "telegram"                      // Default: "telegram"
   topic?: string                             // Filter by topic
   source?: string                            // Specific source
   lang?: "vi" | "en"                         // Language filter

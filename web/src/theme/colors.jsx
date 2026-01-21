@@ -18,6 +18,11 @@ export const topicColors = {
   'Giáo dục': '#4169E1',         // Royal blue
   'Du lịch': '#20B2AA',          // Light sea green
   'Ẩm thực': '#FF8C00',          // Dark orange
+  'Việc làm': '#FF6B6B',         // Coral red (Job listings)
+  'Kinh doanh & Khởi nghiệp': '#32CD32', // Lime green (Business growth)
+  'Trò chơi & Ứng dụng': '#8A2BE2',      // Blue violet (Gaming)
+  'Tin tức & Truyền thông': '#696969',   // Dim gray (News media)
+  'Khác': '#9E9E9E',             // Gray (Other)
 };
 
 // Status Colors
@@ -31,7 +36,6 @@ export const statusColors = {
 // Platform Colors
 export const platformColors = {
   telegram: '#0088cc',
-  twitter: '#1DA1F2',
 };
 
 // Trend Indicators
