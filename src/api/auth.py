@@ -16,6 +16,8 @@ from src.config import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     ADMIN_USERNAME,
     ADMIN_PASSWORD,
+    USER_USERNAME,
+    USER_PASSWORD,
     API_KEY as CONFIGURED_API_KEY
 )
 
@@ -49,6 +51,7 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     """JWT token payload model."""
     username: Optional[str] = None
+    role: Optional[str] = None
     exp: Optional[datetime] = None
 
 class LoginRequest(BaseModel):
@@ -62,6 +65,7 @@ class LoginResponse(BaseModel):
     token_type: str
     expires_in: int
     username: str
+    role: str
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
@@ -102,6 +106,7 @@ def decode_access_token(token: str) -> TokenData:
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         username: str = payload.get("sub")
+        role: str = payload.get("role", "user")
         exp: datetime = datetime.fromtimestamp(payload.get("exp", 0))
         
         if username is None:
@@ -111,7 +116,7 @@ def decode_access_token(token: str) -> TokenData:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        token_data = TokenData(username=username, exp=exp)
+        token_data = TokenData(username=username, role=role, exp=exp)
         return token_data
     
     except JWTError as e:
@@ -160,26 +165,35 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-async def get_current_admin_user(current_user: str = Security(get_current_user)) -> str:
+async def get_current_user_token_data(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    api_key: Optional[str] = Security(api_key_header)
+) -> TokenData:
+    """Return full TokenData (including role) for the authenticated user."""
+    if CONFIGURED_API_KEY and api_key and api_key == CONFIGURED_API_KEY:
+        return TokenData(username="api_key_user", role="admin")
+    if credentials:
+        return decode_access_token(credentials.credentials)
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def get_current_admin_user(
+    token_data: TokenData = Security(get_current_user_token_data)
+) -> str:
     """
     Dependency to ensure current user is admin.
-    
-    Args:
-        current_user: Current authenticated user from get_current_user
-    
-    Returns:
-        Username if user is admin
-    
-    Raises:
-        HTTPException: If user is not admin
+    Checks role='admin' embedded in JWT (or API key).
     """
-    # In simple setup, only check if user is the configured admin
-    if current_user not in [ADMIN_USERNAME, "api_key_user"]:
+    if token_data.role != "admin" and token_data.username != "api_key_user":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
+            detail="Admin access required"
         )
-    return current_user
+    return token_data.username
 
 # =============================================================================
 # Authentication Functions
@@ -200,14 +214,13 @@ def authenticate_user(username: str, password: str) -> Optional[str]:
         In production, this should check against a database with hashed passwords.
         Current implementation is simplified for demo purposes.
     """
-    # Simple check against configured admin credentials
-    # In production, query database and verify hashed password
+    # Check admin credentials
     if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-        return username
+        return {"username": username, "role": "admin"}
     
-    # Could also verify hashed password:
-    # if username == ADMIN_USERNAME and verify_password(password, hashed_admin_password):
-    #     return username
+    # Check regular user credentials
+    if username == USER_USERNAME and password == USER_PASSWORD:
+        return {"username": username, "role": "user"}
     
     return None
 
@@ -225,25 +238,26 @@ def login(username: str, password: str) -> LoginResponse:
     Raises:
         HTTPException: If authentication fails
     """
-    user = authenticate_user(username, password)
+    user_info = authenticate_user(username, password)
     
-    if not user:
+    if not user_info:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Create access token
+    # Create access token with role embedded
     access_token_expires = timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user}, 
+        data={"sub": user_info["username"], "role": user_info["role"]}, 
         expires_delta=access_token_expires
     )
     
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # in seconds
-        username=user
+        expires_in=JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        username=user_info["username"],
+        role=user_info["role"]
     )

@@ -28,8 +28,8 @@ import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import ChatBubbleIcon from '@mui/icons-material/ChatBubble';
 import NumbersIcon from '@mui/icons-material/Numbers';
-import { useTrendingTopics, usePosts, useKeywords } from '../hooks/useApi.jsx';
-import { getTopicColor } from '../theme/colors.jsx';
+import { useTrendingTopics, usePosts, useKeywords } from '../../hooks/useApi.jsx';
+import { getTopicColor } from '../../theme/colors.jsx';
 
 export default function TrendingPage() {
   const [timeRange, setTimeRange] = useState('7d');

@@ -9,6 +9,7 @@ from src.api.auth import (
     login, 
     get_current_user, 
     get_current_admin_user,
+    get_current_user_token_data,
     LoginRequest,
     LoginResponse
 )
@@ -94,12 +95,12 @@ async def logout_endpoint(current_user: str = Depends(get_current_user)):
     return {"message": "Logged out successfully", "username": current_user}
 
 @app.get("/auth/me", tags=["Authentication"])
-async def get_current_user_info(current_user: str = Depends(get_current_user)):
+async def get_current_user_info(token_data=Depends(get_current_user_token_data)):
     """
-    Get current authenticated user info.
-    Useful for frontend to verify token validity.
+    Get current authenticated user info including role.
+    Useful for frontend to verify token validity and determine role.
     """
-    return {"username": current_user, "authenticated": True}
+    return {"username": token_data.username, "role": token_data.role, "authenticated": True}
 
 # =============================================================================
 # Public Endpoints
@@ -1003,6 +1004,481 @@ async def update_settings(
     logger.info(f"Settings updated for {current_user}: {list(updates.keys())}")
     
     return {"success": True, "updated_fields": list(updates.keys())}
+
+# =============================================================================
+# Hot Topics - Default seed data
+# =============================================================================
+
+DEFAULT_HOT_TOPICS = [
+    {
+        "slug": "iran-israel-conflict",
+        "name": "⚡ Iran – Israel",
+        "description": "Xung đột Iran - Israel và khu vực Trung Đông",
+        "keywords": ["iran", "israel", "tehran", "idf", "irgc", "netanyahu", "khamenei",
+                     "airstrike", "missile strike", "không kích", "tên lửa", "hezbollah",
+                     "tel aviv", "jerusalem", "mossad"],
+        "color": "#ef4444",
+        "priority": 1,
+        "active": True,
+    },
+    {
+        "slug": "ukraine-war",
+        "name": "🇺🇦 Chiến tranh Ukraine",
+        "description": "Chiến tranh Nga – Ukraine và phản ứng quốc tế",
+        "keywords": ["ukraine", "russia", "zelensky", "putin", "kyiv", "moscow",
+                     "nato", "donbas", "crimea", "kherson", "bakhmut", "volodymyr",
+                     "nga", "ukraine war", "ukrainian"],
+        "color": "#3b82f6",
+        "priority": 2,
+        "active": True,
+    },
+    {
+        "slug": "middle-east-gaza",
+        "name": "🕌 Gaza & Trung Đông",
+        "description": "Tình hình dải Gaza và khu vực Trung Đông",
+        "keywords": ["gaza", "hamas", "west bank", "ramallah", "rafah", "palestin",
+                     "houthi", "yemen", "lebanon", "syria", "jordan", "saudi arabia",
+                     "ceasefire", "ngừng bắn"],
+        "color": "#f59e0b",
+        "priority": 3,
+        "active": True,
+    },
+    {
+        "slug": "us-politics",
+        "name": "🇺🇸 Chính trị Mỹ",
+        "description": "Chính trị, kinh tế và đối ngoại Hoa Kỳ",
+        "keywords": ["trump", "biden", "harris", "congress", "white house",
+                     "democrat", "republican", "senate", "tariff", "sanction",
+                     "america", "washington"],
+        "color": "#8b5cf6",
+        "priority": 4,
+        "active": True,
+    },
+    {
+        "slug": "china-asia",
+        "name": "🌏 Trung Quốc & Châu Á",
+        "description": "Địa chính trị Trung Quốc, Đài Loan và khu vực",
+        "keywords": ["china", "taiwan", "xi jinping", "taipei", "pla",
+                     "south china sea", "biển đông", "trung quốc", "đài loan",
+                     "north korea", "kim jong un", "dprk", "triều tiên"],
+        "color": "#ec4899",
+        "priority": 5,
+        "active": True,
+    },
+    {
+        "slug": "ai-technology",
+        "name": "🤖 AI & Công nghệ",
+        "description": "Trí tuệ nhân tạo và công nghệ mới",
+        "keywords": ["ai", "artificial intelligence", "chatgpt", "openai", "nvidia",
+                     "gemini", "llm", "deepseek", "trí tuệ nhân tạo", "machine learning",
+                     "tech giant", "silicon valley", "chip"],
+        "color": "#06b6d4",
+        "priority": 6,
+        "active": True,
+    },
+    {
+        "slug": "world-economy",
+        "name": "📈 Kinh tế quốc tế",
+        "description": "Kinh tế và tài chính toàn cầu",
+        "keywords": ["recession", "inflation", "fed", "interest rate", "gdp",
+                     "stock market", "dollar", "trade war", "tariff", "khủng hoảng",
+                     "imf", "world bank", "economy", "financial"],
+        "color": "#10b981",
+        "priority": 7,
+        "active": True,
+    },
+    {
+        "slug": "climate-disaster",
+        "name": "🌡️ Thiên tai & Khí hậu",
+        "description": "Biến đổi khí hậu và thiên tai toàn cầu",
+        "keywords": ["earthquake", "flood", "typhoon", "hurricane", "wildfire",
+                     "tsunami", "climate change", "global warming", "tornado",
+                     "động đất", "lũ lụt", "bão", "thiên tai"],
+        "color": "#84cc16",
+        "priority": 8,
+        "active": True,
+    },
+]
+
+
+# =============================================================================
+# Public News Feed Endpoints (No Authentication Required)
+# =============================================================================
+
+@app.get("/public/posts", tags=["Public"])
+@limiter.limit("200/minute")
+async def get_public_posts(
+    request: Request,
+    q: Optional[str] = Query(None, description="Tìm kiếm trong nội dung"),
+    keywords: Optional[str] = Query(None, description="Từ khóa (comma-separated)"),
+    topic: Optional[str] = Query(None, description="Lọc theo topic"),
+    lang: Optional[str] = Query(None, description="Ngôn ngữ (vi, en)"),
+    link_only: bool = Query(False, description="Chỉ bài có link bên ngoài"),
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
+):
+    """Public news feed – no authentication required."""
+    db = get_db()
+    coll = db["posts"]
+
+    query: dict = {}
+    if topic:
+        query["topics"] = topic
+    if lang:
+        query["lang"] = lang
+    if link_only:
+        query["links"] = {"$exists": True, "$ne": []}
+
+    if q:
+        query["text"] = {"$regex": q, "$options": "i"}
+    elif keywords:
+        kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+        if kw_list:
+            query["$or"] = [{"text": {"$regex": kw, "$options": "i"}} for kw in kw_list]
+
+    projection = {
+        "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
+        "created_at": 1, "links": 1, "topics": 1, "lang": 1,
+        "full_article": 1, "platform": 1, "media": 1,
+    }
+    cursor = coll.find(query, projection).sort("created_at", -1).skip(skip).limit(limit)
+    posts = []
+    for p in cursor:
+        p["_id"] = str(p["_id"])
+        posts.append(p)
+
+    return posts
+
+
+@app.get("/public/hot-topics", tags=["Public"])
+async def get_public_hot_topics():
+    """Return active hot topics list – no authentication required."""
+    db = get_db()
+    coll = db["hot_topics"]
+
+    topics = list(coll.find({"active": True}, {"_id": 0}).sort("priority", 1))
+    if not topics:
+        return {"topics": DEFAULT_HOT_TOPICS, "seeded": False}
+
+    return {"topics": topics, "seeded": True}
+
+
+@app.get("/public/hot-topics/{slug}/posts", tags=["Public"])
+@limiter.limit("200/minute")
+async def get_public_hot_topic_posts(
+    request: Request,
+    slug: str,
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
+):
+    """Return posts matching a hot topic's keywords – no authentication required."""
+    db = get_db()
+    hot_topics_coll = db["hot_topics"]
+    posts_coll = db["posts"]
+
+    # Find topic in DB, fall back to defaults
+    topic_doc = hot_topics_coll.find_one({"slug": slug, "active": True}, {"_id": 0})
+    if not topic_doc:
+        topic_doc = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == slug), None)
+    if not topic_doc:
+        raise HTTPException(status_code=404, detail="Hot topic not found")
+
+    keywords = topic_doc.get("keywords", [])
+    if not keywords:
+        return {"topic": topic_doc, "posts": [], "total": 0, "skip": skip, "limit": limit}
+
+    query = {"$or": [{"text": {"$regex": kw, "$options": "i"}} for kw in keywords]}
+    projection = {
+        "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
+        "created_at": 1, "links": 1, "topics": 1, "lang": 1,
+        "full_article": 1, "platform": 1,
+    }
+    cursor = posts_coll.find(query, projection).sort("created_at", -1).skip(skip).limit(limit)
+    posts = []
+    for p in cursor:
+        p["_id"] = str(p["_id"])
+        posts.append(p)
+
+    total = posts_coll.count_documents(query)
+    return {"topic": topic_doc, "posts": posts, "total": total, "skip": skip, "limit": limit}
+
+
+# =============================================================================
+# Admin: Hot Topics Management
+# =============================================================================
+
+@app.post("/admin/hot-topics/seed", tags=["Admin"])
+async def seed_hot_topics(current_user: str = Depends(get_current_admin_user)):
+    """Seed default hot topics into the database (idempotent)."""
+    db = get_db()
+    coll = db["hot_topics"]
+
+    seeded = 0
+    already_existed = 0
+    for topic in DEFAULT_HOT_TOPICS:
+        doc = {**topic, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+        result = coll.update_one(
+            {"slug": topic["slug"]},
+            {"$setOnInsert": doc},
+            upsert=True,
+        )
+        if result.upserted_id:
+            seeded += 1
+        else:
+            already_existed += 1
+
+    return {"seeded": seeded, "already_existed": already_existed, "total": len(DEFAULT_HOT_TOPICS)}
+
+
+@app.get("/admin/hot-topics", tags=["Admin"])
+async def admin_list_hot_topics(current_user: str = Depends(get_current_admin_user)):
+    """Admin: list all hot topics (including inactive)."""
+    db = get_db()
+    topics = list(db["hot_topics"].find({}, {"_id": 0}).sort("priority", 1))
+    return {"topics": topics}
+
+
+@app.post("/admin/hot-topics", tags=["Admin"])
+async def admin_create_hot_topic(
+    topic: dict,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: create a new hot topic."""
+    db = get_db()
+    coll = db["hot_topics"]
+
+    for field in ("slug", "name", "keywords"):
+        if field not in topic:
+            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+
+    if coll.find_one({"slug": topic["slug"]}):
+        raise HTTPException(status_code=409, detail="Slug already exists")
+
+    doc = {
+        "slug": topic["slug"],
+        "name": topic["name"],
+        "description": topic.get("description", ""),
+        "keywords": topic["keywords"],
+        "color": topic.get("color", "#6b7280"),
+        "priority": topic.get("priority", 99),
+        "active": topic.get("active", True),
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    }
+    coll.insert_one(doc)
+    doc.pop("_id", None)
+    return {"success": True, "topic": doc}
+
+
+@app.put("/admin/hot-topics/{slug}", tags=["Admin"])
+async def admin_update_hot_topic(
+    slug: str,
+    updates: dict,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: update an existing hot topic."""
+    db = get_db()
+    coll = db["hot_topics"]
+
+    for field in ("slug", "_id", "created_at"):
+        updates.pop(field, None)
+    updates["updated_at"] = datetime.utcnow()
+
+    result = coll.update_one({"slug": slug}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Hot topic not found")
+
+    return {"success": True}
+
+
+@app.delete("/admin/hot-topics/{slug}", tags=["Admin"])
+async def admin_delete_hot_topic(
+    slug: str,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: delete a hot topic."""
+    db = get_db()
+    result = db["hot_topics"].delete_one({"slug": slug})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Hot topic not found")
+    return {"success": True}
+
+
+# =============================================================================
+# Admin: AI-powered Hot Topics Endpoints
+# =============================================================================
+
+@app.get("/admin/ai/status", tags=["AI"])
+async def ai_status(current_user: str = Depends(get_current_admin_user)):
+    """Check whether OpenAI is configured and reachable."""
+    from src.processing.ai_topic_detector import check_openai_status
+    return check_openai_status()
+
+
+@app.post("/admin/ai/detect-hot-topics", tags=["AI"])
+async def ai_detect_hot_topics(
+    hours: int = Query(24, ge=1, le=168, description="Look at posts from the last N hours"),
+    max_topics: int = Query(5, ge=1, le=10, description="Max new topics to suggest"),
+    auto_save: bool = Query(False, description="Automatically save suggestions to DB (inactive by default)"),
+    current_user: str = Depends(get_current_admin_user),
+):
+    """
+    Use GPT-4o-mini to analyse recent posts and suggest NEW hot topics.
+
+    The AI reads up to 80 recent posts and identifies emerging topics not already
+    tracked. Topics are saved as **inactive** (admin must activate them).
+
+    Requires OPENAI_API_KEY in environment variables.
+    """
+    from src.processing.ai_topic_detector import detect_new_hot_topics
+    db = get_db()
+
+    # Fetch recent posts
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    cursor = db["posts"].find(
+        {"created_at": {"$gte": cutoff}},
+        {"text": 1, "_id": 0},
+    ).sort("created_at", -1).limit(80)
+    posts = list(cursor)
+
+    if not posts:
+        return {"suggestions": [], "message": "No posts found in the given time window"}
+
+    # Get existing slugs to avoid re-suggesting already tracked topics
+    existing_slugs = [t["slug"] for t in db["hot_topics"].find({}, {"slug": 1, "_id": 0})]
+
+    suggestions = detect_new_hot_topics(
+        posts,
+        existing_slugs=existing_slugs,
+        max_new_topics=max_topics,
+    )
+
+    if auto_save and suggestions:
+        now = datetime.utcnow()
+        for topic in suggestions:
+            doc = {**topic, "created_at": now, "updated_at": now}
+            db["hot_topics"].update_one(
+                {"slug": topic["slug"]},
+                {"$setOnInsert": doc},
+                upsert=True,
+            )
+
+    return {
+        "suggestions": suggestions,
+        "posts_analysed": len(posts),
+        "hours_window": hours,
+        "auto_saved": auto_save,
+    }
+
+
+@app.post("/admin/ai/expand-keywords/{slug}", tags=["AI"])
+async def ai_expand_keywords(
+    slug: str,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """
+    Use GPT-4o-mini to expand the keyword list for an existing hot topic.
+
+    Automatically updates the topic's keywords in the database.
+    Requires OPENAI_API_KEY.
+    """
+    from src.processing.ai_topic_detector import expand_keywords
+    db = get_db()
+    coll = db["hot_topics"]
+
+    topic = coll.find_one({"slug": slug}, {"_id": 0})
+    if not topic:
+        # Try defaults
+        topic = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == slug), None)
+        if not topic:
+            raise HTTPException(status_code=404, detail="Hot topic not found")
+
+    original_keywords = topic.get("keywords", [])
+    expanded = expand_keywords(topic["name"], original_keywords)
+
+    new_count = len(expanded) - len(original_keywords)
+
+    # Persist to DB
+    coll.update_one(
+        {"slug": slug},
+        {"$set": {"keywords": expanded, "updated_at": datetime.utcnow()}},
+        upsert=True,
+    )
+
+    return {
+        "slug": slug,
+        "original_count": len(original_keywords),
+        "expanded_count": len(expanded),
+        "new_keywords_added": new_count,
+        "keywords": expanded,
+    }
+
+
+@app.get("/public/hot-topics/{slug}/posts/ai", tags=["Public"])
+@limiter.limit("30/minute")
+async def get_hot_topic_posts_ai(
+    request: Request,
+    slug: str,
+    limit: int = Query(20, ge=1, le=50),
+    skip: int = Query(0, ge=0),
+):
+    """
+    Like /public/hot-topics/{slug}/posts but re-ranks results using OpenAI embeddings
+    for more semantically relevant ordering. Falls back to keyword ordering if OpenAI
+    is not configured.
+
+    This endpoint is intentionally rate-limited (30/min) due to embedding cost.
+    """
+    from src.processing.ai_topic_detector import score_posts_by_embedding
+    db = get_db()
+    hot_coll = db["hot_topics"]
+    posts_coll = db["posts"]
+
+    topic_doc = hot_coll.find_one({"slug": slug, "active": True}, {"_id": 0})
+    if not topic_doc:
+        topic_doc = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == slug), None)
+    if not topic_doc:
+        raise HTTPException(status_code=404, detail="Hot topic not found")
+
+    keywords = topic_doc.get("keywords", [])
+    if not keywords:
+        return {"topic": topic_doc, "posts": [], "total": 0, "ai_ranked": False}
+
+    keyword_query = {"$or": [{"text": {"$regex": kw, "$options": "i"}} for kw in keywords]}
+    projection = {
+        "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
+        "created_at": 1, "links": 1, "topics": 1, "lang": 1,
+        "full_article": 1, "platform": 1,
+    }
+
+    # Fetch more candidates than needed so embedding re-ranking has material to work with
+    fetch_limit = min((skip + limit) * 3, 150)
+    cursor = posts_coll.find(keyword_query, projection).sort("created_at", -1).limit(fetch_limit)
+    candidates = []
+    for p in cursor:
+        p["_id"] = str(p["_id"])
+        candidates.append(p)
+
+    # Build query text for embedding
+    query_text = (
+        f"{topic_doc['name']}. {topic_doc.get('description', '')}. "
+        f"Keywords: {', '.join(keywords[:15])}"
+    )
+
+    ranked = score_posts_by_embedding(candidates, query_text)
+    page = ranked[skip: skip + limit]
+    ai_ranked = any("_ai_score" in p for p in page)
+
+    total = posts_coll.count_documents(keyword_query)
+    return {
+        "topic": topic_doc,
+        "posts": page,
+        "total": total,
+        "ai_ranked": ai_ranked,
+        "skip": skip,
+        "limit": limit,
+    }
+
 
 @app.post("/settings/change-password", tags=["Settings"])
 async def change_password(

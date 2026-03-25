@@ -19,7 +19,7 @@ import {
   FormControl,
   InputLabel
 } from '@mui/material';
-import { useTheme } from '../context/ThemeContext.jsx';
+import { useTheme } from '../../context/ThemeContext.jsx';
 import {
   Person as PersonIcon,
   Palette as PaletteIcon,

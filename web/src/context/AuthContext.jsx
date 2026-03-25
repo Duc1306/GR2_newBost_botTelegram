@@ -22,9 +22,21 @@ export const AuthProvider = ({ children }) => {
     const storedUser = localStorage.getItem('auth_user');
     
     if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
-      api.setAuthToken(storedToken);
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        // Invalidate old sessions that pre-date the role system
+        if (!parsedUser.role) {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
+        } else {
+          setToken(storedToken);
+          setUser(parsedUser);
+          api.setAuthToken(storedToken);
+        }
+      } catch {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_user');
+      }
     }
     
     setLoading(false);
@@ -51,19 +63,21 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('auth_token', data.access_token);
       localStorage.setItem('auth_user', JSON.stringify({
         username: data.username,
+        role: data.role || 'user',
         expires_at: Date.now() + (data.expires_in * 1000)
       }));
       
       setToken(data.access_token);
       setUser({ 
         username: data.username,
+        role: data.role || 'user',
         expires_at: Date.now() + (data.expires_in * 1000)
       });
       
       // Set token for API client
       api.setAuthToken(data.access_token);
       
-      return { success: true };
+      return { success: true, role: data.role };
     } catch (error) {
       console.error('Login error:', error);
       return { success: false, error: error.message };
@@ -102,7 +116,9 @@ export const AuthProvider = ({ children }) => {
     user,
     token,
     loading,
+    userRole: user?.role || null,
     isAuthenticated: !!token && !isTokenExpired(),
+    isAdmin: user?.role === 'admin',
     login,
     logout,
   };

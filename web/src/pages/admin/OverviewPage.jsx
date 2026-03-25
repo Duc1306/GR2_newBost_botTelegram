@@ -9,12 +9,12 @@ import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import PieChartIcon from '@mui/icons-material/PieChart';
 import BarChartIcon from '@mui/icons-material/BarChart';
-import StatCard from '../components/cards/StatCard.jsx';
-import TimelineChart from '../components/charts/TimelineChart.jsx';
-import TopicPieChart from '../components/charts/TopicPieChart.jsx';
-import KeywordCloud from '../components/charts/KeywordCloud.jsx';
-import {useStats, useTrendingTopics, useTimeline, useKeywords } from '../hooks/useApi.jsx';
-import { getTopicColor } from '../theme/colors.jsx';
+import StatCard from '../../components/cards/StatCard.jsx';
+import TimelineChart from '../../components/charts/TimelineChart.jsx';
+import TopicPieChart from '../../components/charts/TopicPieChart.jsx';
+import KeywordCloud from '../../components/charts/KeywordCloud.jsx';
+import {useStats, useTrendingTopics, useTimeline, useKeywords } from '../../hooks/useApi.jsx';
+import { getTopicColor } from '../../theme/colors.jsx';
 
 export default function OverviewPage() {
   // Calculate date range for API calls

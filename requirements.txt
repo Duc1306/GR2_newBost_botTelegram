@@ -22,3 +22,6 @@ python-multipart==0.0.9
 
 # Logging
 loguru==0.7.2
+
+# AI / OpenAI (optional – required for AI hot topic detection features)
+openai>=1.30.0          # GPT-4o-mini classification + text-embedding-3-small

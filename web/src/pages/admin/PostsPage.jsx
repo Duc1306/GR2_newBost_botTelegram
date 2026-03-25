@@ -21,11 +21,11 @@ import SearchIcon from "@mui/icons-material/Search";
 import TelegramIcon from "@mui/icons-material/Telegram";
 import LinkIcon from "@mui/icons-material/Link";
 import ArticleIcon from "@mui/icons-material/Article";
-import { usePosts, useTopics, usePostsCount } from "../hooks/useApi.jsx";
-import { getTopicColor } from "../theme/colors.jsx";
+import { usePosts, useTopics, usePostsCount } from "../../hooks/useApi.jsx";
+import { getTopicColor } from "../../theme/colors.jsx";
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
-import PostDetailModal from "../components/PostDetailModal.jsx";
+import PostDetailModal from "../../components/PostDetailModal.jsx";
 
 export default function PostsPage() {
   const [selectedTopic, setSelectedTopic] = useState("");

@@ -9,6 +9,7 @@ import {
   Toolbar,
   Divider,
   Box,
+  Tooltip,
 } from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import DashboardIcon from '@mui/icons-material/Dashboard';
@@ -16,18 +17,20 @@ import AnalyticsIcon from '@mui/icons-material/Analytics';
 import ArticleIcon from '@mui/icons-material/Article';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import SettingsIcon from '@mui/icons-material/Settings';
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 
 const drawerWidth = 240;
 
 const menuItems = [
-  { text: 'Overview', icon: <DashboardIcon />, path: '/' },
-  { text: 'Analytics', icon: <AnalyticsIcon />, path: '/analytics' },
-  { text: 'Posts', icon: <ArticleIcon />, path: '/posts' },
-  { text: 'Trending', icon: <TrendingUpIcon />, path: '/trending' },
+  { text: 'Overview',   icon: <DashboardIcon />,  path: '/admin' },
+  { text: 'Analytics',  icon: <AnalyticsIcon />,  path: '/admin/analytics' },
+  { text: 'Posts',      icon: <ArticleIcon />,    path: '/admin/posts' },
+  { text: 'Trending',   icon: <TrendingUpIcon />, path: '/admin/trending' },
 ];
 
 const bottomItems = [
-  { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
+  { text: 'Settings', icon: <SettingsIcon />, path: '/admin/settings' },
 ];
 
 export default function Sidebar({ open, onClose, variant = 'permanent' }) {
@@ -76,6 +79,34 @@ export default function Sidebar({ open, onClose, variant = 'permanent' }) {
             </ListItemButton>
           </ListItem>
         ))}
+
+        {/* Link to user news page */}
+        <Divider sx={{ my: 0.5 }} />
+        <Tooltip title="Mở trang bảng tin người dùng" placement="right">
+          <ListItem disablePadding>
+            <ListItemButton
+              component="a"
+              href="/news"
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{
+                color: '#ff6b35',
+                '&:hover': { bgcolor: 'rgba(255,107,53,0.08)' },
+              }}
+            >
+              <ListItemIcon sx={{ color: '#ff6b35', minWidth: 40 }}>
+                <LocalFireDepartmentIcon />
+              </ListItemIcon>
+              <ListItemText
+                primary="Bảng tin Nóng"
+                secondary="Trang người dùng"
+                primaryTypographyProps={{ fontSize: '0.875rem', fontWeight: 600 }}
+                secondaryTypographyProps={{ fontSize: '0.7rem' }}
+              />
+              <OpenInNewIcon sx={{ fontSize: 14, opacity: 0.6 }} />
+            </ListItemButton>
+          </ListItem>
+        </Tooltip>
       </List>
     </Box>
   );

@@ -40,6 +40,10 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # Change in production!
 
+# Regular User Credentials
+USER_USERNAME = os.getenv("USER_USERNAME", "user")
+USER_PASSWORD = os.getenv("USER_PASSWORD", "user123")
+
 # API Key for external clients (optional)
 API_KEY = os.getenv("API_KEY")  # If set, clients can use this instead of JWT
 
@@ -47,6 +51,13 @@ API_KEY = os.getenv("API_KEY")  # If set, clients can use this instead of JWT
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 RATE_LIMIT_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "1000"))
+
+# =============================================================================
+# OpenAI Configuration (for AI-assisted hot topic detection)
+# =============================================================================
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Optional – features gracefully disabled if unset
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")           # cheap & fast
+OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

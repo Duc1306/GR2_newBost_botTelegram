@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   Box,
-  Card,
   CardContent,
   TextField,
   Button,
@@ -12,14 +11,18 @@ import {
   Container,
   Paper,
   InputAdornment,
-  IconButton
+  IconButton,
+  Chip,
+  Stack,
 } from '@mui/material';
 import { Visibility, VisibilityOff, Lock, Person } from '@mui/icons-material';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import NewspaperIcon from '@mui/icons-material/Newspaper';
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
-  
+
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -30,18 +33,16 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       const result = await login(username, password);
-      
       if (result.success) {
-        // Redirect to home page
-        navigate('/');
+        // Role-based redirect: admin → dashboard, user → news page
+        navigate(result.role === 'admin' ? '/admin' : '/news', { replace: true });
       } else {
-        setError(result.error || 'Login failed. Please check your credentials.');
+        setError(result.error || 'Sai tên đăng nhập hoặc mật khẩu.');
       }
-    } catch (err) {
-      setError('An unexpected error occurred. Please try again.');
+    } catch {
+      setError('Đã xảy ra lỗi. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
@@ -59,28 +60,50 @@ export default function LoginPage() {
     >
       <Container maxWidth="sm">
         <Paper elevation={10} sx={{ borderRadius: 3, overflow: 'hidden' }}>
+          {/* Header */}
           <Box
             sx={{
               background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
               color: 'white',
               py: 3,
-              textAlign: 'center'
+              textAlign: 'center',
             }}
           >
             <Lock sx={{ fontSize: 48, mb: 1 }} />
             <Typography variant="h4" fontWeight="bold">
               MXH Aggregator
             </Typography>
-            <Typography variant="body2" sx={{ opacity: 0.9, mt: 1 }}>
-              Social Media Analytics Dashboard
+            <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+              Đăng nhập để tiếp tục
             </Typography>
           </Box>
-          
+
+          {/* Role hint chips */}
+          <Box sx={{ px: 4, pt: 3, pb: 0 }}>
+            <Stack direction="row" spacing={1} justifyContent="center">
+              <Chip
+                icon={<AdminPanelSettingsIcon />}
+                label="Admin → Dashboard"
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: '0.75rem', color: '#764ba2', borderColor: '#764ba2' }}
+              />
+              <Chip
+                icon={<NewspaperIcon />}
+                label="User → Bảng tin"
+                size="small"
+                variant="outlined"
+                color="primary"
+                sx={{ fontSize: '0.75rem' }}
+              />
+            </Stack>
+          </Box>
+
           <CardContent sx={{ p: 4 }}>
             <form onSubmit={handleSubmit}>
               <TextField
                 fullWidth
-                label="Username"
+                label="Tên đăng nhập"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 margin="normal"
@@ -94,10 +117,10 @@ export default function LoginPage() {
                   ),
                 }}
               />
-              
+
               <TextField
                 fullWidth
-                label="Password"
+                label="Mật khẩu"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -140,14 +163,12 @@ export default function LoginPage() {
                   background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                   '&:hover': {
                     background: 'linear-gradient(135deg, #5568d3 0%, #663a8f 100%)',
-                  }
+                  },
                 }}
               >
-                {loading ? 'Logging in...' : 'Sign In'}
+                {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
               </Button>
             </form>
-
-           
           </CardContent>
         </Paper>
       </Container>
