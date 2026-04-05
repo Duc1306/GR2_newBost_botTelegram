@@ -1,7 +1,7 @@
 """Topic classification using rule-based keywords.
 Phân loại bài viết theo chủ đề dựa trên từ khóa.
 """
-from typing import List, Set
+from typing import List, Set, Tuple
 import re
 
 
@@ -241,7 +241,34 @@ class TopicClassifier:
         
         # Return topics with score > 0, max 3 topics
         return [topic for topic, score in sorted_topics[:3]]
-    
+
+    @classmethod
+    def classify_with_scores(cls, text: str, lang: str = None) -> List[Tuple[str, int]]:
+        """
+        Classify text and return (topic, score) pairs sorted by score descending.
+        Score = total keyword match count for that topic.
+        """
+        if not text:
+            return []
+
+        text_lower = text.lower()
+        topic_scores = {}
+
+        for topic, keywords_dict in cls.TOPIC_KEYWORDS.items():
+            score = 0
+            if lang == 'vi' or lang is None:
+                for keyword in keywords_dict['vi']:
+                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                    score += len(re.findall(pattern, text_lower))
+            if lang == 'en' or lang is None:
+                for keyword in keywords_dict['en']:
+                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                    score += len(re.findall(pattern, text_lower))
+            if score > 0:
+                topic_scores[topic] = score
+
+        return sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)
+
     @classmethod
     def get_all_topics(cls) -> List[str]:
         """Get list of all available topics."""

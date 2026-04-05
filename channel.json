@@ -472,5 +472,167 @@
         "username": "discovery_video1",
         "link": "https://t.me/discovery_video1",
         "category": "Travel"
+    },
+    {
+        "platform": "telegram",
+        "username": "bbcnews",
+        "link": "https://t.me/bbcnews",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "rtnews",
+        "link": "https://t.me/rtnews",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "AJEnglish",
+        "link": "https://t.me/AJEnglish",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "trtworld",
+        "link": "https://t.me/trtworld",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "cnnbrk",
+        "link": "https://t.me/cnnbrk",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "reuters",
+        "link": "https://t.me/reuters",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "apnews_agency",
+        "link": "https://t.me/apnews_agency",
+        "category": "News & Media"
+    },
+    {
+        "platform": "telegram",
+        "username": "wartranslated",
+        "link": "https://t.me/wartranslated",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "UkraineNewsLive",
+        "link": "https://t.me/UkraineNewsLive",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "ukraineground",
+        "link": "https://t.me/ukraineground",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "noelreports",
+        "link": "https://t.me/noelreports",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "MiddleEastObserver",
+        "link": "https://t.me/MiddleEastObserver",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "QudsNen",
+        "link": "https://t.me/QudsNen",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "iranintlenglish",
+        "link": "https://t.me/iranintlenglish",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "GazaWarReport",
+        "link": "https://t.me/GazaWarReport",
+        "category": "War & Conflict"
+    },
+    {
+        "platform": "telegram",
+        "username": "marketcurrents",
+        "link": "https://t.me/marketcurrents",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "goldpricechannel",
+        "link": "https://t.me/goldpricechannel",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "oilpricecom",
+        "link": "https://t.me/oilpricecom",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "investing_com",
+        "link": "https://t.me/investing_com",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "tradingeconomics",
+        "link": "https://t.me/tradingeconomics",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "finance_world_news",
+        "link": "https://t.me/finance_world_news",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "ForbesBreakingNews",
+        "link": "https://t.me/ForbesBreakingNews",
+        "category": "Economics & Finance"
+    },
+    {
+        "platform": "telegram",
+        "username": "vnexpressnews",
+        "link": "https://t.me/vnexpressnews",
+        "category": "Tin tức Việt Nam"
+    },
+    {
+        "platform": "telegram",
+        "username": "tuoitrenewsvn",
+        "link": "https://t.me/tuoitrenewsvn",
+        "category": "Tin tức Việt Nam"
+    },
+    {
+        "platform": "telegram",
+        "username": "VnEconomy",
+        "link": "https://t.me/VnEconomy",
+        "category": "Tin tức Việt Nam"
+    },
+    {
+        "platform": "telegram",
+        "username": "cafef_official",
+        "link": "https://t.me/cafef_official",
+        "category": "Tin tức Việt Nam"
+    },
+    {
+        "platform": "telegram",
+        "username": "baodantri",
+        "link": "https://t.me/baodantri",
+        "category": "Tin tức Việt Nam"
     }
 ]

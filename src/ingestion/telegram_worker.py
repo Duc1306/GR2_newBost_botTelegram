@@ -85,6 +85,73 @@ async def fetch_channel_messages(client: TelegramClient, channel: str, limit: in
             print(f"       Đã lấy {count} tin từ {channel}...")
     return msgs
 
+
+# Ngưỡng từ khóa tần suất cao (số lần match tối thiểu để gán nhãn trực tiếp)
+_KEYWORD_HIGH_FREQ_THRESHOLD = 5
+
+
+def _assign_topic_cascade(post, text: str, lang: str | None) -> None:
+    """
+    Priority cascade for topic assignment (called when channel category and URL
+    pattern are both unavailable).
+
+    Logic:
+    1. Keyword high-frequency: nếu topic dẫn đầu có score >= threshold → gán luôn.
+    2. SVM + Keyword đồng thuận: nếu cả hai cùng đề xuất một topic → gán luôn.
+    3. SVM + Keyword bất đồng: dùng OpenAI để phân xử. Nếu OpenAI không khả dụng
+       → fallback về kết quả SVM (cao hơn keyword về độ chính xác).
+    4. Chỉ có một nguồn cho kết quả → dùng nguồn đó.
+    """
+    from src.processing.topic_classifier import TopicClassifier
+
+    # --- Step 1: Keyword score ---
+    kw_scores = TopicClassifier.classify_with_scores(text, lang) if text else []
+    kw_topic = kw_scores[0][0] if kw_scores else None
+    kw_score = kw_scores[0][1] if kw_scores else 0
+
+    if kw_topic and kw_score >= _KEYWORD_HIGH_FREQ_THRESHOLD:
+        # Từ khóa xuất hiện với tần suất cao → gán nhãn trực tiếp
+        post.topics = [kw_topic]
+        post.score = min(kw_score / 10.0, 1.0)
+        return
+
+    # --- Step 2: SVM prediction ---
+    svm_topic: str | None = None
+    svm_confidence: float = 0.0
+    ml_classifier = get_ml_classifier()
+    if ml_classifier and text:
+        try:
+            svm_topic, svm_confidence = ml_classifier.predict(text)
+            if svm_confidence < 0.3:
+                svm_topic = None
+        except Exception as e:
+            print(f"     ML prediction error: {e}")
+
+    # --- Step 3: Agreement check or OpenAI arbitration ---
+    if svm_topic and kw_topic:
+        if svm_topic == kw_topic:
+            # Cả SVM lẫn keyword đồng thuận → kết luận ngay
+            post.topics = [svm_topic]
+            post.score = svm_confidence
+        else:
+            # Bất đồng → dùng OpenAI phân xử
+            from src.processing.ai_topic_detector import arbitrate_topic
+            ai_result = arbitrate_topic(text, svm_topic, kw_topic)
+            if ai_result:
+                post.topics = [ai_result]
+                post.score = 0.85  # OpenAI arbitration → high confidence
+            else:
+                # OpenAI không khả dụng → ưu tiên SVM
+                post.topics = [svm_topic]
+                post.score = svm_confidence
+    elif svm_topic:
+        post.topics = [svm_topic]
+        post.score = svm_confidence
+    elif kw_topic:
+        post.topics = [kw_topic]
+        post.score = min(kw_score / 10.0, 1.0)
+
+
 async def process_message(m: Message, channel_name: str = "telegram") -> Post:
     raw_text = m.message or ""
     cleaned_text, links = clean_text(raw_text)
@@ -149,27 +216,9 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
             except Exception:
                 pass
         
-        # PRIORITY 3: Use ML classifier (for channels without category and no URL pattern)
+        # PRIORITY 3+: Keyword high-freq → SVM/Keyword agreement → OpenAI arbitration
         if not source_topic:
-            ml_classifier = get_ml_classifier()
-            if ml_classifier and cleaned_text:
-                try:
-                    predicted_topic, confidence = ml_classifier.predict(cleaned_text)
-                    # Chỉ lưu nếu confidence >= 0.3 (có thể điều chỉnh threshold)
-                    if confidence >= 0.3:
-                        post.topics = [predicted_topic]
-                        post.score = confidence  # Lưu confidence vào score field
-                except Exception as e:
-                    print(f"     ML prediction error: {e}")
-                    # Fallback to rule-based classifier
-                    topics = classify_post_topics(cleaned_text, lang)
-                    if topics:
-                        post.topics = topics
-            else:
-                # PRIORITY 4: Fallback to rule-based classifier
-                topics = classify_post_topics(cleaned_text, lang)
-                if topics:
-                    post.topics = topics
+            _assign_topic_cascade(post, cleaned_text, lang)
     
     return post
 

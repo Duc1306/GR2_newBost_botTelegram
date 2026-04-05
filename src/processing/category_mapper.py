@@ -136,6 +136,19 @@ CATEGORY_TO_TOPIC = {
     'tourism': 'Du lịch',
     'destinations': 'Du lịch',
     'vacation': 'Du lịch',
+
+    # War & Conflict (new: geopolitics channels)
+    'War & Conflict': 'Chiến sự & Địa chính trị',
+    'war': 'Chiến sự & Địa chính trị',
+    'conflict': 'Chiến sự & Địa chính trị',
+    'military': 'Chiến sự & Địa chính trị',
+    'geopolitics': 'Chiến sự & Địa chính trị',
+    'defense': 'Chiến sự & Địa chính trị',
+
+    # Vietnamese News (new)
+    'Tin tức Việt Nam': 'Tin tức Việt Nam',
+    'vietnam': 'Tin tức Việt Nam',
+    'vietnamese': 'Tin tức Việt Nam',
 }
 
 

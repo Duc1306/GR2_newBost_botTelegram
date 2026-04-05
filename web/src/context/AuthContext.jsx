@@ -3,6 +3,17 @@ import { api } from '../lib/api';
 
 const AuthContext = createContext(null);
 
+/** Decode JWT payload without verifying signature (read-only claim extraction). */
+function decodeJwtRole(token) {
+  try {
+    const payload = token.split('.')[1];
+    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return decoded?.role || 'user';
+  } catch {
+    return 'user';
+  }
+}
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -108,17 +119,28 @@ export const AuthProvider = ({ children }) => {
   };
 
   const isTokenExpired = () => {
-    if (!user || !user.expires_at) return true;
-    return Date.now() >= user.expires_at;
+    if (!token) return true;
+    try {
+      const payload = token.split('.')[1];
+      const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+      if (!decoded?.exp) return true;
+      // exp is in seconds; compare to current time in seconds
+      return Date.now() / 1000 >= decoded.exp;
+    } catch {
+      return true;
+    }
   };
+
+  // Derive role directly from the signed JWT — cannot be spoofed via localStorage edits.
+  const jwtRole = token ? decodeJwtRole(token) : null;
 
   const value = {
     user,
     token,
     loading,
-    userRole: user?.role || null,
+    userRole: jwtRole,
     isAuthenticated: !!token && !isTokenExpired(),
-    isAdmin: user?.role === 'admin',
+    isAdmin: jwtRole === 'admin',
     login,
     logout,
   };

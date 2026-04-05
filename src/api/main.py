@@ -1203,6 +1203,465 @@ async def get_public_hot_topic_posts(
     return {"topic": topic_doc, "posts": posts, "total": total, "skip": skip, "limit": limit}
 
 
+# ─── Topic palette (shared across endpoints) ─────────────────────────────────
+_TOPIC_COLORS: dict[str, str] = {
+    "Crypto": "#f59e0b",
+    "Kinh tế": "#10b981",
+    "Công nghệ": "#3b82f6",
+    "Chính trị": "#8b5cf6",
+    "Thế giới": "#6366f1",
+    "Pháp luật": "#ef4444",
+    "Thể thao": "#22d3ee",
+    "Giải trí": "#ec4899",
+    "Stock": "#84cc16",
+    "Ô tô - Xe máy": "#f97316",
+    "Sức khỏe - Y tế": "#14b8a6",
+    "Bất động sản": "#a16207",
+    "Khoa học": "#0ea5e9",
+    "Giáo dục": "#7c3aed",
+    "Du lịch": "#059669",
+    "Thời trang": "#db2777",
+}
+
+
+@app.get("/public/post-topics", tags=["Public"])
+@limiter.limit("120/minute")
+async def get_public_post_topics(request: Request):
+    """
+    Return distinct ML-classified topic categories that appear in posts
+    which have at least one external link.  Used by the user articles tab
+    to populate topic filter chips.
+    """
+    db = get_db()
+    posts_coll = db["posts"]
+
+    pipeline = [
+        {
+            "$match": {
+                "links": {"$exists": True, "$ne": []},
+                "topics": {"$exists": True, "$ne": []},
+            }
+        },
+        {"$unwind": "$topics"},
+        {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": 2}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 30},
+    ]
+    raw = list(posts_coll.aggregate(pipeline))
+
+    topics = [
+        {
+            "name": t["_id"],
+            "slug": (
+                t["_id"]
+                .lower()
+                .replace(" ", "-")
+                .replace("&", "and")
+                .replace("đ", "d")
+            ),
+            "count": t["count"],
+            "color": _TOPIC_COLORS.get(t["_id"], "#6b7280"),
+        }
+        for t in raw
+        if t["_id"]
+    ]
+    return {"topics": topics}
+
+
+# ML topic → display colour mapping
+_ML_TOPIC_COLORS = {
+    "Thể thao": "#2563eb",
+    "Công nghệ": "#7c3aed",
+    "Tin tức & Truyền thông": "#dc2626",
+    "Giải trí": "#d97706",
+    "Giáo dục": "#059669",
+    "Kinh tế": "#0891b2",
+    "Kinh doanh & Khởi nghiệp": "#0d9488",
+    "Sức khỏe": "#16a34a",
+    "Chính trị": "#b91c1c",
+    "Pháp luật": "#7c2d12",
+    "Du lịch": "#0284c7",
+    "Khoa học": "#6d28d9",
+    "Ô tô - Xe máy": "#92400e",
+    "Crypto": "#f59e0b",
+    "Thế giới": "#be123c",
+}
+
+def _ml_topic_slug(name: str) -> str:
+    """Convert Vietnamese ML topic name to a URL-safe slug."""
+    import re, unicodedata
+    s = unicodedata.normalize("NFD", name)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = s.lower().replace("&", "and")
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s
+
+
+@app.get("/public/hotnews", tags=["Public"])
+@limiter.limit("120/minute")
+async def get_public_hotnews(
+    request: Request,
+    hours: int = Query(48, ge=1, le=168, description="Look-back window in hours"),
+):
+    """
+    Return hot-news clusters driven by KEYWORD FREQUENCY, not broad ML categories.
+
+    Flow:
+    1. Fetch recent posts (prefer posts with links → richer content).
+    2. Run keyword-frequency clustering: extract trending bigrams/unigrams,
+       cluster posts that share top keywords, GPT names each cluster with a
+       *specific* event title (e.g. "Giá vàng vượt 120 triệu" not "Kinh tế").
+    3. If keyword clusters < 4, fill remaining slots from ML-topic velocity
+       (broad categories as fallback only).
+    4. Apply AI embedding filter to keep only genuinely on-topic posts.
+    5. Cache full result for 2 hours per (hours, bucket).
+    """
+    from src.processing.ai_topic_detector import filter_relevant_posts, discover_hot_events
+
+    db = get_db()
+    posts_coll = db["posts"]
+    cache_coll = db["hotnews_v2_cache"]
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    bucket_hour = (datetime.utcnow().hour // 2) * 2
+    cache_key = f"hotnews_kw:{hours}:{datetime.utcnow().strftime('%Y%m%d')}{bucket_hour:02d}"
+
+    cached = cache_coll.find_one({"key": cache_key})
+    if cached and cached.get("clusters"):
+        return {
+            "clusters": cached["clusters"],
+            "since": since.isoformat(),
+            "hours": hours,
+            "cached": True,
+        }
+
+    projection = {
+        "_id": 1, "text": 1, "source": 1, "created_at": 1,
+        "links": 1, "topics": 1, "lang": 1, "full_article": 1,
+        "channel_username": 1,
+    }
+
+    # ── Step 1: fetch recent posts, link-posts first ──────────────────────────
+    # Link-posts have richer content and represent real news articles
+    link_posts = list(
+        posts_coll.find(
+            {"created_at": {"$gte": since}, "links": {"$exists": True, "$ne": []}},
+            projection,
+        ).sort("created_at", -1).limit(300)
+    )
+    no_link_posts = list(
+        posts_coll.find(
+            {"created_at": {"$gte": since}, "$or": [{"links": {"$exists": False}}, {"links": []}]},
+            projection,
+        ).sort("created_at", -1).limit(200)
+    )
+    all_posts = link_posts + no_link_posts
+    for p in all_posts:
+        p["_id"] = str(p["_id"])
+
+    clusters: list[dict] = []
+
+    # ── Step 2: keyword-frequency clustering (PRIMARY) ────────────────────────
+    gpt_events = discover_hot_events(all_posts, max_events=8)
+    for ev in gpt_events:
+        ev_posts = ev.get("posts", [])
+        if len(ev_posts) < 2:
+            continue
+        # AI relevance filter
+        filtered = filter_relevant_posts(ev_posts, topic_name=ev["name"], top_k=15)
+        if not filtered:
+            filtered = ev_posts[:10]
+
+        # Sort: link-posts first
+        filtered = sorted(filtered, key=lambda p: (not bool(p.get("links")), 0))
+
+        latest = max(
+            (p.get("created_at") for p in filtered if p.get("created_at")),
+            default=None,
+        )
+        latest_str = latest.isoformat() if hasattr(latest, "isoformat") else ""
+        headline = (
+            (filtered[0].get("full_article") or {}).get("title")
+            or (filtered[0].get("text") or "")[:120]
+        )
+        slug = _ml_topic_slug(ev["name"])
+        if any(c["slug"] == slug for c in clusters):
+            continue
+        clusters.append({
+            "slug": slug,
+            "name": ev["name"],
+            "description": ev.get("description", ""),
+            "color": ev.get("color", "#be123c"),
+            "post_count": len(filtered),
+            "posts_with_links": len([p for p in filtered if p.get("links")]),
+            "latest_at": latest_str,
+            "headline": headline,
+            "posts": filtered[:15],
+            "source": "keyword_trend",
+        })
+
+    # ── Step 3: ML-topic velocity fallback (fill if < 4 keyword clusters) ─────
+    if len(clusters) < 4:
+        from src.processing.ai_topic_detector import gpt_name_ml_clusters
+
+        velocity_pipeline = [
+            {"$match": {"created_at": {"$gte": since}, "topics": {"$exists": True, "$ne": []}}},
+            {"$unwind": "$topics"},
+            {"$group": {
+                "_id": "$topics",
+                "count": {"$sum": 1},
+                "with_links": {"$sum": {"$cond": [
+                    {"$gt": [{"$size": {"$ifNull": ["$links", []]}}, 0]}, 1, 0
+                ]}},
+                "latest": {"$max": "$created_at"},
+            }},
+            {"$sort": {"count": -1}},
+            {"$limit": 8},
+        ]
+        trending = list(posts_coll.aggregate(velocity_pipeline))
+        existing_slugs = {c["slug"] for c in clusters}
+
+        # ── Collect all ML velocity clusters first, then GPT-name in one batch ──
+        ml_raw_clusters = []
+        for item in trending:
+            if len(clusters) + len(ml_raw_clusters) >= 8:
+                break
+            topic_name = item["_id"]
+            if not topic_name:
+                continue
+            slug = _ml_topic_slug(topic_name)
+            if slug in existing_slugs:
+                continue
+
+            raw_posts = list(
+                posts_coll.find({"created_at": {"$gte": since}, "topics": topic_name}, projection)
+                .limit(60)
+            )
+            for p in raw_posts:
+                p["_id"] = str(p["_id"])
+
+            has_link = sorted([p for p in raw_posts if p.get("links")],
+                              key=lambda p: p.get("created_at") or datetime.min, reverse=True)
+            no_link = sorted([p for p in raw_posts if not p.get("links")],
+                             key=lambda p: p.get("created_at") or datetime.min, reverse=True)
+            sorted_posts = has_link + no_link
+
+            filtered = filter_relevant_posts(sorted_posts, topic_name=topic_name, top_k=15)
+            if not filtered:
+                continue
+
+            filtered = sorted(filtered, key=lambda p: (not bool(p.get("links")), 0))
+            latest = filtered[0].get("created_at")
+            latest_str = latest.isoformat() if hasattr(latest, "isoformat") else str(latest or "")
+            headline = (
+                (filtered[0].get("full_article") or {}).get("title")
+                or (filtered[0].get("text") or "")[:120]
+            )
+            ml_raw_clusters.append({
+                "slug": slug,
+                "topic_name": topic_name,           # broad ML name (input for GPT)
+                "color": _ML_TOPIC_COLORS.get(topic_name, "#6b7280"),
+                "post_count": len(filtered),
+                "posts_with_links": len([p for p in filtered if p.get("links")]),
+                "latest_at": latest_str,
+                "headline": headline,
+                "posts": filtered[:15],
+            })
+            existing_slugs.add(slug)
+
+        # GPT-name all ML clusters in one call (replaces broad "Kinh tế" → specific event)
+        ml_named = gpt_name_ml_clusters(ml_raw_clusters)
+        for cl in ml_named:
+            clusters.append({
+                "slug": cl["slug"],
+                "name": cl["name"],                 # GPT specific event title
+                "description": cl.get("description", ""),
+                "color": cl.get("color", "#6b7280"),
+                "post_count": cl["post_count"],
+                "posts_with_links": cl["posts_with_links"],
+                "latest_at": cl["latest_at"],
+                "headline": cl["headline"],
+                "posts": cl["posts"],
+                "source": "ml_velocity",
+                "broad_topic": cl["topic_name"],    # keep original for reference
+            })
+
+    # ── Step 4: Cache ─────────────────────────────────────────────────────────
+    cache_coll.update_one(
+        {"key": cache_key},
+        {"$set": {"key": cache_key, "clusters": clusters, "created_at": datetime.utcnow()}},
+        upsert=True,
+    )
+
+    return {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": False}
+
+
+
+@app.post("/public/hotnews/{slug}/summary", tags=["Public"])
+@limiter.limit("30/minute")
+async def get_hotnews_summary(
+    request: Request,
+    slug: str,
+    hours: int = Query(48, ge=1, le=168),
+):
+    """
+    Use OpenAI to summarise all recent posts for a hot-topic cluster.
+
+    Works with both:
+    - ML-velocity slugs (e.g. ``the-thao``, ``cong-nghe``) — posts looked up by ML topics field
+    - Legacy hot_topics slugs (e.g. ``iran-israel``) — posts looked up by keywords
+
+    Results are cached for 30 minutes.
+    """
+    from src.processing.ai_topic_detector import summarize_cluster
+
+    db = get_db()
+    cache_coll = db["hotnews_summary_cache"]
+    posts_coll = db["posts"]
+
+    def _extract_link_posts(posts: list[dict]) -> list[dict]:
+        """Return structured list of posts that have a real external URL."""
+        result = []
+        for p in posts:
+            links = p.get("links") or []
+            url = next((l for l in links if l.startswith("http") and "t.me" not in l), None)
+            fa = p.get("full_article") or {}
+            title = fa.get("title") or (p.get("text") or "")[:120]
+            snippet = (p.get("text") or "")[:200]
+            source = p.get("source") or p.get("channel_username") or ""
+            if url:
+                result.append({"title": title, "url": url, "source": source, "snippet": snippet})
+        return result
+
+    # Check cache (30-min TTL)
+    cache_key = f"{slug}:{hours}:v2"
+    cached = cache_coll.find_one({"key": cache_key})
+    if cached and cached.get("expires_at") and cached["expires_at"] > datetime.utcnow():
+        return {
+            "slug": slug,
+            "title": cached.get("title", ""),
+            "lead": cached.get("lead", ""),
+            "body": cached.get("body", []),
+            "conclusion": cached.get("conclusion", ""),
+            "key_points": cached.get("key_points", []),
+            "sentiment": cached.get("sentiment", "neutral"),
+            "ai": cached.get("ai", False),
+            "cached": True,
+            "post_count": cached.get("post_count", 0),
+            "link_posts": cached.get("link_posts", []),
+        }
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    proj = {"_id": 0, "text": 1, "full_article": 1, "source": 1, "links": 1, "created_at": 1}
+
+    # ── Try ML-velocity slug first: reverse-map slug → ML topic name ──────────
+    # Build slug for every known ML topic name and check for a match
+    ml_topic_name = next(
+        (name for name in _ML_TOPIC_COLORS if _ml_topic_slug(name) == slug),
+        None,
+    )
+
+    if ml_topic_name:
+        # Fetch posts classified under this ML topic; link-posts first
+        raw = list(
+            posts_coll.find({"created_at": {"$gte": since}, "topics": ml_topic_name}, proj)
+            .sort("created_at", -1).limit(40)
+        )
+        has_link = [p for p in raw if p.get("links")]
+        no_link  = [p for p in raw if not p.get("links")]
+        posts = (has_link + no_link)[:30]
+        topic_display_name = ml_topic_name
+    else:
+        # Fallback: look up legacy hot_topics collection or AI-discovered cluster
+        hot_topics_coll = db["hot_topics"]
+        topic_doc = hot_topics_coll.find_one({"slug": slug, "active": True}, {"_id": 0})
+        if not topic_doc:
+            topic_doc = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == slug), None)
+
+        # Also check hotnews_v2_cache for keyword-trend or AI-discovered events
+        if not topic_doc:
+            bucket_hour = (datetime.utcnow().hour // 2) * 2
+            for ck in [
+                f"hotnews_kw:{hours}:{datetime.utcnow().strftime('%Y%m%d')}{bucket_hour:02d}",
+                f"hotnews:{hours}:{datetime.utcnow().strftime('%Y%m%d')}{bucket_hour:02d}",
+            ]:
+                hn_cached = db["hotnews_v2_cache"].find_one({"key": ck})
+                if hn_cached:
+                    cluster = next((c for c in (hn_cached.get("clusters") or []) if c["slug"] == slug), None)
+                    if cluster:
+                        posts = cluster.get("posts", [])
+                        topic_display_name = cluster["name"]
+                        link_posts = _extract_link_posts(posts)
+                        import asyncio as _asyncio
+                        result = await _asyncio.get_event_loop().run_in_executor(
+                            None, summarize_cluster, posts, topic_display_name
+                        )
+                        expires_at = datetime.utcnow() + timedelta(minutes=30)
+                        cache_coll.update_one({"key": cache_key}, {"$set": {**result, "key": cache_key, "post_count": len(posts), "link_posts": link_posts, "expires_at": expires_at}}, upsert=True)
+                        return {"slug": slug, **result, "cached": False, "post_count": len(posts), "link_posts": link_posts}
+                    break
+
+        if not topic_doc:
+            raise HTTPException(status_code=404, detail="Hot topic not found")
+
+        keywords = topic_doc.get("keywords", [])
+        if not keywords:
+            return {"slug": slug, "title": "", "lead": "", "body": [], "conclusion": "", "key_points": [], "sentiment": "neutral", "post_count": 0}
+
+        query = {
+            "$and": [
+                {"created_at": {"$gte": since}},
+                {"$or": [{"text": {"$regex": kw, "$options": "i"}} for kw in keywords]},
+            ]
+        }
+        posts = list(posts_coll.find(query, proj).sort("created_at", -1).limit(30))
+        topic_display_name = topic_doc["name"]
+
+    if not posts:
+        return {"slug": slug, "title": "", "lead": "", "body": [], "conclusion": "", "key_points": [], "sentiment": "neutral", "post_count": 0, "link_posts": []}
+
+    link_posts = _extract_link_posts(posts)
+    # Run blocking OpenAI call in thread pool to avoid blocking the async event loop
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, summarize_cluster, posts, topic_display_name)
+
+    # Cache result
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    cache_coll.update_one(
+        {"key": cache_key},
+        {"$set": {
+            "key": cache_key,
+            "title": result.get("title", ""),
+            "lead": result.get("lead", ""),
+            "body": result.get("body", []),
+            "conclusion": result.get("conclusion", ""),
+            "key_points": result.get("key_points", []),
+            "sentiment": result.get("sentiment", "neutral"),
+            "ai": result.get("ai", False),
+            "post_count": len(posts),
+            "link_posts": link_posts,
+            "expires_at": expires_at,
+        }},
+        upsert=True,
+    )
+
+    return {
+        "slug": slug,
+        "title": result.get("title", ""),
+        "lead": result.get("lead", ""),
+        "body": result.get("body", []),
+        "conclusion": result.get("conclusion", ""),
+        "key_points": result.get("key_points", []),
+        "sentiment": result.get("sentiment", "neutral"),
+        "ai": result.get("ai", False),
+        "cached": False,
+        "post_count": len(posts),
+        "link_posts": link_posts,
+    }
+
+
 # =============================================================================
 # Admin: Hot Topics Management
 # =============================================================================
