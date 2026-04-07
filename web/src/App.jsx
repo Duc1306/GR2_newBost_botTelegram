@@ -3,6 +3,22 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
+import Layout from './components/layout/Layout.jsx';
+
+// Admin pages
+import OverviewPage from './pages/admin/OverviewPage.jsx';
+import AnalyticsPage from './pages/admin/AnalyticsPage.jsx';
+import PostsPage from './pages/admin/PostsPage.jsx';
+import TrendingPage from './pages/admin/TrendingPage.jsx';
+import SettingsPage from './pages/admin/SettingsPage.jsx';
+import UsersPage from './pages/admin/UsersPage.jsx';
+
+// User page
+import NewsPage from './pages/user/NewsPage.jsx';
+
+// Auth page
+import LoginPage from './pages/auth/LoginPage.jsx';
+import RegisterPage from './pages/auth/RegisterPage.jsx';
 
 // Error boundary to show crash details instead of blank page
 class ErrorBoundary extends React.Component {
@@ -27,22 +43,6 @@ class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
-import Layout from './components/layout/Layout.jsx';
-
-// Admin pages
-import OverviewPage from './pages/admin/OverviewPage.jsx';
-import AnalyticsPage from './pages/admin/AnalyticsPage.jsx';
-import PostsPage from './pages/admin/PostsPage.jsx';
-import TrendingPage from './pages/admin/TrendingPage.jsx';
-import SettingsPage from './pages/admin/SettingsPage.jsx';
-import UsersPage from './pages/admin/UsersPage.jsx';
-
-// User page
-import NewsPage from './pages/user/NewsPage.jsx';
-
-// Auth page
-import LoginPage from './pages/auth/LoginPage.jsx';
-import RegisterPage from './pages/auth/RegisterPage.jsx';
 
 const queryClient = new QueryClient({
   defaultOptions: {
