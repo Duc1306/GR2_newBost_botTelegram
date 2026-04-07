@@ -30,6 +30,8 @@ import {
   DarkMode as DarkModeIcon
 } from '@mui/icons-material';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 function TabPanel({ children, value, index }) {
   return (
     <div hidden={value !== index}>
@@ -58,7 +60,7 @@ export default function SettingsPage() {
   const fetchSettings = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch('http://localhost:8000/settings', {
+      const response = await fetch(`${API_BASE_URL}/settings`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -79,7 +81,7 @@ export default function SettingsPage() {
   const updateSettings = async (updates) => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch('http://localhost:8000/settings', {
+      const response = await fetch(`${API_BASE_URL}/settings`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -112,7 +114,7 @@ export default function SettingsPage() {
 
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch('http://localhost:8000/settings/change-password', {
+      const response = await fetch(`${API_BASE_URL}/settings/change-password`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

@@ -22,6 +22,8 @@ import {
   Delete as DeleteIcon
 } from '@mui/icons-material';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const NotificationDropdown = () => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [notifications, setNotifications] = useState([]);
@@ -31,7 +33,7 @@ const NotificationDropdown = () => {
   const fetchNotifications = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const response = await fetch('http://localhost:8000/notifications?limit=10', {
+      const response = await fetch(`${API_BASE_URL}/notifications?limit=10`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -65,7 +67,7 @@ const NotificationDropdown = () => {
   const markAsRead = async (notificationId) => {
     try {
       const token = localStorage.getItem('auth_token');
-      await fetch(`http://localhost:8000/notifications/${notificationId}/read`, {
+      await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -80,7 +82,7 @@ const NotificationDropdown = () => {
   const markAllAsRead = async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      await fetch('http://localhost:8000/notifications/mark-all-read', {
+      await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -96,7 +98,7 @@ const NotificationDropdown = () => {
     event.stopPropagation();
     try {
       const token = localStorage.getItem('auth_token');
-      await fetch(`http://localhost:8000/notifications/${notificationId}`, {
+      await fetch(`${API_BASE_URL}/notifications/${notificationId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

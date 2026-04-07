@@ -26,6 +26,25 @@ def env_channels() -> List[str]:
         return []
     return [c.strip() for c in RAW_CHANNELS.split(";") if c.strip()]
 
+
+# =============================================================================
+# CORS Configuration
+# =============================================================================
+_raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
+
+DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+def get_allowed_origins() -> List[str]:
+    """Return CORS allowed origins: defaults + any extra from ALLOWED_ORIGINS env var."""
+    extra = [o.strip() for o in _raw_allowed_origins.split(",") if o.strip()]
+    return list(dict.fromkeys(DEFAULT_ORIGINS + extra))  # deduplicated, order preserved
+
 # =============================================================================
 # Security & Authentication Configuration
 # =============================================================================

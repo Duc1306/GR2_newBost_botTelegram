@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: newsbot-api
+    env: python
+    region: singapore   # Gần Việt Nam nhất, hoặc đổi thành "oregon" nếu cần
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: MONGO_URI
+        sync: false          # Điền tay trên dashboard Render
+      - key: DB_NAME
+        value: newsbot
+      - key: JWT_SECRET_KEY
+        generateValue: true  # Render tự sinh secret key ngẫu nhiên
+      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "1440"
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: USER_USERNAME
+        sync: false
+      - key: USER_PASSWORD
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false          # Điền URL Vercel sau khi deploy frontend
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_SESSION_STRING
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_FETCH_LIMIT
+        value: "200"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "60"
+      - key: RATE_LIMIT_PER_HOUR
+        value: "1000"
+      - key: PYTHON_VERSION
+        value: "3.11.0"

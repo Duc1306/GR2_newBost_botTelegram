@@ -180,7 +180,7 @@ function ArticleCard({ post }) {
 
 // ─── Hot News Cluster Card ────────────────────────────────────────────────────
 
-function HotClusterCard({ cluster, onReadSummary }) {
+function HotClusterCard({ cluster, onReadSummary, isNew }) {
   return (
     <Card
       elevation={0}
@@ -200,11 +200,14 @@ function HotClusterCard({ cluster, onReadSummary }) {
 
       <CardContent sx={{ flex: 1, pt: 1.5, pb: 0 }}>
         {/* Topic name */}
-        <Box display="flex" alignItems="center" gap={0.75} mb={0.75}>
+        <Box display="flex" alignItems="center" gap={0.75} mb={0.75} flexWrap="wrap">
           <WhatshotIcon sx={{ fontSize: 18, color: cluster.color }} />
           <Typography variant="subtitle2" fontWeight={700} sx={{ lineHeight: 1.3, color: cluster.color }}>
             {cluster.name}
           </Typography>
+          {isNew && (
+            <Chip label="Mới" size="small" sx={{ height: 18, fontSize: '0.6rem', fontWeight: 800, bgcolor: '#ef4444', color: 'white', px: 0.5 }} />
+          )}
         </Box>
 
         {/* Headline */}
@@ -279,9 +282,25 @@ function HotClusterCard({ cluster, onReadSummary }) {
 const SENTIMENT_LABEL = { positive: 'Tích cực', negative: 'Tiêu cực', mixed: 'Hỗn hợp', neutral: 'Trung lập' };
 
 function SummaryDialog({ cluster, open, onClose }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [readUrls, setReadUrls] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('hn_read_urls') || '[]')); }
+    catch { return new Set(); }
+  });
+
+  const markRead = (url) => {
+    if (!url) return;
+    setReadUrls(prev => {
+      const next = new Set(prev);
+      next.add(url);
+      try { localStorage.setItem('hn_read_urls', JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!open || !cluster) return;
@@ -302,7 +321,8 @@ function SummaryDialog({ cluster, open, onClose }) {
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{ sx: { borderRadius: 3, maxHeight: '90vh' } }}
+      fullScreen={isMobile}
+      PaperProps={{ sx: { borderRadius: isMobile ? 0 : 3, maxHeight: isMobile ? '100vh' : '90vh' } }}
     >
       {/* Header bar */}
       <DialogTitle sx={{ pb: 1, bgcolor: cluster?.color ? `${cluster.color}14` : 'grey.50', borderBottom: '1px solid', borderColor: 'divider' }}>
@@ -431,7 +451,7 @@ function SummaryDialog({ cluster, open, onClose }) {
             {/* Source links — ALL link posts from summary API */}
             {data && (data.link_posts?.length > 0 || cluster?.posts?.length > 0) && (() => {
               // Prefer link_posts from API (full list); fall back to cluster.posts
-              const sources = data.link_posts?.length > 0
+              const rawSources = data.link_posts?.length > 0
                 ? data.link_posts
                 : [
                     ...cluster.posts.filter(p => p.links?.some(l => l.startsWith('http') && !l.includes('t.me'))),
@@ -443,53 +463,79 @@ function SummaryDialog({ cluster, open, onClose }) {
                     snippet: (p.text || '').slice(0, 200),
                   }));
 
-              if (!sources.length) return null;
+              if (!rawSources.length) return null;
+
+              // Sort: unread first, read ones pushed to bottom
+              const sources = [
+                ...rawSources.filter(s => !s.url || !readUrls.has(s.url)),
+                ...rawSources.filter(s => s.url && readUrls.has(s.url)),
+              ];
+              const readCount = rawSources.filter(s => s.url && readUrls.has(s.url)).length;
+
               return (
                 <>
                   <Divider sx={{ my: 2.5 }} />
-                  <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.8, display: 'block', mb: 1 }}>
-                    Nguồn tham khảo ({sources.length} bài{data.link_posts?.length > 0 ? ` · ${data.link_posts.length} có link` : ''})
-                  </Typography>
+                  <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
+                    <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                      Nguồn tham khảo ({sources.length} bài{data.link_posts?.length > 0 ? ` · ${data.link_posts.length} có link` : ''})
+                    </Typography>
+                    {readCount > 0 && (
+                      <Chip label={`Đã đọc ${readCount}`} size="small" sx={{ height: 18, fontSize: '0.6rem', bgcolor: '#e5e7eb', color: '#6b7280' }} />
+                    )}
+                  </Box>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                    {sources.map((s, i) => (
-                      <Box
-                        key={i}
-                        display="flex"
-                        alignItems="flex-start"
-                        gap={1}
-                        sx={{
-                          p: 1,
-                          bgcolor: s.url ? '#f0fdf4' : 'grey.50',
-                          borderRadius: 1.5,
-                          border: s.url ? '1px solid #bbf7d0' : '1px solid transparent',
-                        }}
-                      >
-                        <Typography variant="caption" color="text.disabled" sx={{ minWidth: 18, fontWeight: 700, pt: '2px', flexShrink: 0 }}>{i + 1}.</Typography>
-                        {s.url && <LinkIcon sx={{ fontSize: 13, color: '#16a34a', mt: '2px', flexShrink: 0 }} />}
-                        <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Typography variant="caption" sx={{ lineHeight: 1.6, display: 'block', fontWeight: s.url ? 600 : 400 }}>
-                            {s.title || s.snippet || '(Không có tiêu đề)'}
-                          </Typography>
-                          {s.source && (
-                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.65rem' }}>
-                              {s.source}
+                    {sources.map((s, i) => {
+                      const isRead = s.url && readUrls.has(s.url);
+                      return (
+                        <Box
+                          key={s.url || i}
+                          display="flex"
+                          alignItems="flex-start"
+                          gap={1}
+                          sx={{
+                            p: 1,
+                            bgcolor: isRead ? '#f9fafb' : s.url ? '#f0fdf4' : 'grey.50',
+                            borderRadius: 1.5,
+                            border: isRead ? '1px solid #e5e7eb' : s.url ? '1px solid #bbf7d0' : '1px solid transparent',
+                            opacity: isRead ? 0.6 : 1,
+                            transition: 'opacity 0.2s',
+                          }}
+                        >
+                          <Typography variant="caption" color="text.disabled" sx={{ minWidth: 18, fontWeight: 700, pt: '2px', flexShrink: 0 }}>{i + 1}.</Typography>
+                          {s.url && !isRead && <LinkIcon sx={{ fontSize: 13, color: '#16a34a', mt: '2px', flexShrink: 0 }} />}
+                          {isRead && <LinkIcon sx={{ fontSize: 13, color: '#9ca3af', mt: '2px', flexShrink: 0 }} />}
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="caption" sx={{ lineHeight: 1.6, display: 'block', fontWeight: s.url ? 600 : 400, color: isRead ? 'text.disabled' : 'text.primary' }}>
+                              {s.title || s.snippet || '(Không có tiêu đề)'}
                             </Typography>
+                            {s.source && (
+                              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.65rem' }}>
+                                {s.source}
+                              </Typography>
+                            )}
+                          </Box>
+                          {s.url && (
+                            isRead ? (
+                              <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#9ca3af', flexShrink: 0, alignSelf: 'center' }}>
+                                Đã đọc
+                              </Typography>
+                            ) : (
+                              <Button
+                                size="small"
+                                endIcon={<OpenInNewIcon sx={{ fontSize: '11px !important' }} />}
+                                href={s.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => markRead(s.url)}
+                                sx={{ textTransform: 'none', fontSize: '0.68rem', p: '1px 8px', minWidth: 0, flexShrink: 0, color: '#16a34a' }}
+                              >
+                                Đọc
+                              </Button>
+                            )
                           )}
                         </Box>
-                        {s.url && (
-                          <Button
-                            size="small"
-                            endIcon={<OpenInNewIcon sx={{ fontSize: '11px !important' }} />}
-                            href={s.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            sx={{ textTransform: 'none', fontSize: '0.68rem', p: '1px 8px', minWidth: 0, flexShrink: 0, color: '#16a34a' }}
-                          >
-                            Đọc
-                          </Button>
-                        )}
-                      </Box>
-                    ))}
+                      );
+                    })}
                   </Box>
                 </>
               );
@@ -569,17 +615,62 @@ function HotNewsTab() {
   const [hours, setHours] = useState(48);
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [pendingClusters, setPendingClusters] = useState([]);
+  const [freshSlugs, setFreshSlugs] = useState(new Set());
+  const [lastRefreshed, setLastRefreshed] = useState(null);
+  const currentSlugsRef = useRef(new Set());
 
   const load = useCallback((h) => {
     setLoading(true);
     setError(null);
+    setPendingClusters([]);
+    setFreshSlugs(new Set());
     fetchHotNewsClusters(h)
-      .then((d) => setClusters(d.clusters || []))
+      .then((d) => {
+        const fresh = d.clusters || [];
+        setClusters(fresh);
+        currentSlugsRef.current = new Set(fresh.map(c => c.slug));
+        setLastRefreshed(new Date());
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(hours); }, [hours, load]);
+
+  // Real-time polling every 60s
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetchHotNewsClusters(hours)
+        .then((d) => {
+          const incoming = d.clusters || [];
+          const truly = incoming.filter(c => !currentSlugsRef.current.has(c.slug));
+          // Silently update counts on existing clusters
+          setClusters(prev => prev.map(c => incoming.find(f => f.slug === c.slug) || c));
+          if (truly.length > 0) {
+            setPendingClusters(prev => {
+              const existSlugs = new Set(prev.map(p => p.slug));
+              return [...prev, ...truly.filter(c => !existSlugs.has(c.slug))];
+            });
+          }
+          setLastRefreshed(new Date());
+        })
+        .catch(() => {});
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [hours]);
+
+  const applyPending = () => {
+    const slugs = new Set(pendingClusters.map(c => c.slug));
+    setClusters(prev => {
+      const existSlugs = new Set(prev.map(c => c.slug));
+      const newOnes = pendingClusters.filter(c => !existSlugs.has(c.slug));
+      newOnes.forEach(c => currentSlugsRef.current.add(c.slug));
+      return [...newOnes, ...prev];
+    });
+    setFreshSlugs(prev => new Set([...prev, ...slugs]));
+    setPendingClusters([]);
+  };
 
   const handleReadSummary = (cluster) => {
     setSelectedCluster(cluster);
@@ -589,16 +680,16 @@ function HotNewsTab() {
   return (
     <Box>
       {/* Controls */}
-      <Box display="flex" alignItems="center" justifyContent="space-between" mb={2.5} flexWrap="wrap" gap={1}>
+      <Box display="flex" alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between" mb={2.5} flexWrap="wrap" gap={1}>
         <Box>
-          <Typography variant="h6" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <Typography variant="h6" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: { xs: '1rem', sm: '1.25rem' } }}>
             <BoltIcon sx={{ color: '#f97316' }} /> Tin nóng theo chủ đề
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
             Click "Xem tóm tắt AI" để đọc bản tóm lược được tổng hợp bằng OpenAI
           </Typography>
         </Box>
-        <Box display="flex" gap={0.75}>
+        <Box display="flex" gap={0.75} alignItems="center" flexWrap="wrap">
           {[24, 48, 72].map((h) => (
             <Chip
               key={h}
@@ -616,8 +707,41 @@ function HotNewsTab() {
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {lastRefreshed && (
+            <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>
+              · {timeAgo(lastRefreshed)}
+            </Typography>
+          )}
         </Box>
       </Box>
+
+      {/* Pending banner — tap to apply new clusters */}
+      {pendingClusters.length > 0 && (
+        <Box
+          onClick={applyPending}
+          sx={{
+            cursor: 'pointer',
+            mb: 2,
+            p: 1.25,
+            bgcolor: '#f97316',
+            color: 'white',
+            borderRadius: 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 1,
+            fontWeight: 700,
+            fontSize: '0.875rem',
+            userSelect: 'none',
+            '&:hover': { bgcolor: '#ea580c' },
+            '@keyframes pulseBar': { '0%,100%': { opacity: 1 }, '50%': { opacity: 0.82 } },
+            animation: 'pulseBar 2s infinite',
+          }}
+        >
+          <BoltIcon sx={{ fontSize: 18 }} />
+          {pendingClusters.length} chủ đề mới — Nhấn để hiển thị
+        </Box>
+      )}
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
@@ -640,7 +764,11 @@ function HotNewsTab() {
           <Grid container spacing={2}>
             {clusters.map((cluster) => (
               <Grid item xs={12} sm={6} md={4} key={cluster.slug}>
-                <HotClusterCard cluster={cluster} onReadSummary={handleReadSummary} />
+                <HotClusterCard
+                  cluster={cluster}
+                  onReadSummary={handleReadSummary}
+                  isNew={freshSlugs.has(cluster.slug)}
+                />
               </Grid>
             ))}
           </Grid>
@@ -809,7 +937,7 @@ function ArticlesTab() {
       </Box>
 
       {/* Search bar */}
-      <Box display="flex" gap={1} mb={2} alignItems="center">
+      <Box display="flex" gap={1} mb={2} alignItems="center" flexWrap="wrap">
         <TextField
           size="small"
           placeholder="Tìm bài báo có link…"
@@ -824,20 +952,22 @@ function ArticlesTab() {
               </InputAdornment>
             ),
           }}
-          sx={{ flex: 1, maxWidth: 360 }}
+          sx={{ flex: 1, minWidth: { xs: '100%', sm: 'auto' }, maxWidth: { xs: '100%', sm: 360 } }}
         />
-        <Button
-          variant="contained"
-          size="small"
-          onClick={handleSearch}
-          disabled={searchLoading}
-          sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none' }}
-        >
-          Tìm
-        </Button>
-        <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto', flexShrink: 0 }}>
-          Cập nhật {timeAgo(lastUpdate)}
-        </Typography>
+        <Box display="flex" alignItems="center" gap={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleSearch}
+            disabled={searchLoading}
+            sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none' }}
+          >
+            Tìm
+          </Button>
+          <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto', flexShrink: 0 }}>
+            Cập nhật {timeAgo(lastUpdate)}
+          </Typography>
+        </Box>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
@@ -901,7 +1031,7 @@ function ArticlesTab() {
 
 export default function UserNewsPage() {
   const theme = useTheme();
-  useMediaQuery(theme.breakpoints.down('sm'));
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -994,6 +1124,9 @@ export default function UserNewsPage() {
           <Tabs
             value={activeTab}
             onChange={(_, v) => setActiveTab(v)}
+            variant="scrollable"
+            scrollButtons="auto"
+            allowScrollButtonsMobile
             sx={{
               minHeight: 46,
               '& .MuiTab-root': { textTransform: 'none', fontWeight: 600, fontSize: '0.9rem', minHeight: 46 },
@@ -1008,7 +1141,7 @@ export default function UserNewsPage() {
             <Tab
               icon={<NewspaperIcon sx={{ fontSize: 18 }} />}
               iconPosition="start"
-              label="Bài báo theo chủ đề"
+              label={isMobile ? 'Bài báo' : 'Bài báo theo chủ đề'}
             />
           </Tabs>
         </Container>

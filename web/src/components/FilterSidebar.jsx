@@ -32,6 +32,8 @@ import SportsEsportsIcon from '@mui/icons-material/SportsEsports';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import CategoryIcon from '@mui/icons-material/Category';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const TOPIC_ICONS = {
   'Crypto': <CurrencyBitcoinIcon fontSize="small" />,
   'Kinh tế': <MonetizationOnIcon fontSize="small" />,
@@ -156,7 +158,7 @@ export const FilterSidebar = memo(function FilterSidebar({
           Dữ liệu cập nhật tự động từ Telegram
         </Typography>
         <Typography variant="caption" color="primary">
-          <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline' }}>
+          <a href={`${API_BASE_URL}/docs`} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline' }}>
             API Documentation →
           </a>
         </Typography>

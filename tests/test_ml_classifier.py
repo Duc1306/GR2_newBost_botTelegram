@@ -8,7 +8,7 @@ import tempfile
 
 def test_topic_labels():
     """Test topic labels are defined correctly."""
-    assert len(TOPIC_LABELS) == 10
+    assert len(TOPIC_LABELS) == 14
     assert "Crypto" in TOPIC_LABELS
     assert "Công nghệ" in TOPIC_LABELS
     assert "Chính trị" in TOPIC_LABELS

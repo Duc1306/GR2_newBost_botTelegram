@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 from fastapi import FastAPI, Query, HTTPException, Depends, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
@@ -19,6 +20,7 @@ from src.api.middleware import (
     log_requests_middleware,
     limiter
 )
+from src.config import get_allowed_origins
 from loguru import logger
 
 # Initialize logging first
@@ -39,13 +41,7 @@ app.middleware("http")(log_requests_middleware)
 # CORS middleware để frontend có thể gọi API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://localhost:5173",  # Vite dev server
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -188,7 +184,7 @@ async def get_posts(
     if lang:
         query["lang"] = lang
     if q:
-        query["text"] = {"$regex": q, "$options": "i"}
+        query["text"] = {"$regex": re.escape(q), "$options": "i"}
     if link_only:
         query["links"] = {"$exists": True, "$ne": []}
     
@@ -214,13 +210,16 @@ async def count_posts(
     lang: Optional[str] = Query(None, description="Lọc theo ngôn ngữ"),
     link_only: bool = Query(False, description="Chỉ tính bài có link bên ngoài"),
     topics_only: bool = Query(False, description="Chỉ tính bài đã phân loại"),
-    platform: Optional[str] = Query("all", description="Filter by platform")
+    platform: Optional[str] = Query("all", description="Filter by platform"),
+    current_user: str = Depends(get_current_user)
 ):
     """Đếm số lượng bài viết"""
     db = get_db()
     coll = db["posts"]
     
     query = {}
+    if platform and platform != "all":
+        query["platform"] = platform
     if source:
         query["source"] = source
     
@@ -241,7 +240,8 @@ async def count_posts(
 
 @app.get("/topics")
 async def get_topics(
-    platform: Optional[str] = Query("all", description="Filter by platform")
+    platform: Optional[str] = Query("all", description="Filter by platform"),
+    current_user: str = Depends(get_current_user)
 ):
     """Lấy danh sách tất cả các chủ đề"""
     db = get_db()
@@ -274,13 +274,16 @@ async def get_stats(
     link_only: bool = Query(False, description="Chỉ thống kê bài có link"),
     topics_only: bool = Query(False, description="Chỉ bài có ít nhất 1 topic"),
     lang: Optional[str] = Query(None, description="Giới hạn theo ngôn ngữ cụ thể (vi/en)"),
-    platform: Optional[str] = Query("all", description="Filter by platform")
+    platform: Optional[str] = Query("all", description="Filter by platform"),
+    current_user: str = Depends(get_current_user)
 ):
     """Thống kê tổng quan (có thể lọc theo link/topic/ngôn ngữ)."""
     db = get_db()
     coll = db["posts"]
 
     base_query: dict = {}
+    if platform and platform != "all":
+        base_query["platform"] = platform
     if link_only:
         base_query["links"] = {"$exists": True, "$ne": []}
     if topics_only:
@@ -336,7 +339,7 @@ async def get_stats(
 
 
 @app.get("/posts/{post_id}")
-async def get_post_by_id(post_id: str):
+async def get_post_by_id(post_id: str, current_user: str = Depends(get_current_user)):
     """Lấy chi tiết một bài viết"""
     db = get_db()
     coll = db["posts"]
@@ -1130,11 +1133,11 @@ async def get_public_posts(
         query["links"] = {"$exists": True, "$ne": []}
 
     if q:
-        query["text"] = {"$regex": q, "$options": "i"}
+        query["text"] = {"$regex": re.escape(q), "$options": "i"}
     elif keywords:
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
         if kw_list:
-            query["$or"] = [{"text": {"$regex": kw, "$options": "i"}} for kw in kw_list]
+            query["$or"] = [{"text": {"$regex": re.escape(kw), "$options": "i"}} for kw in kw_list]
 
     projection = {
         "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
