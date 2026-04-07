@@ -4,16 +4,19 @@ from fastapi import FastAPI, Query, HTTPException, Depends, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from datetime import datetime, timedelta
-from src.db.mongo import get_db
+from src.db.mongo import get_db, get_users_collection
 from src.models.post import Post
+from src.models.user import UserPublic, UpdateUserStatusRequest, UpdateUserRoleRequest
 from src.api.auth import (
-    login, 
-    get_current_user, 
+    login,
+    register_user,
+    get_current_user,
     get_current_admin_user,
     get_current_user_token_data,
     LoginRequest,
     LoginResponse
 )
+from src.models.user import RegisterRequest
 from src.api.middleware import (
     setup_rate_limiting,
     setup_logging,
@@ -78,6 +81,16 @@ async def login_endpoint(request: LoginRequest):
     result = login(request.username, request.password)
     logger.info(f"Login successful for user: {request.username}")
     return result
+
+
+@app.post("/auth/register", tags=["Authentication"])
+async def register_endpoint(request: RegisterRequest):
+    """Đăng ký tài khoản mới (role=user, status=active)."""
+    result = register_user(request)
+    logger.info(f"New user registered: {result['username']}")
+    token_data = login(result["username"], request.password)
+    return token_data
+
 
 @app.post("/auth/logout", tags=["Authentication"])
 async def logout_endpoint(current_user: str = Depends(get_current_user)):
@@ -1948,27 +1961,146 @@ async def change_password(
     current_user: str = Depends(get_current_user)
 ):
     """Change user password."""
-    from src.config import ADMIN_USERNAME, ADMIN_PASSWORD
-    from src.api.auth import authenticate_user, get_password_hash
-    
+    from src.api.auth import authenticate_user, get_password_hash, verify_password
+
     current_password = request.get("current_password")
     new_password = request.get("new_password")
-    
+
     if not current_password or not new_password:
         raise HTTPException(status_code=400, detail="Current and new password are required")
-    
-    # Verify current password
+
     if not authenticate_user(current_user, current_password):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-    
-    # Validate new password
-    if len(new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
-    
-    # In production, update in database
-    # For now, just log it
-    logger.info(f"Password change requested for {current_user}")
-    
-    return {
-        "message": "Password changed successfully! (Demo mode - not persisted)"
-    }
+        raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng.")
+
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Mật khẩu mới phải từ 6 ký tự trở lên.")
+
+    users_col = get_users_collection()
+    result = users_col.update_one(
+        {"username": current_user},
+        {"$set": {"password_hash": get_password_hash(new_password)}}
+    )
+    if result.matched_count == 0:
+        # env-var admin – cannot change via DB
+        raise HTTPException(status_code=400, detail="Tài khoản admin env không thể đổi mật khẩu qua đây.")
+
+    logger.info(f"Password changed for {current_user}")
+    return {"message": "Đổi mật khẩu thành công."}
+
+
+# =============================================================================
+# Admin: User Management
+# =============================================================================
+
+@app.get("/admin/users", tags=["Admin - Users"])
+async def admin_list_users(
+    status: Optional[str] = Query(None, description="Lọc theo trạng thái: active|banned|pending"),
+    role: Optional[str] = Query(None, description="Lọc theo vai trò: user|admin"),
+    q: Optional[str] = Query(None, description="Tìm theo username hoặc email"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: Danh sách tất cả user có bộ lọc."""
+    users_col = get_users_collection()
+    query: dict = {}
+    if status:
+        query["status"] = status
+    if role:
+        query["role"] = role
+    if q:
+        query["$or"] = [
+            {"username": {"$regex": re.escape(q), "$options": "i"}},
+            {"email": {"$regex": re.escape(q), "$options": "i"}},
+            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
+        ]
+
+    total = users_col.count_documents(query)
+    docs = list(users_col.find(query, {"password_hash": 0, "_id": 0}).sort("created_at", -1).skip(skip).limit(limit))
+    return {"users": docs, "total": total, "skip": skip, "limit": limit}
+
+
+@app.get("/admin/users/stats/summary", tags=["Admin - Users"])
+async def admin_users_stats(current_user: str = Depends(get_current_admin_user)):
+    """Admin: Thống kê user theo trạng thái & vai trò."""
+    users_col = get_users_collection()
+    pipeline = [
+        {"$group": {
+            "_id": {"status": "$status", "role": "$role"},
+            "count": {"$sum": 1},
+        }}
+    ]
+    rows = list(users_col.aggregate(pipeline))
+    total = users_col.count_documents({})
+    by_status = {}
+    by_role = {}
+    for r in rows:
+        s = r["_id"]["status"]
+        rl = r["_id"]["role"]
+        by_status[s] = by_status.get(s, 0) + r["count"]
+        by_role[rl] = by_role.get(rl, 0) + r["count"]
+    return {"total": total, "by_status": by_status, "by_role": by_role}
+
+
+@app.get("/admin/users/{username}", tags=["Admin - Users"])
+async def admin_get_user(
+    username: str,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: Xem chi tiết một user."""
+    users_col = get_users_collection()
+    doc = users_col.find_one({"username": username}, {"password_hash": 0, "_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    return doc
+
+
+@app.put("/admin/users/{username}/status", tags=["Admin - Users"])
+async def admin_update_user_status(
+    username: str,
+    body: UpdateUserStatusRequest,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: Thay đổi trạng thái tài khoản (active / banned / pending)."""
+    if username == current_user:
+        raise HTTPException(status_code=400, detail="Không thể tự khóa tài khoản của mình.")
+    users_col = get_users_collection()
+    result = users_col.update_one({"username": username}, {"$set": {"status": body.status}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    logger.info(f"Admin {current_user} changed {username} status → {body.status}")
+    return {"success": True, "username": username, "status": body.status}
+
+
+@app.put("/admin/users/{username}/role", tags=["Admin - Users"])
+async def admin_update_user_role(
+    username: str,
+    body: UpdateUserRoleRequest,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: Thay đổi vai trò (user / admin)."""
+    if username == current_user:
+        raise HTTPException(status_code=400, detail="Không thể tự đổi vai trò của mình.")
+    users_col = get_users_collection()
+    result = users_col.update_one({"username": username}, {"$set": {"role": body.role}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    logger.info(f"Admin {current_user} changed {username} role → {body.role}")
+    return {"success": True, "username": username, "role": body.role}
+
+
+@app.delete("/admin/users/{username}", tags=["Admin - Users"])
+async def admin_delete_user(
+    username: str,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Admin: Xóa tài khoản user."""
+    if username == current_user:
+        raise HTTPException(status_code=400, detail="Không thể tự xóa tài khoản của mình.")
+    users_col = get_users_collection()
+    result = users_col.delete_one({"username": username})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    logger.info(f"Admin {current_user} deleted user {username}")
+    return {"success": True}
+

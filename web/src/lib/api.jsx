@@ -54,6 +54,63 @@ async function fetchWithAuth(url, options = {}) {
 export const api = {
   setAuthToken,
   getAuthToken,
+
+  async get(path, options = {}) {
+    const { params, ...rest } = options;
+    let url = `${API_BASE_URL}${path}`;
+    if (params) {
+      const qs = new URLSearchParams(
+        Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null))
+      ).toString();
+      if (qs) url += `?${qs}`;
+    }
+    const response = await fetchWithAuth(url, { method: 'GET', ...rest });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(err || response.status);
+    }
+    return { data: await response.json() };
+  },
+
+  async post(path, body, options = {}) {
+    const url = `${API_BASE_URL}${path}`;
+    const response = await fetchWithAuth(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      ...options,
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(err || response.status);
+    }
+    return { data: await response.json() };
+  },
+
+  async put(path, body, options = {}) {
+    const url = `${API_BASE_URL}${path}`;
+    const response = await fetchWithAuth(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      ...options,
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(err || response.status);
+    }
+    return { data: await response.json() };
+  },
+
+  async delete(path, options = {}) {
+    const url = `${API_BASE_URL}${path}`;
+    const response = await fetchWithAuth(url, { method: 'DELETE', ...options });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(err || response.status);
+    }
+    return { data: await response.json() };
+  },
 };
 
 export async function fetchPosts(params = {}) {

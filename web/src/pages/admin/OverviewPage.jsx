@@ -102,7 +102,7 @@ export default function OverviewPage() {
 
       {/* Stat Cards - Full Width */}
       <Grid container spacing={0} sx={{ mb: 4, mx: 0 }}>
-        <Grid item xs={12} sm={6} md={3} sx={{ px: 1 }}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
             title="Total Posts"
             value={totalPosts.toLocaleString()}
@@ -110,7 +110,7 @@ export default function OverviewPage() {
             icon={ArticleIcon}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3} sx={{ px: 1 }}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
             title="Topics"
             value={totalTopics}
@@ -118,7 +118,7 @@ export default function OverviewPage() {
             icon={CategoryIcon}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3} sx={{ px: 1 }}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
             title="Labeled Posts"
             value={labeledPosts.toLocaleString()}
@@ -126,7 +126,7 @@ export default function OverviewPage() {
             icon={LabelIcon}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3} sx={{ px: 1 }}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
             title="Sources"
             value={totalSources}
@@ -139,7 +139,7 @@ export default function OverviewPage() {
       {/* Main Charts Section */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         {/* Trending Topics */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Box 
             sx={{ 
               bgcolor: 'background.paper', 
@@ -222,7 +222,7 @@ export default function OverviewPage() {
         </Grid>
 
         {/* Post Volume Chart */}
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs: 12, md: 8 }}>
           {timelineLoading ? (
             <Box display="flex" justifyContent="center" p={4}>
               <CircularProgress />
@@ -241,7 +241,7 @@ export default function OverviewPage() {
 
       {/* Platform & Keywords Row */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Box 
             sx={{ 
               bgcolor: 'background.paper', 
@@ -280,7 +280,7 @@ export default function OverviewPage() {
         </Grid>
 
         {/* Word Cloud - takes more space */}
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs: 12, md: 8 }}>
           {keywordsLoading ? (
             <Box 
               display="flex" 
@@ -306,7 +306,7 @@ export default function OverviewPage() {
 
       {/* Topic Distribution - Better Layout */}
       <Grid container spacing={3}>
-        <Grid item xs={12} md={5}>
+        <Grid size={{ xs: 12, md: 5 }}>
           <TopicPieChart
             data={topicDistribution.sort((a, b) => b.value - a.value)}
             title="Topic Distribution"
@@ -314,7 +314,7 @@ export default function OverviewPage() {
             height={520}
           />
         </Grid>
-        <Grid item xs={12} md={7}>
+        <Grid size={{ xs: 12, md: 7 }}>
           <Box 
             sx={{ 
               bgcolor: 'background.paper', 

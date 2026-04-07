@@ -748,7 +748,7 @@ function HotNewsTab() {
       {loading ? (
         <Grid container spacing={2}>
           {[1, 2, 3, 4, 5, 6].map((i) => (
-            <Grid item xs={12} sm={6} md={4} key={i}>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={i}>
               <ClusterSkeleton />
             </Grid>
           ))}
@@ -763,7 +763,7 @@ function HotNewsTab() {
         <Fade in>
           <Grid container spacing={2}>
             {clusters.map((cluster) => (
-              <Grid item xs={12} sm={6} md={4} key={cluster.slug}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={cluster.slug}>
                 <HotClusterCard
                   cluster={cluster}
                   onReadSummary={handleReadSummary}

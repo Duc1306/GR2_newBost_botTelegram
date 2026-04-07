@@ -19,14 +19,16 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 
 const drawerWidth = 240;
 
 const menuItems = [
-  { text: 'Overview',   icon: <DashboardIcon />,  path: '/admin' },
-  { text: 'Analytics',  icon: <AnalyticsIcon />,  path: '/admin/analytics' },
-  { text: 'Posts',      icon: <ArticleIcon />,    path: '/admin/posts' },
-  { text: 'Trending',   icon: <TrendingUpIcon />, path: '/admin/trending' },
+  { text: 'Overview',   icon: <DashboardIcon />,   path: '/admin' },
+  { text: 'Analytics',  icon: <AnalyticsIcon />,   path: '/admin/analytics' },
+  { text: 'Posts',      icon: <ArticleIcon />,     path: '/admin/posts' },
+  { text: 'Trending',   icon: <TrendingUpIcon />,  path: '/admin/trending' },
+  { text: 'Người dùng', icon: <PeopleAltIcon />,   path: '/admin/users' },
 ];
 
 const bottomItems = [

@@ -149,7 +149,7 @@ export default function TrendingPage() {
 
       <Grid container spacing={3}>
         {/* Left Column - Trending Topics & Keywords */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           {/* Trending Topics */}
           <Paper sx={{ p: 3, mb: 3, background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
@@ -263,7 +263,7 @@ export default function TrendingPage() {
         </Grid>
 
         {/* Right Column - Trending Posts */}
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs: 12, md: 8 }}>
           <Paper sx={{ p: 3 }}>
             <Box display="flex" alignItems="center" gap={1} mb={3}>
               <LocalFireDepartmentIcon sx={{ color: '#f97316' }} />
@@ -289,7 +289,7 @@ export default function TrendingPage() {
             ) : (
               <Grid container spacing={2}>
                 {enrichedPosts.map((post, index) => (
-                  <Grid item xs={12} key={post._id}>
+                  <Grid size={12} key={post._id}>
                     <Card
                       sx={{
                         position: 'relative',

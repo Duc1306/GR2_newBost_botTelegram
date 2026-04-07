@@ -16,10 +16,10 @@ from src.config import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     ADMIN_USERNAME,
     ADMIN_PASSWORD,
-    USER_USERNAME,
-    USER_PASSWORD,
     API_KEY as CONFIGURED_API_KEY
 )
+from src.db.mongo import get_users_collection
+from src.models.user import UserInDB, RegisterRequest
 
 # =============================================================================
 # Password Hashing
@@ -199,30 +199,75 @@ async def get_current_admin_user(
 # Authentication Functions
 # =============================================================================
 
-def authenticate_user(username: str, password: str) -> Optional[str]:
+def authenticate_user(username: str, password: str) -> Optional[dict]:
     """
-    Authenticate a user with username and password.
-    
-    Args:
-        username: Username to authenticate
-        password: Plain text password
-    
-    Returns:
-        Username if authentication successful, None otherwise
-    
-    Note:
-        In production, this should check against a database with hashed passwords.
-        Current implementation is simplified for demo purposes.
+    Authenticate user. Checks DB first, then falls back to env-var admin credentials.
     """
-    # Check admin credentials
+    # 1. Check hardcoded admin (env var) – allows login even before DB is seeded
     if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-        return {"username": username, "role": "admin"}
-    
-    # Check regular user credentials
-    if username == USER_USERNAME and password == USER_PASSWORD:
-        return {"username": username, "role": "user"}
-    
+        return {"username": username, "role": "admin", "status": "active"}
+
+    # 2. Check DB users
+    try:
+        users_col = get_users_collection()
+        doc = users_col.find_one({"username": username})
+        if doc and verify_password(password, doc.get("password_hash", "")):
+            if doc.get("status") == "banned":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Tài khoản của bạn đã bị khóa. Vui lòng liên hệ admin.",
+                )
+            if doc.get("status") == "pending":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Tài khoản đang chờ kích hoạt. Vui lòng liên hệ admin.",
+                )
+            return {"username": doc["username"], "role": doc.get("role", "user"), "status": doc.get("status", "active")}
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # DB unavailable – fall through
+
     return None
+
+
+def register_user(req: RegisterRequest) -> dict:
+    """Register a new user. Raises HTTPException on duplicate username or DB error."""
+    import re
+    if not re.match(r"^[a-zA-Z0-9_.-]{3,32}$", req.username):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Username chỉ gồm chữ, số, dấu _ . - và 3-32 ký tự.",
+        )
+    try:
+        users_col = get_users_collection()
+        if users_col.find_one({"username": req.username}):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Tên đăng nhập đã tồn tại.",
+            )
+        if req.email and users_col.find_one({"email": req.email}):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email đã được sử dụng.",
+            )
+        user = UserInDB(
+            username=req.username,
+            email=req.email,
+            full_name=req.full_name,
+            password_hash=get_password_hash(req.password),
+            role="user",
+            status="active",
+        )
+        users_col.insert_one(user.model_dump())
+        return {"username": user.username, "role": user.role, "status": user.status}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Không thể kết nối cơ sở dữ liệu. Vui lòng thử lại sau.",
+        ) from e
 
 def login(username: str, password: str) -> LoginResponse:
     """

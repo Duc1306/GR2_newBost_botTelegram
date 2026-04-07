@@ -59,10 +59,6 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # Change in production!
 
-# Regular User Credentials
-USER_USERNAME = os.getenv("USER_USERNAME", "user")
-USER_PASSWORD = os.getenv("USER_PASSWORD", "user123")
-
 # API Key for external clients (optional)
 API_KEY = os.getenv("API_KEY")  # If set, clients can use this instead of JWT
 

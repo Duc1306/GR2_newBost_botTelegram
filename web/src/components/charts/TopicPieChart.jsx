@@ -143,7 +143,7 @@ export default function TopicPieChart({ data, title, height = 450, icon }) {
           const isActive = index === activeIndex;
           
           return (
-            <Grid item xs={6} key={entry.name}>
+            <Grid size={6} key={entry.name}>
               <Box
                 onMouseEnter={() => setActiveIndex(index)}
                 sx={{

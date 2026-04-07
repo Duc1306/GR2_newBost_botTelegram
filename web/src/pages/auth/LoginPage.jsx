@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
   Box,
@@ -8,6 +8,7 @@ import {
   Button,
   Typography,
   Alert,
+  Divider,
   Container,
   Paper,
   InputAdornment,
@@ -124,6 +125,7 @@ export default function LoginPage() {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 margin="normal"
                 required
                 InputProps={{
@@ -169,6 +171,13 @@ export default function LoginPage() {
                 {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
               </Button>
             </form>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="body2" align="center" color="text.secondary">
+              Chưa có tài khoản?{' '}
+              <Link to="/register" style={{ color: '#667eea', fontWeight: 600, textDecoration: 'none' }}>
+                Đăng ký ngay
+              </Link>
+            </Typography>
           </CardContent>
         </Paper>
       </Container>

@@ -30,3 +30,11 @@ def get_db():
 def get_posts_collection():
     db = get_db()
     return db["posts"]
+
+
+def get_users_collection():
+    db = get_db()
+    col = db["users"]
+    # Ensure unique index on username (idempotent)
+    col.create_index("username", unique=True, background=True)
+    return col

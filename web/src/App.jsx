@@ -35,12 +35,14 @@ import AnalyticsPage from './pages/admin/AnalyticsPage.jsx';
 import PostsPage from './pages/admin/PostsPage.jsx';
 import TrendingPage from './pages/admin/TrendingPage.jsx';
 import SettingsPage from './pages/admin/SettingsPage.jsx';
+import UsersPage from './pages/admin/UsersPage.jsx';
 
 // User page
 import NewsPage from './pages/user/NewsPage.jsx';
 
 // Auth page
 import LoginPage from './pages/auth/LoginPage.jsx';
+import RegisterPage from './pages/auth/RegisterPage.jsx';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,7 +99,8 @@ function AppRoutes() {
   return (
     <Routes>
       {/* ── Auth ────────────────────────────────────────────── */}
-      <Route path="/login" element={<GuestOnly><LoginPage /></GuestOnly>} />
+      <Route path="/login"    element={<GuestOnly><LoginPage /></GuestOnly>} />
+      <Route path="/register" element={<GuestOnly><RegisterPage /></GuestOnly>} />
 
       {/* ── User routes (role: user or admin) ───────────────── */}
       <Route path="/"     element={<Navigate to="/news" replace />} />
@@ -109,6 +112,7 @@ function AppRoutes() {
       <Route path="/admin/posts"     element={<AdminRoute page={<PostsPage />} />} />
       <Route path="/admin/trending"  element={<AdminRoute page={<TrendingPage />} />} />
       <Route path="/admin/settings"  element={<AdminRoute page={<SettingsPage />} />} />
+      <Route path="/admin/users"     element={<AdminRoute page={<UsersPage />} />} />
 
       {/* Legacy compat */}
       <Route path="/admin/login" element={<Navigate to="/login" replace />} />

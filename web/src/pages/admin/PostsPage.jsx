@@ -105,7 +105,7 @@ export default function PostsPage() {
       {/* Filters */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={6} md={4}>
+          <Grid size={{ xs: 12, sm: 6, md: 4 }}>
             <TextField
               fullWidth
               size="small"
@@ -121,7 +121,7 @@ export default function PostsPage() {
               }}
             />
           </Grid>
-          <Grid item xs={12} sm={3} md={2}>
+          <Grid size={{ xs: 12, sm: 3, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Topic</InputLabel>
               <Select
@@ -138,7 +138,7 @@ export default function PostsPage() {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={3} md={2}>
+          <Grid size={{ xs: 12, sm: 3, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Language</InputLabel>
               <Select
@@ -168,7 +168,7 @@ export default function PostsPage() {
         <>
           <Grid container spacing={2}>
             {posts.map((post) => (
-              <Grid item xs={12} sm={6} md={4} key={post._id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={post._id}>
                 <Card
                   sx={{
                     width: "100%",

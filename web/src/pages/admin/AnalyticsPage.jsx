@@ -128,7 +128,7 @@ export default function AnalyticsPage() {
       <Box sx={{ width: '100%', mb: 3 }}>
         <Grid container spacing={3}>
           {/* Top Keywords */}
-          <Grid item xs={12} md={8}>
+          <Grid size={{ xs: 12, md: 8 }}>
             {keywordsLoading ? (
               <Box display="flex" justifyContent="center" alignItems="center" sx={{ height: 400 }}>
                 <CircularProgress />
@@ -148,7 +148,7 @@ export default function AnalyticsPage() {
           </Grid>
 
         {/* Platform Stats */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Paper sx={{ p: 3, height: '100%' }}>
             <Box display="flex" alignItems="center" gap={1} mb={2}>
               <BarChartIcon sx={{ color: 'primary.main' }} />
