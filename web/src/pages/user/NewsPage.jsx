@@ -281,7 +281,7 @@ function HotClusterCard({ cluster, onReadSummary, isNew }) {
 
 const SENTIMENT_LABEL = { positive: 'Tích cực', negative: 'Tiêu cực', mixed: 'Hỗn hợp', neutral: 'Trung lập' };
 
-function SummaryDialog({ cluster, open, onClose }) {
+function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [data, setData] = useState(null);
@@ -307,11 +307,11 @@ function SummaryDialog({ cluster, open, onClose }) {
     setData(null);
     setError(null);
     setLoading(true);
-    fetchHotNewsSummary(cluster.slug)
+    fetchHotNewsSummary(cluster.slug, hours)
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [open, cluster]);
+  }, [open, cluster, hours]);
 
   const sentimentColor = data ? (SENTIMENT_COLOR[data.sentiment] || '#6b7280') : '#6b7280';
 
@@ -779,6 +779,7 @@ function HotNewsTab() {
         cluster={selectedCluster}
         open={summaryOpen}
         onClose={() => setSummaryOpen(false)}
+        hours={hours}
       />
     </Box>
   );
