@@ -125,6 +125,34 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const loginWithGoogle = async (googleIdToken) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: googleIdToken }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Google login failed');
+      }
+      const data = await response.json();
+      localStorage.setItem('auth_token', data.access_token);
+      localStorage.setItem('auth_user', JSON.stringify({
+        username: data.username,
+        role: data.role || 'user',
+        expires_at: Date.now() + (data.expires_in * 1000),
+      }));
+      setToken(data.access_token);
+      setUser({ username: data.username, role: data.role || 'user', expires_at: Date.now() + (data.expires_in * 1000) });
+      api.setAuthToken(data.access_token);
+      return { success: true, role: data.role };
+    } catch (error) {
+      console.error('Google login error:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
   const logout = async () => {
     try {
       // Call logout endpoint (optional, for logging)
@@ -172,6 +200,7 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated: !!token && !isTokenExpired(),
     isAdmin: jwtRole === 'admin',
     login,
+    loginWithGoogle,
     register,
     logout,
   };

@@ -1,8 +1,11 @@
-﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+/**
+ * PublicHomePage – trang tin tức công khai, không cần đăng nhập.
+ * Hiển thị bảng tin tổng hợp từ các kênh hệ thống (dùng /public/* endpoints).
+ */
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
-import { useAuth } from '../../context/AuthContext.jsx';
 import {
   Box,
   Container,
@@ -40,13 +43,13 @@ import ArticleIcon from '@mui/icons-material/Article';
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import ClearIcon from '@mui/icons-material/Clear';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import LogoutIcon from '@mui/icons-material/Logout';
-
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import BoltIcon from '@mui/icons-material/Bolt';
 import SentimentNeutralIcon from '@mui/icons-material/SentimentNeutral';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import LinkIcon from '@mui/icons-material/Link';
+import LoginIcon from '@mui/icons-material/Login';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import {
   searchPublicPosts,
   fetchArticlePosts,
@@ -342,7 +345,6 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
       </DialogTitle>
 
       <DialogContent sx={{ px: { xs: 2.5, sm: 4 }, py: 3 }}>
-        {/* Loading */}
         {loading && (
           <Box display="flex" flexDirection="column" alignItems="center" py={6} gap={2}>
             <CircularProgress size={36} color="secondary" />
@@ -352,26 +354,18 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
           </Box>
         )}
 
-        {/* Error */}
         {error && (
           <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>
         )}
 
-        {/* Article body */}
         {data && !loading && (
           <Box>
-            {/* Article title */}
             {data.title && (
-              <Typography
-                variant="h5"
-                fontWeight={800}
-                sx={{ lineHeight: 1.35, mb: 2, color: 'text.primary' }}
-              >
+              <Typography variant="h5" fontWeight={800} sx={{ lineHeight: 1.35, mb: 2, color: 'text.primary' }}>
                 {data.title}
               </Typography>
             )}
 
-            {/* Meta row */}
             <Box display="flex" alignItems="center" flexWrap="wrap" gap={1} mb={2.5}>
               <Box display="flex" alignItems="center" gap={0.5}>
                 <SentimentNeutralIcon sx={{ fontSize: 14, color: sentimentColor }} />
@@ -380,18 +374,13 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
                 </Typography>
               </Box>
               <Typography variant="caption" color="text.disabled">·</Typography>
-              <Typography variant="caption" color="text.disabled">
-                {data.post_count} nguồn tổng hợp
-              </Typography>
+              <Typography variant="caption" color="text.disabled">{data.post_count} nguồn tổng hợp</Typography>
               <Typography variant="caption" color="text.disabled">·</Typography>
-              <Typography variant="caption" color="text.disabled">
-                {data.cached ? 'từ cache' : 'vừa tổng hợp'}
-              </Typography>
+              <Typography variant="caption" color="text.disabled">{data.cached ? 'từ cache' : 'vừa tổng hợp'}</Typography>
             </Box>
 
             <Divider sx={{ mb: 2.5 }} />
 
-            {/* Lead paragraph */}
             {data.lead && (
               <Typography
                 variant="body1"
@@ -410,18 +399,12 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
               </Typography>
             )}
 
-            {/* Body paragraphs */}
             {data.body?.map((para, i) => (
-              <Typography
-                key={i}
-                variant="body1"
-                sx={{ lineHeight: 1.85, mb: 2, color: 'text.primary', fontSize: '0.97rem' }}
-              >
+              <Typography key={i} variant="body1" sx={{ lineHeight: 1.85, mb: 2, color: 'text.primary', fontSize: '0.97rem' }}>
                 {para}
               </Typography>
             ))}
 
-            {/* Conclusion */}
             {data.conclusion && (
               <Box sx={{ mt: 1, mb: 2.5, p: 2, bgcolor: 'grey.50', borderRadius: 2, borderLeft: '3px solid', borderColor: 'text.disabled' }}>
                 <Typography variant="body2" sx={{ lineHeight: 1.75, color: 'text.secondary', fontStyle: 'italic' }}>
@@ -430,7 +413,6 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
               </Box>
             )}
 
-            {/* Key points */}
             {data.key_points?.length > 0 && (
               <>
                 <Divider sx={{ mb: 2 }} />
@@ -448,9 +430,7 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
               </>
             )}
 
-            {/* Source links — ALL link posts from summary API */}
             {data && (data.link_posts?.length > 0 || cluster?.posts?.length > 0) && (() => {
-              // Prefer link_posts from API (full list); fall back to cluster.posts
               const rawSources = data.link_posts?.length > 0
                 ? data.link_posts
                 : [
@@ -465,7 +445,6 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
 
               if (!rawSources.length) return null;
 
-              // Sort: unread first, read ones pushed to bottom
               const sources = [
                 ...rawSources.filter(s => !s.url || !readUrls.has(s.url)),
                 ...rawSources.filter(s => s.url && readUrls.has(s.url)),
@@ -638,14 +617,12 @@ function HotNewsTab() {
 
   useEffect(() => { load(hours); }, [hours, load]);
 
-  // Real-time polling every 60s
   useEffect(() => {
     const id = setInterval(() => {
       fetchHotNewsClusters(hours)
         .then((d) => {
           const incoming = d.clusters || [];
           const truly = incoming.filter(c => !currentSlugsRef.current.has(c.slug));
-          // Silently update counts on existing clusters
           setClusters(prev => prev.map(c => incoming.find(f => f.slug === c.slug) || c));
           if (truly.length > 0) {
             setPendingClusters(prev => {
@@ -679,7 +656,6 @@ function HotNewsTab() {
 
   return (
     <Box>
-      {/* Controls */}
       <Box display="flex" alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between" mb={2.5} flexWrap="wrap" gap={1}>
         <Box>
           <Typography variant="h6" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: { xs: '1rem', sm: '1.25rem' } }}>
@@ -715,7 +691,6 @@ function HotNewsTab() {
         </Box>
       </Box>
 
-      {/* Pending banner — tap to apply new clusters */}
       {pendingClusters.length > 0 && (
         <Box
           onClick={applyPending}
@@ -858,7 +833,6 @@ function ArticlesTab() {
     setSearchLoading(true);
     try {
       const data = await searchPublicPosts(q, 30);
-      // keep only posts with links
       const withLinks = (data.posts || []).filter((p) =>
         p.links?.some((l) => !l.includes('t.me') && l.startsWith('http'))
       );
@@ -877,8 +851,6 @@ function ArticlesTab() {
 
   return (
     <Box>
-      {/* Topic filter bar */}
-      {/* Section header */}
       <Box display="flex" alignItems="center" gap={1} mb={1.5}>
         <ArticleIcon sx={{ color: '#3b82f6', fontSize: 22 }} />
         <Typography variant="h6" fontWeight={700} fontSize="1rem">
@@ -1030,23 +1002,13 @@ function ArticlesTab() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function UserNewsPage() {
+export default function PublicHomePage() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
-  };
-
   const [activeTab, setActiveTab] = useState(0); // 0 = Hot News, 1 = Articles
 
-  // Breaking ticker state (latest posts for marquee)
   const [tickerPosts, setTickerPosts] = useState([]);
 
-  // Load ticker from latest posts
   useEffect(() => {
     fetchArticlePosts('', 0, 10)
       .then((d) => setTickerPosts(d.posts || []))
@@ -1095,12 +1057,39 @@ export default function UserNewsPage() {
               />
             </Box>
 
+            {/* Login / Register */}
             <Box display="flex" alignItems="center" gap={1}>
-              <Tooltip title={`Đăng xuất (${user?.username})`}>
-                <IconButton onClick={handleLogout} sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                  <LogoutIcon />
-                </IconButton>
-              </Tooltip>
+              <Button
+                component={RouterLink}
+                to="/login"
+                variant="outlined"
+                size="small"
+                startIcon={<LoginIcon />}
+                sx={{
+                  color: 'white',
+                  borderColor: 'rgba(255,255,255,0.5)',
+                  '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' },
+                  textTransform: 'none',
+                  borderRadius: 2,
+                }}
+              >
+                {isMobile ? null : 'Đăng nhập'}
+              </Button>
+              <Button
+                component={RouterLink}
+                to="/register"
+                variant="contained"
+                size="small"
+                startIcon={<PersonAddIcon />}
+                sx={{
+                  bgcolor: '#f97316',
+                  '&:hover': { bgcolor: '#ea580c' },
+                  textTransform: 'none',
+                  borderRadius: 2,
+                }}
+              >
+                {isMobile ? null : 'Đăng ký'}
+              </Button>
             </Box>
           </Box>
         </Container>
@@ -1150,6 +1139,30 @@ export default function UserNewsPage() {
 
       {/* ── Main Content ── */}
       <Container maxWidth="lg" sx={{ py: { xs: 2, md: 3 } }}>
+        {/* CTA Banner */}
+        <Alert
+          severity="info"
+          icon={false}
+          sx={{ mb: 3, borderRadius: 2, bgcolor: '#eff6ff', border: '1px solid #bfdbfe' }}
+          action={
+            <Button
+              component={RouterLink}
+              to="/register"
+              color="primary"
+              size="small"
+              variant="contained"
+              sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none', whiteSpace: 'nowrap' }}
+            >
+              Đăng ký ngay
+            </Button>
+          }
+        >
+          <Typography variant="body2" fontWeight={600}>Muốn tóm tắt kênh Telegram cá nhân?</Typography>
+          <Typography variant="caption" color="text.secondary">
+            Tạo tài khoản và thêm kênh bạn muốn theo dõi — AI sẽ tóm tắt tự động.
+          </Typography>
+        </Alert>
+
         {activeTab === 0 && <HotNewsTab />}
         {activeTab === 1 && <ArticlesTab />}
 
@@ -1163,3 +1176,4 @@ export default function UserNewsPage() {
     </Box>
   );
 }
+

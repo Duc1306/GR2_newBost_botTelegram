@@ -1,0 +1,850 @@
+/**
+ * DashboardPage – bảng điều khiển cá nhân dành cho user đã đăng nhập.
+ *
+ * Tính năng:
+ *   • Hiển thị kênh Telegram đã đăng ký + tóm tắt AI mới nhất
+ *   • Ô nhập link kênh mới → gọi POST /user/channels
+ *   • Hủy đăng ký kênh
+ *   • Nút xem trang tin công khai
+ */
+import React, { useState, useEffect, useCallback } from 'react';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { formatDistanceToNow } from 'date-fns';
+import { vi } from 'date-fns/locale';
+import { useAuth } from '../../context/AuthContext.jsx';
+import {
+  Box,
+  Container,
+  Typography,
+  TextField,
+  Button,
+  Card,
+  CardContent,
+  CardActions,
+  Chip,
+  CircularProgress,
+  Alert,
+  Snackbar,
+  IconButton,
+  Tooltip,
+  AppBar,
+  Toolbar,
+  Stack,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Skeleton,
+  Avatar,
+  InputAdornment,
+  Paper,
+  Grid,
+  Collapse,
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import TelegramIcon from '@mui/icons-material/Telegram';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import NewspaperIcon from '@mui/icons-material/Newspaper';
+import LogoutIcon from '@mui/icons-material/Logout';
+import LinkIcon from '@mui/icons-material/Link';
+import HourglassTopIcon from '@mui/icons-material/HourglassTop';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import CheckIcon from '@mui/icons-material/Check';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// ---------------------------------------------------------------------------
+// API helpers
+// ---------------------------------------------------------------------------
+
+function authHeaders() {
+  const token = localStorage.getItem('auth_token');
+  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+}
+
+async function apiGet(path) {
+  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || res.status); }
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || res.status); }
+  return res.json();
+}
+
+async function apiDelete(path) {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: authHeaders() });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || res.status); }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Time helper
+// ---------------------------------------------------------------------------
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  try {
+    return formatDistanceToNow(new Date(dateStr), { addSuffix: true, locale: vi });
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Status badge
+// ---------------------------------------------------------------------------
+
+const STATUS_META = {
+  pending: { label: 'Đang xử lý', color: 'warning', icon: <HourglassTopIcon sx={{ fontSize: 14 }} /> },
+  active:  { label: 'Đang hoạt động', color: 'success', icon: <CheckCircleOutlineIcon sx={{ fontSize: 14 }} /> },
+  error:   { label: 'Lỗi', color: 'error', icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} /> },
+};
+
+function StatusBadge({ status }) {
+  const m = STATUS_META[status] || STATUS_META.pending;
+  return (
+    <Chip
+      icon={m.icon}
+      label={m.label}
+      color={m.color}
+      size="small"
+      sx={{ height: 22, fontSize: '0.68rem', fontWeight: 600 }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Post card (used inside ChannelCard posts panel)
+// ---------------------------------------------------------------------------
+
+function PostCard({ post: p, channelUsername }) {
+  const [expanded, setExpanded] = useState(false);
+  const tgLink = p.id ? `https://t.me/${channelUsername}/${p.id.split('_').at(-1)}` : null;
+  const externalLink = p.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
+  const primaryTopic = p.topics?.[0];
+
+  return (
+    <Card elevation={0} sx={{
+      borderRadius: 2,
+      border: '1px solid',
+      borderColor: p.is_new ? '#bfdbfe' : 'divider',
+      bgcolor: p.is_new ? '#f0f7ff' : 'white',
+      transition: 'box-shadow 0.18s',
+      '&:hover': { boxShadow: '0 4px 14px rgba(0,0,0,0.08)' },
+    }}>
+      <CardContent sx={{ pb: 0, pt: 1.5, px: 2 }}>
+        {/* Meta row */}
+        <Box display="flex" alignItems="center" gap={0.75} mb={0.75} flexWrap="wrap">
+          {p.is_new && (
+            <Chip label="Mới" size="small" color="primary"
+              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700 }} />
+          )}
+          {primaryTopic && (
+            <Chip label={primaryTopic} size="small"
+              sx={{ height: 18, fontSize: '0.63rem', fontWeight: 600, bgcolor: '#fef3c7', color: '#92400e' }} />
+          )}
+          <Typography variant="caption" color="text.disabled"
+            title={p.created_at ? new Date(p.created_at).toLocaleString('vi-VN') : ''}>
+            <FiberManualRecordIcon sx={{ fontSize: 7, color: '#2563eb', mr: 0.3, verticalAlign: 'middle' }} />
+            {timeAgo(p.created_at)}
+          </Typography>
+        </Box>
+
+        {/* Text */}
+        <Typography variant="body2" color="text.secondary" sx={{
+          display: '-webkit-box',
+          WebkitLineClamp: expanded ? 100 : 5,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          lineHeight: 1.65,
+          fontSize: '0.84rem',
+          whiteSpace: 'pre-line',
+        }}>
+          {p.text}
+        </Typography>
+        {p.text?.length > 300 && (
+          <Button size="small" onClick={() => setExpanded(e => !e)}
+            sx={{ textTransform: 'none', fontSize: '0.72rem', p: 0, mt: 0.5, minWidth: 0, color: '#0369a1' }}>
+            {expanded ? 'Thu gọn' : 'Xem thêm'}
+          </Button>
+        )}
+      </CardContent>
+
+      <CardActions sx={{ px: 2, pb: 1.25, pt: 0.5, gap: 0.5 }}>
+        {tgLink && (
+          <Button size="small" startIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
+            href={tgLink} target="_blank" rel="noopener noreferrer"
+            sx={{ textTransform: 'none', fontSize: '0.75rem', color: '#0369a1', px: 1, py: 0.25 }}>
+            Telegram
+          </Button>
+        )}
+        {externalLink && (
+          <Button size="small" variant="contained"
+            endIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
+            href={externalLink} target="_blank" rel="noopener noreferrer"
+            sx={{ textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1.5, py: 0.35, boxShadow: 'none' }}>
+            Đọc bài gốc
+          </Button>
+        )}
+      </CardActions>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Channel card
+// ---------------------------------------------------------------------------
+
+function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
+  const [expanded, setExpanded] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryDone, setSummaryDone] = useState(false);
+  const [localSummary, setLocalSummary] = useState(null);
+  const [localSummaryDate, setLocalSummaryDate] = useState(null);
+  const [postsOpen, setPostsOpen] = useState(false);
+  const [posts, setPosts] = useState([]);
+  const [postsLoading, setPostsLoading] = useState(false);
+
+  const displaySummary = localSummary || ch.latest_summary;
+  const displaySummaryDate = localSummaryDate || ch.summary_date;
+
+  const handleSummarize = async () => {
+    setSummarizing(true);
+    setSummaryDone(false);
+    // Clear local summary so card shows "Đang tải…" rather than stale content
+    setLocalSummary(null);
+    setLocalSummaryDate(null);
+    try {
+      await apiPost(`/user/channels/${ch.username}/summarize`, {});
+      // Poll until worker finishes re-fetching and generates a NEW summary.
+      // Server deletes old summaries before re-queuing, so any result = fresh.
+      for (let i = 0; i < 30; i++) {          // up to 60 s (30 × 2 s)
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          const res = await apiGet(`/user/channels/${ch.username}/summary`);
+          if (res.summaries?.length > 0) {
+            setLocalSummary(res.summaries[0].summary_text);
+            setLocalSummaryDate(res.summaries[0].date);
+            break;
+          }
+        } catch (_) { /* ignore poll errors */ }
+      }
+      setSummaryDone(true);
+      if (onSummarized) onSummarized(); // silent refresh to sync post_count / status
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  const handleTogglePosts = async () => {
+    if (!postsOpen) {
+      setPostsLoading(true);
+      try {
+        const data = await apiGet(`/user/channels/${ch.username}/posts`);
+        setPosts(data);
+        // Mark as seen
+        await apiPost(`/user/channels/${ch.username}/seen`, {});
+        if (onSummarized) onSummarized(); // refresh channel list to reset badge
+      } catch (_) { /* ignore */ }
+      setPostsLoading(false);
+    }
+    setPostsOpen((v) => !v);
+  };
+
+  const unread = ch.unread_count || 0;
+
+  return (
+    <Card elevation={0} sx={{
+      borderRadius: 2.5,
+      border: '1px solid',
+      borderColor: unread > 0 ? 'primary.light' : 'divider',
+      transition: 'box-shadow 0.18s',
+      '&:hover': { boxShadow: '0 4px 16px rgba(0,0,0,0.08)' },
+    }}>
+      <CardContent sx={{ pb: 0 }}>
+        {/* Header row */}
+        <Box display="flex" alignItems="center" gap={1.5} mb={1}>
+          <Box position="relative" flexShrink={0}>
+            <Avatar sx={{ bgcolor: '#e0f2fe', color: '#0369a1', width: 40, height: 40 }}>
+              <TelegramIcon fontSize="small" />
+            </Avatar>
+            {unread > 0 && (
+              <Box sx={{
+                position: 'absolute', top: -4, right: -4,
+                bgcolor: 'error.main', color: 'white',
+                borderRadius: '50%', width: 18, height: 18,
+                fontSize: '0.6rem', fontWeight: 800,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: '2px solid white',
+              }}>
+                {unread > 99 ? '99+' : unread}
+              </Box>
+            )}
+          </Box>
+          <Box flex={1} minWidth={0}>
+            <Typography variant="subtitle2" fontWeight={700} noWrap>
+              {ch.display_name || `@${ch.username}`}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>
+              {ch.channel_link}
+            </Typography>
+          </Box>
+          <StatusBadge status={ch.status} />
+        </Box>
+
+        {/* Pending / error banners */}
+        {ch.status === 'pending' && (
+          <Alert severity="info" icon={<HourglassTopIcon fontSize="inherit" />}
+            sx={{ py: 0.5, px: 1.5, borderRadius: 1.5, mb: 1, fontSize: '0.8rem' }}>
+            Hệ thống đang thu thập dữ liệu, tự động cập nhật sau ít phút.
+          </Alert>
+        )}
+        {ch.status === 'error' && (
+          <Alert severity="error" sx={{ py: 0.5, px: 1.5, borderRadius: 1.5, mb: 1, fontSize: '0.8rem' }}>
+            {ch.error_message
+              ? ch.error_message.replace('Không thể truy cập kênh', 'Không thể kết nối').replace(/^.*?: /, 'Lỗi: ')
+              : 'Không thể kết nối kênh. Vui lòng kiểm tra link.'}
+            <Typography variant="caption" display="block" color="error.dark" mt={0.5}>
+              Hãy hủy đăng ký và thêm lại với link đúng.
+            </Typography>
+          </Alert>
+        )}
+
+        {/* AI Summary block */}
+        {summarizing && !displaySummary ? (
+          <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.5, mb: 1, textAlign: 'center' }}>
+            <Typography variant="caption" color="#0369a1">
+              ⏳ Đang tải tin mới &amp; tạo tóm tắt AI…
+            </Typography>
+          </Box>
+        ) : displaySummary ? (
+          <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.5, mb: 1 }}>
+            <Box display="flex" alignItems="center" gap={0.5} mb={0.5}>
+              <AutoAwesomeIcon sx={{ fontSize: 14, color: '#0369a1' }} />
+              <Typography variant="caption" fontWeight={700} color="#0369a1">
+                Tóm tắt AI{displaySummaryDate ? ` – ${displaySummaryDate}` : ''}
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary"
+              sx={{
+                display: '-webkit-box',
+                WebkitLineClamp: expanded ? 100 : 5,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                lineHeight: 1.6,
+                fontSize: '0.82rem',
+                whiteSpace: 'pre-line',
+              }}>
+              {displaySummary}
+            </Typography>
+            {displaySummary.length > 200 && (
+              <Button size="small" onClick={() => setExpanded((e) => !e)}
+                sx={{ textTransform: 'none', fontSize: '0.73rem', p: 0, mt: 0.5, minWidth: 0 }}>
+                {expanded ? 'Thu gọn' : 'Xem thêm'}
+              </Button>
+            )}
+          </Box>
+        ) : ch.status === 'active' && (
+          <Box sx={{ bgcolor: '#fafafa', borderRadius: 1.5, p: 1.5, mb: 1, textAlign: 'center' }}>
+            <Typography variant="caption" color="text.disabled">
+              Chưa có tóm tắt — nhấn <strong>Tóm tắt AI</strong> để tạo.
+            </Typography>
+          </Box>
+        )}
+
+        {/* Posts panel */}
+        <Collapse in={postsOpen}>
+          <Box sx={{ mt: 1, mb: 1 }}>
+            {postsLoading ? (
+              <Stack spacing={1}>
+                {[1,2,3].map(i => <Skeleton key={i} variant="rectangular" height={90} sx={{ borderRadius: 2 }} />)}
+              </Stack>
+            ) : posts.length === 0 ? (
+              <Typography variant="caption" color="text.disabled" display="block" textAlign="center" py={2}>
+                Chưa có bài viết nào.
+              </Typography>
+            ) : (
+              <Stack spacing={1.25}>
+                {posts.map((p, i) => (
+                  <PostCard key={p.id || i} post={p} channelUsername={ch.username} />
+                ))}
+              </Stack>
+            )}
+          </Box>
+        </Collapse>
+
+        {/* Stats row */}
+        <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+          {ch.post_count > 0 && (
+            <Chip label={`${ch.post_count} bài`} size="small"
+              sx={{ height: 19, fontSize: '0.67rem', bgcolor: '#f3f4f6', color: 'text.secondary' }} />
+          )}
+          {unread > 0 && (
+            <Chip label={`${unread} tin mới`} size="small" color="primary" variant="outlined"
+              sx={{ height: 19, fontSize: '0.67rem' }} />
+          )}
+          <Typography variant="caption" color="text.disabled">
+            Đăng ký {new Date(ch.subscribed_at).toLocaleDateString('vi-VN')}
+          </Typography>
+        </Box>
+      </CardContent>
+
+      <CardActions sx={{ px: 2, py: 1, justifyContent: 'space-between', flexWrap: 'wrap', gap: 0.5 }}>
+        <Stack direction="row" spacing={0.5}>
+          <Button
+            size="small"
+            startIcon={<OpenInNewIcon sx={{ fontSize: '14px !important' }} />}
+            href={`https://${ch.channel_link}`}
+            target="_blank" rel="noopener noreferrer"
+            sx={{ textTransform: 'none', fontSize: '0.78rem', color: 'text.secondary' }}
+          >
+            Telegram
+          </Button>
+
+          {(ch.status === 'active') && (
+            <Button
+              size="small"
+              startIcon={
+                summarizing
+                  ? <CircularProgress size={12} color="inherit" />
+                  : summaryDone
+                  ? <CheckIcon sx={{ fontSize: '14px !important' }} />
+                  : <AutoAwesomeIcon sx={{ fontSize: '14px !important' }} />
+              }
+              onClick={handleSummarize}
+              disabled={summarizing}
+              sx={{ textTransform: 'none', fontSize: '0.78rem', color: '#0369a1' }}
+            >
+              {summarizing ? 'Đang tải tin & tóm tắt…' : summaryDone ? 'Xong!' : 'Tóm tắt AI'}
+            </Button>
+          )}
+
+          {ch.status === 'active' && ch.post_count > 0 && (
+            <Button
+              size="small"
+              onClick={handleTogglePosts}
+              sx={{ textTransform: 'none', fontSize: '0.78rem', color: 'text.secondary' }}
+            >
+              {postsOpen ? 'Ẩn tin' : `Xem tin${unread > 0 ? ` (${unread} mới)` : ''}`}
+            </Button>
+          )}
+        </Stack>
+
+        <Tooltip title="Hủy đăng ký">
+          <IconButton size="small" color="error" onClick={() => onUnsubscribe(ch)}>
+            <DeleteOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </CardActions>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+export default function DashboardPage() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const [channels, setChannels] = useState([]);
+  const [loadingChannels, setLoadingChannels] = useState(true);
+  const [toDelete, setToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [snack, setSnack] = useState({ open: false, msg: '', severity: 'info' });
+
+  // Bulk import state
+  const [bulkInput, setBulkInput] = useState('');
+  const [bulkAdding, setBulkAdding] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null); // { added, skipped, errors, results }
+
+  // Per-channel quick-subscribe (suggestions)
+  const [quickSubscribing, setQuickSubscribing] = useState(new Set()); // Set of usernames in flight
+
+  // Channel catalog (106 curated channels from channel.json, grouped by category)
+  const [catalog, setCatalog] = useState([]);       // [{category, channels[]}]
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [activeCategory, setActiveCategory] = useState(null);
+
+  const loadDiscover = useCallback(async () => {
+    setCatalogLoading(true);
+    try {
+      const data = await apiGet('/user/channels/catalog');
+      setCatalog(Array.isArray(data) ? data : []);
+    } catch (_) {}
+    finally { setCatalogLoading(false); }
+  }, []);
+
+  useEffect(() => { loadDiscover(); }, [loadDiscover]);
+
+  const loadChannels = useCallback(async (silent = false) => {
+    if (!silent) setLoadingChannels(true);
+    try {
+      const data = await apiGet('/user/channels');
+      setChannels(Array.isArray(data) ? data : []);
+    } catch (e) {
+      if (!silent) setSnack({ open: true, msg: `Không tải được danh sách kênh: ${e.message}`, severity: 'error' });
+    } finally {
+      if (!silent) setLoadingChannels(false);
+    }
+  }, []);
+
+  useEffect(() => { loadChannels(); }, [loadChannels]);
+
+  // ── Bulk import ─────────────────────────────────────────────────────────────
+  const handleBulkAdd = async () => {
+    // Parse comma/newline/space-separated links
+    const links = bulkInput
+      .split(/[\s,;|\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!links.length) return;
+
+    setBulkAdding(true);
+    setBulkResult(null);
+    try {
+      if (links.length === 1) {
+        // Use single endpoint for single link
+        const res = await apiPost('/user/channels', { channel_link: links[0] });
+        setBulkResult({ added: 1, skipped: 0, errors: 0, results: [{ ...res, status: res.status }] });
+      } else {
+        const res = await apiPost('/user/channels/bulk', { channel_links: links });
+        setBulkResult({ ...res.summary, results: res.results });
+      }
+      setBulkInput('');
+      loadChannels();
+    } catch (err) {
+      // 409 from single endpoint
+      if (err.message?.includes('đã đăng ký')) {
+        setBulkResult({ added: 0, skipped: 1, errors: 0, results: [{ status: 'duplicate', message: err.message }] });
+      } else {
+        setSnack({ open: true, msg: err.message || 'Lỗi không xác định', severity: 'error' });
+      }
+    } finally {
+      setBulkAdding(false);
+    }
+  };
+
+  // ── Quick subscribe (from suggestions) ─────────────────────────────────────
+  const handleQuickSubscribe = async (channelUsername) => {
+    setQuickSubscribing((prev) => new Set([...prev, channelUsername]));
+    try {
+      await apiPost('/user/channels', { channel_link: `t.me/${channelUsername}` });
+      setSnack({ open: true, msg: `Đã theo dõi @${channelUsername}!`, severity: 'success' });
+      loadChannels();
+      loadDiscover();
+    } catch (err) {
+      if (err.message?.includes('đã đăng ký')) {
+        setSnack({ open: true, msg: 'Bạn đã theo dõi kênh này rồi.', severity: 'info' });
+      } else {
+        setSnack({ open: true, msg: err.message || 'Không thể thêm kênh', severity: 'error' });
+      }
+    } finally {
+      setQuickSubscribing((prev) => { const s = new Set(prev); s.delete(channelUsername); return s; });
+    }
+  };
+
+  // ── Unsubscribe ─────────────────────────────────────────────────────────────
+  const handleConfirmDelete = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      await apiDelete(`/user/channels/${toDelete.username}`);
+      setChannels((prev) => prev.filter((c) => c.username !== toDelete.username));
+      setSnack({ open: true, msg: 'Đã hủy đăng ký kênh.', severity: 'success' });
+    } catch (err) {
+      setSnack({ open: true, msg: `Lỗi: ${err.message}`, severity: 'error' });
+    } finally {
+      setDeleting(false);
+      setToDelete(null);
+    }
+  };
+
+  const handleLogout = async () => { await logout(); navigate('/'); };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <Box sx={{ minHeight: '100vh', bgcolor: '#f9fafb' }}>
+      {/* ── Navbar ── */}
+      <AppBar position="sticky" elevation={0}
+        sx={{ bgcolor: 'white', borderBottom: '1px solid #e5e7eb', color: 'text.primary' }}>
+        <Toolbar gap={2}>
+          <NewspaperIcon sx={{ color: 'primary.main', mr: 1 }} />
+          <Typography variant="h6" fontWeight={700} color="primary" sx={{ flexGrow: 1 }}>
+            NewsBot
+          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Button component={RouterLink} to="/" size="small"
+              sx={{ textTransform: 'none', color: 'text.secondary' }}>
+              Trang công khai
+            </Button>
+            <Typography variant="body2" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
+              Xin chào, <strong>{user?.username}</strong>
+            </Typography>
+            <Tooltip title="Đăng xuất">
+              <IconButton size="small" onClick={handleLogout}>
+                <LogoutIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        </Toolbar>
+      </AppBar>
+
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <Typography variant="h5" fontWeight={800} gutterBottom>
+          Kênh đang theo dõi
+        </Typography>
+        <Typography variant="body2" color="text.secondary" mb={3}>
+          Thêm kênh Telegram để AI tóm tắt nội dung mới nhất mỗi ngày.
+        </Typography>
+
+        {/* ══════════════════════════════════════════════════════════
+            HYBRID ADD PANEL
+            ══════════════════════════════════════════════════════════ */}
+        <Paper elevation={0} sx={{ mb: 4, borderRadius: 3, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+
+          {/* ── Section A: Bulk import ── */}
+          <Box sx={{ p: 3 }}>
+            <Typography variant="subtitle1" fontWeight={700} mb={0.5} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <ContentPasteIcon fontSize="small" color="primary" />
+              Thêm kênh (dán link)
+            </Typography>
+            <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
+              Dán một hoặc nhiều link cùng lúc — phân cách bằng dấu phẩy, Enter, hoặc dấu cách.
+            </Typography>
+
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: { xs: 'wrap', sm: 'nowrap' }, alignItems: 'flex-start' }}>
+              <TextField
+                multiline
+                minRows={1}
+                maxRows={4}
+                size="small"
+                placeholder="t.me/vnexpress, t.me/devvn, @itviec, ..."
+                value={bulkInput}
+                onChange={(e) => { setBulkInput(e.target.value); setBulkResult(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleBulkAdd(); } }}
+                disabled={bulkAdding}
+                sx={{ flexGrow: 1 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start" sx={{ alignSelf: 'flex-start', mt: '6px' }}>
+                      <LinkIcon fontSize="small" sx={{ color: 'text.disabled' }} />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+              <Button
+                variant="contained"
+                onClick={handleBulkAdd}
+                disabled={bulkAdding || !bulkInput.trim()}
+                startIcon={bulkAdding ? <CircularProgress size={14} color="inherit" /> : <AddIcon />}
+                sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none', whiteSpace: 'nowrap', alignSelf: 'flex-start', mt: '1px' }}
+              >
+                {bulkAdding ? 'Đang thêm…' : 'Thêm'}
+              </Button>
+            </Box>
+
+            {/* Bulk result summary */}
+            {bulkResult && (
+              <Collapse in>
+                <Box mt={1.5}>
+                  {(bulkResult.added > 0 || bulkResult.skipped > 0) && (
+                    <Alert severity={bulkResult.errors > 0 ? 'warning' : 'success'} sx={{ borderRadius: 2, mb: 1 }}>
+                      {bulkResult.added > 0 && <><strong>+{bulkResult.added} kênh</strong> đã thêm thành công. </>}
+                      {bulkResult.skipped > 0 && <>{bulkResult.skipped} kênh đã theo dõi trước đó. </>}
+                      {bulkResult.errors > 0 && <>{bulkResult.errors} link không hợp lệ (xem chi tiết bên dưới).</>}
+                    </Alert>
+                  )}
+                  {bulkResult.results?.filter(r => r.status === 'error').map((r, i) => (
+                    <Alert key={i} severity="error" sx={{ borderRadius: 2, mb: 0.5, fontSize: '0.8rem' }}>
+                      <code>{r.channel_link}</code> — {r.message}
+                    </Alert>
+                  ))}
+                </Box>
+              </Collapse>
+            )}
+
+            <Typography variant="caption" color="text.disabled" display="block" mt={1}>
+              Hỗ trợ: <code>t.me/ten_kenh</code> · <code>@ten_kenh</code> · <code>ten_kenh</code>
+            </Typography>
+          </Box>
+        </Paper>
+
+        {/* ══════════════════════════════════════════════════════════
+            DANH MỤC KÊNH GỢI Ý
+            ══════════════════════════════════════════════════════════ */}
+        <Box mb={4}>
+          <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+            <Typography variant="subtitle1" fontWeight={700}>
+              Khám phá kênh theo chủ đề
+            </Typography>
+            <Tooltip title="Làm mới">
+              <IconButton size="small" onClick={loadDiscover} disabled={catalogLoading}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+
+          {catalogLoading ? (
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              {[1,2,3,4,5,6].map(i => <Skeleton key={i} variant="rounded" width={110} height={30} />)}
+            </Box>
+          ) : (
+            <>
+              {/* Category chips — click to expand */}
+              <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: activeCategory ? 2 : 0 }}>
+                {catalog.map((g) => {
+                  const selected = activeCategory === g.category;
+                  return (
+                    <Chip
+                      key={g.category}
+                      label={`${g.category} (${g.channels.length})`}
+                      size="small"
+                      onClick={() => setActiveCategory(selected ? null : g.category)}
+                      color={selected ? 'primary' : 'default'}
+                      variant={selected ? 'filled' : 'outlined'}
+                      sx={{ fontSize: '0.73rem', cursor: 'pointer', fontWeight: selected ? 700 : 400 }}
+                    />
+                  );
+                })}
+              </Box>
+
+              {/* Channels grid — only shown when a category is selected */}
+              <Collapse in={!!activeCategory}>
+                <Grid container spacing={1.5}>
+                  {(catalog.find(g => g.category === activeCategory)?.channels ?? []).map((ch) => {
+                    const isSubscribed = ch.subscribed;
+                    const inFlight = quickSubscribing.has(ch.username);
+                    return (
+                      <Grid item xs={12} sm={6} md={3} key={ch.username}>
+                        <Paper elevation={0} sx={{
+                          p: 1.5, borderRadius: 2, border: '1px solid',
+                          borderColor: isSubscribed ? 'primary.main' : '#e5e7eb',
+                          bgcolor: isSubscribed ? '#f0f7ff' : 'white',
+                          display: 'flex', alignItems: 'center', gap: 1.5,
+                          transition: 'all 0.15s',
+                          cursor: isSubscribed ? 'default' : 'pointer',
+                          '&:hover': !isSubscribed ? { borderColor: 'primary.main', bgcolor: '#f0f7ff', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' } : {},
+                        }}
+                          onClick={() => !isSubscribed && !inFlight && handleQuickSubscribe(ch.username)}
+                        >
+                          <Avatar sx={{ bgcolor: '#e8f4fd', color: '#0088cc', width: 38, height: 38, flexShrink: 0 }}>
+                            <TelegramIcon sx={{ fontSize: 20 }} />
+                          </Avatar>
+                          <Box flex={1} minWidth={0}>
+                            <Typography variant="body2" fontWeight={700} noWrap
+                              color={isSubscribed ? 'primary' : 'text.primary'}>
+                              {ch.display_name || `@${ch.username}`}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" noWrap display="block">
+                              @{ch.username}
+                            </Typography>
+                          </Box>
+                          <Box flexShrink={0}>
+                            {inFlight ? (
+                              <CircularProgress size={20} />
+                            ) : isSubscribed ? (
+                              <Tooltip title="Đang theo dõi">
+                                <CheckIcon sx={{ color: 'primary.main', fontSize: 22 }} />
+                              </Tooltip>
+                            ) : (
+                              <Tooltip title={`Theo dõi @${ch.username}`}>
+                                <AddIcon sx={{ color: '#9ca3af', fontSize: 22 }} />
+                              </Tooltip>
+                            )}
+                          </Box>
+                        </Paper>
+                      </Grid>
+                    );
+                  })}
+                </Grid>
+              </Collapse>
+            </>
+          )}
+        </Box>
+
+        {/* ── Channel list ── */}
+        <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+          <Typography variant="subtitle1" fontWeight={700}>
+            {loadingChannels ? 'Đang tải…' : `${channels.length} kênh đang theo dõi`}
+          </Typography>
+          <Tooltip title="Làm mới">
+            <IconButton size="small" onClick={loadChannels} disabled={loadingChannels}>
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        {loadingChannels ? (
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', md: 'repeat(3,1fr)' } }}>
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} variant="rectangular" height={160} sx={{ borderRadius: 2.5 }} />
+            ))}
+          </Box>
+        ) : channels.length === 0 ? (
+          <Box textAlign="center" py={8} sx={{ bgcolor: 'white', borderRadius: 3, border: '1px dashed #d1d5db' }}>
+            <TelegramIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+            <Typography color="text.secondary" variant="subtitle2">
+              Bạn chưa theo dõi kênh nào.
+            </Typography>
+            <Typography variant="caption" color="text.disabled">
+              Chọn kênh phổ biến bên trên hoặc dán link kênh để bắt đầu.
+            </Typography>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', md: 'repeat(3,1fr)' } }}>
+            {channels.map((ch) => (
+              <ChannelCard key={ch.username} ch={ch} onUnsubscribe={setToDelete} onSummarized={() => loadChannels(true)} />
+            ))}
+          </Box>
+        )}
+      </Container>
+
+      {/* ── Confirm unsubscribe dialog ── */}
+      <Dialog open={!!toDelete} onClose={() => setToDelete(null)}>
+        <DialogTitle>Hủy đăng ký kênh?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Bạn có chắc muốn hủy theo dõi kênh&nbsp;
+            <strong>@{toDelete?.username}</strong>?
+            Tóm tắt của kênh này sẽ không còn hiển thị trên trang của bạn.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setToDelete(null)} sx={{ textTransform: 'none' }}>Hủy</Button>
+          <Button onClick={handleConfirmDelete} color="error" variant="contained" disabled={deleting}
+            sx={{ textTransform: 'none', boxShadow: 'none' }}>
+            {deleting ? <CircularProgress size={16} color="inherit" /> : 'Xác nhận hủy'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Snackbar ── */}
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={4000}
+        onClose={() => setSnack((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={snack.severity} onClose={() => setSnack((s) => ({ ...s, open: false }))}
+          sx={{ borderRadius: 2 }}>
+          {snack.msg}
+        </Alert>
+      </Snackbar>
+    </Box>
+  );
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 import re
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, Depends, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
@@ -23,16 +25,34 @@ from src.api.middleware import (
     log_requests_middleware,
     limiter
 )
-from src.config import get_allowed_origins
+from src.config import get_allowed_origins, GOOGLE_CLIENT_ID
+from src.api.channels import router as channels_router
 from loguru import logger
 
 # Initialize logging first
 setup_logging()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background workers when the API boots; cancel them on shutdown."""
+    from src.ingestion.channel_queue_worker import run_worker, run_refresh_loop
+    pending_task = asyncio.create_task(run_worker())
+    refresh_task = asyncio.create_task(run_refresh_loop())
+    logger.info("Background workers started (pending-queue poller + active-channel refresher).")
+    try:
+        yield
+    finally:
+        pending_task.cancel()
+        refresh_task.cancel()
+        logger.info("Background workers stopped.")
+
+
 app = FastAPI(
     title="MXH Aggregator API",
     description="API tổng hợp tin tức từ Telegram & Twitter với ML Analytics",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 # Setup rate limiting
@@ -49,6 +69,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(channels_router)
 
 
 # =============================================================================
@@ -110,6 +133,92 @@ async def get_current_user_info(token_data=Depends(get_current_user_token_data))
     Useful for frontend to verify token validity and determine role.
     """
     return {"username": token_data.username, "role": token_data.role, "authenticated": True}
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth login
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel as _BM
+
+class GoogleTokenRequest(_BM):
+    id_token: str
+
+
+@app.post("/auth/google", tags=["Authentication"])
+async def google_oauth_login(body: GoogleTokenRequest):
+    """
+    Xác thực bằng Google Sign-In.
+    Frontend gửi id_token từ Google, hệ thống trả về JWT nội bộ.
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=501, detail="Google OAuth chưa được cấu hình trên máy chủ.")
+
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+        id_info = google_id_token.verify_oauth2_token(
+            body.id_token,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Google token không hợp lệ: {exc}")
+
+    google_email: str = id_info.get("email", "")
+    google_name: str = id_info.get("name", "")
+    google_sub: str = id_info.get("sub", "")
+
+    if not google_email:
+        raise HTTPException(status_code=400, detail="Không lấy được email từ tài khoản Google.")
+
+    users_col = get_users_collection()
+    user_doc = users_col.find_one({"email": google_email})
+
+    if user_doc is None:
+        # Auto-create account for new Google users
+        from src.api.auth import get_password_hash
+        import secrets
+        username_base = google_email.split("@")[0].replace(".", "_")[:28]
+        # Ensure uniqueness
+        username = username_base
+        suffix = 1
+        while users_col.find_one({"username": username}):
+            username = f"{username_base}_{suffix}"
+            suffix += 1
+
+        user_doc = {
+            "username": username,
+            "email": google_email,
+            "full_name": google_name or username,
+            "password_hash": get_password_hash(secrets.token_hex(32)),
+            "role": "user",
+            "status": "active",
+            "google_sub": google_sub,
+            "created_at": datetime.utcnow(),
+            "last_login": datetime.utcnow(),
+        }
+        users_col.insert_one(user_doc)
+        logger.info(f"New Google user auto-registered: {username} ({google_email})")
+    else:
+        username = user_doc["username"]
+        users_col.update_one({"_id": user_doc["_id"]}, {"$set": {"last_login": datetime.utcnow()}})
+
+    from src.api.auth import create_access_token
+    from datetime import timedelta
+    from src.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+    role = user_doc.get("role", "user")
+    access_token = create_access_token(
+        {"sub": username, "role": role},
+        expires_delta=timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    logger.info(f"Google login successful: {username}")
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "username": username,
+        "role": role,
+    }
 
 # =============================================================================
 # Public Endpoints

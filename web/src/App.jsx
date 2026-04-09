@@ -13,10 +13,13 @@ import TrendingPage from './pages/admin/TrendingPage.jsx';
 import SettingsPage from './pages/admin/SettingsPage.jsx';
 import UsersPage from './pages/admin/UsersPage.jsx';
 
-// User page
-import NewsPage from './pages/user/NewsPage.jsx';
+// User pages
+import DashboardPage from './pages/user/DashboardPage.jsx';
 
-// Auth page
+// Public page (no auth)
+import PublicHomePage from './pages/public/PublicHomePage.jsx';
+
+// Auth pages
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
 
@@ -67,15 +70,15 @@ function AdminRequired({ children }) {
   const { isAuthenticated, isAdmin, loading } = useAuth();
   if (loading) return <div style={{ padding: 32 }}>Loading...</div>;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (!isAdmin) return <Navigate to="/news" replace />;
+  if (!isAdmin) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
-// Redirect already-logged-in users away from login page
+// Redirect already-logged-in users away from login/register pages
 function GuestOnly({ children }) {
   const { isAuthenticated, isAdmin, loading } = useAuth();
   if (loading) return <div style={{ padding: 32 }}>Loading...</div>;
-  if (isAuthenticated) return <Navigate to={isAdmin ? '/admin' : '/news'} replace />;
+  if (isAuthenticated) return <Navigate to={isAdmin ? '/admin' : '/dashboard'} replace />;
   return children;
 }
 
@@ -98,13 +101,16 @@ function UserRoute({ page }) {
 function AppRoutes() {
   return (
     <Routes>
+      {/* ── Public (no auth required) ────────────────────────── */}
+      <Route path="/"     element={<PublicHomePage />} />
+
       {/* ── Auth ────────────────────────────────────────────── */}
       <Route path="/login"    element={<GuestOnly><LoginPage /></GuestOnly>} />
       <Route path="/register" element={<GuestOnly><RegisterPage /></GuestOnly>} />
 
       {/* ── User routes (role: user or admin) ───────────────── */}
-      <Route path="/"     element={<Navigate to="/news" replace />} />
-      <Route path="/news" element={<UserRoute page={<NewsPage />} />} />
+      <Route path="/dashboard" element={<UserRoute page={<DashboardPage />} />} />
+      <Route path="/news" element={<Navigate to="/" replace />} />
 
       {/* ── Admin routes (role: admin only) ─────────────────── */}
       <Route path="/admin"           element={<AdminRoute page={<OverviewPage />} />} />
@@ -117,8 +123,8 @@ function AppRoutes() {
       {/* Legacy compat */}
       <Route path="/admin/login" element={<Navigate to="/login" replace />} />
 
-      {/* 404 */}
-      <Route path="*" element={<Navigate to="/news" replace />} />
+      {/* 404 → public home */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

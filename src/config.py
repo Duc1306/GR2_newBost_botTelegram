@@ -62,6 +62,9 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # Change in production
 # API Key for external clients (optional)
 API_KEY = os.getenv("API_KEY")  # If set, clients can use this instead of JWT
 
+# Google OAuth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")  # OAuth 2.0 Client ID from Google Console
+
 # Rate Limiting
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))

@@ -39,7 +39,7 @@ export default function RegisterPage() {
         full_name: form.full_name || undefined,
       });
       if (result.success) {
-        navigate('/news', { replace: true });
+        navigate('/dashboard', { replace: true });
       } else {
         setError(result.error || 'Đăng ký thất bại.');
       }
