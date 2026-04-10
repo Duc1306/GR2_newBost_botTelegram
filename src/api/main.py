@@ -1252,7 +1252,8 @@ async def get_public_posts(
     if lang:
         query["lang"] = lang
     if link_only:
-        query["links"] = {"$exists": True, "$ne": []}
+        # Only posts that have at least one external (non-t.me) link
+        query["links"] = {"$elemMatch": {"$regex": "^https?://", "$not": {"$regex": "t\\.me"}}}
 
     if q:
         query["text"] = {"$regex": re.escape(q), "$options": "i"}
@@ -1363,13 +1364,14 @@ async def get_public_post_topics(request: Request):
     pipeline = [
         {
             "$match": {
-                "links": {"$exists": True, "$ne": []},
+                # Only count posts with at least one real external (non-t.me) link
+                "links": {"$elemMatch": {"$regex": "^https?://", "$not": {"$regex": "t\\.me"}}},
                 "topics": {"$exists": True, "$ne": []},
             }
         },
         {"$unwind": "$topics"},
         {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
-        {"$match": {"count": {"$gte": 2}}},
+        {"$match": {"count": {"$gte": 1}}},
         {"$sort": {"count": -1}},
         {"$limit": 30},
     ]

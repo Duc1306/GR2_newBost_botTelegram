@@ -30,6 +30,7 @@ from src.config import (
     OPENAI_MODEL,
 )
 from src.db.mongo import get_db
+from src.models.post import Post
 from src.processing.cleaning import clean_text
 from src.processing.lang import detect_language
 from src.processing.topic_classifier import classify_post_topics
@@ -37,7 +38,7 @@ from src.processing.topic_classifier import classify_post_topics
 POLL_INTERVAL    = int(os.getenv("QUEUE_POLL_INTERVAL", "30"))    # seconds — pending queue poll
 MAX_ATTEMPTS     = int(os.getenv("QUEUE_MAX_ATTEMPTS", "3"))
 SUMMARY_POSTS    = int(os.getenv("SUMMARY_MAX_POSTS", "100"))  # posts fed to AI
-REFRESH_INTERVAL = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "3600"))  # 1 hour between auto-refreshes
+REFRESH_INTERVAL = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "43200"))  # 12 hours = 2× per day
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +106,10 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
             if not text:
                 continue
 
-            post_id = f"tg_{channel_username}_{msg.id}"
-            if posts_col.find_one({"id": post_id}):
-                continue  # already stored
+            links = _links or []
+            dedupe_key = Post.make_dedupe_key(text, links)
+            source_id = str(msg.id)
+            post_id = Post.make_id(channel_username, source_id)  # "telegram:channel:msgid"
 
             lang = detect_language(text)
             topics = classify_post_topics(text)
@@ -116,15 +118,23 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
                 "id": post_id,
                 "platform": "telegram",
                 "source": channel_username,
+                "source_id": source_id,
                 "text": text,
-                "links": _links or [],
+                "links": links,
                 "lang": lang,
                 "topics": topics,
                 "created_at": msg.date.replace(tzinfo=None) if msg.date else datetime.utcnow(),
                 "fetched_at": datetime.utcnow(),
+                "dedupe_key": dedupe_key,
             }
-            posts_col.insert_one(post_doc)
-            saved += 1
+            # upsert by dedupe_key (content hash) — idempotent, works across id format changes
+            result = posts_col.update_one(
+                {"dedupe_key": dedupe_key},
+                {"$setOnInsert": post_doc},
+                upsert=True,
+            )
+            if result.upserted_id:
+                saved += 1
         except Exception as exc:
             logger.warning(f"Skipped message {getattr(msg, 'id', '?')} in {channel_username}: {exc}")
 
@@ -378,9 +388,17 @@ async def refresh_active_channels(db) -> None:
 
 
 async def run_refresh_loop() -> None:
-    """Background loop: refresh all active channels every REFRESH_INTERVAL seconds."""
+    """Background loop: refresh all active channels every REFRESH_INTERVAL seconds.
+    Runs immediately on startup so data is collected right away, then repeats every
+    REFRESH_INTERVAL seconds (default 43200 = 2× per day).
+    """
     db = get_db()
-    logger.info(f"Active-channel refresh loop started (interval: {REFRESH_INTERVAL}s)")
+    logger.info(f"Active-channel refresh loop started (interval: {REFRESH_INTERVAL}s, ~{REFRESH_INTERVAL//3600}h)")
+    # Run immediately on startup — don't wait for the first interval to pass
+    try:
+        await refresh_active_channels(db)
+    except Exception as exc:
+        logger.exception(f"Refresh loop error (initial run): {exc}")
     while True:
         await asyncio.sleep(REFRESH_INTERVAL)
         try:

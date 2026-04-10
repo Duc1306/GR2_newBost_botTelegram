@@ -36,6 +36,8 @@ services:
         sync: false
       - key: TELEGRAM_FETCH_LIMIT
         value: "200"
+      - key: CHANNEL_REFRESH_INTERVAL
+        value: "43200"       # 12 giờ = 2 lần/ngày  (đổi thành 86400 nếu muốn 1 lần/ngày)
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -46,5 +48,37 @@ services:
         value: "60"
       - key: RATE_LIMIT_PER_HOUR
         value: "1000"
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+
+  # ── Cron Job: tự động fetch tin 2 lần/ngày ──────────────────────────────
+  # 1:00 UTC = 8:00 sáng VN | 13:00 UTC = 8:00 tối VN
+  - type: cron
+    name: newsbot-refresh
+    env: python
+    region: singapore
+    plan: free
+    schedule: "0 1,13 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m src.ingestion.run_scheduled_refresh
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: DB_NAME
+        value: newsbot
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_SESSION_STRING
+        sync: false
+      - key: TELEGRAM_FETCH_LIMIT
+        value: "200"
+      - key: TELEGRAM_FETCH_DAYS
+        value: "7"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
       - key: PYTHON_VERSION
         value: "3.11.0"

@@ -4,7 +4,7 @@ import re
 import json
 import asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from src.api.auth import get_current_user
@@ -452,10 +452,12 @@ async def trigger_summarize(
 @router.get("/{channel_username}/posts")
 async def get_channel_posts(
     channel_username: str,
-    limit: int = Query(default=30, le=50),
+    limit: int = Query(default=30, le=100),
+    hours: int = Query(default=24, ge=1, le=168),  # 1h – 7 days; default 24h
     current_username: str = Depends(get_current_user),
 ):
-    """Lấy tin mới nhất của kênh, tin chưa đọc (is_new=True) hiển thị trước."""
+    """Lấy tin mới nhất của kênh trong `hours` giờ gần nhất.
+    Tin chưa đọc (is_new=True) hiển thị trước."""
     db = get_db()
     user_doc = db["users"].find_one({"username": current_username})
     if not user_doc:
@@ -467,19 +469,38 @@ async def get_channel_posts(
     if not sub:
         raise HTTPException(status_code=403, detail="Bạn chưa đăng ký kênh này.")
 
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
     last_seen_at = sub.get("last_seen_at")
     posts = list(
         db["posts"]
-        .find({"source": username}, {"_id": 0, "id": 1, "text": 1, "links": 1, "created_at": 1, "topics": 1})
+        .find(
+            {"source": username, "created_at": {"$gte": cutoff}},
+            {"_id": 0, "id": 1, "text": 1, "links": 1, "created_at": 1, "topics": 1},
+        )
         .sort("created_at", -1)
         .limit(limit)
     )
 
+    read_post_ids = set(sub.get("read_post_ids", []))
+    _epoch = datetime(1970, 1, 1)
     for p in posts:
-        p["is_new"] = bool(last_seen_at is None or p.get("created_at", datetime.min) > last_seen_at)
+        ca = p.get("created_at")
+        # Strip tzinfo if present (MongoDB may return aware datetimes)
+        if ca and hasattr(ca, "tzinfo") and ca.tzinfo is not None:
+            ca = ca.replace(tzinfo=None)
+            p["created_at"] = ca
+        ls = last_seen_at
+        if ls and hasattr(ls, "tzinfo") and ls.tzinfo is not None:
+            ls = ls.replace(tzinfo=None)
+        p["is_new"] = bool(ls is None or (ca or _epoch) > ls)
+        p["is_read"] = p.get("id") in read_post_ids
 
-    # Unread first, then by date
-    posts.sort(key=lambda p: (not p["is_new"], -(p.get("created_at") or datetime.min).timestamp()))
+    # Unread+new first → unread+old → read last, then by date desc
+    posts.sort(key=lambda p: (
+        p.get("is_read", False),          # read posts sink to bottom
+        not p["is_new"],                  # new (unread) before old (unread)
+        -(((p.get("created_at") or _epoch) - _epoch).total_seconds()),
+    ))
     return posts
 
 
@@ -505,3 +526,39 @@ async def mark_channel_seen(
         {"$set": {"last_seen_at": datetime.utcnow()}},
     )
     return {"message": "Đã cập nhật trạng thái đọc."}
+
+
+# ---------------------------------------------------------------------------
+# Mark a single post as read (real-time read tracking)
+# ---------------------------------------------------------------------------
+
+@router.post("/{channel_username}/posts/{post_id:path}/read", status_code=200)
+async def mark_post_read(
+    channel_username: str,
+    post_id: str,
+    current_username: str = Depends(get_current_user),
+):
+    """Đánh dấu 1 bài đã đọc — lưu vào user_channels.read_post_ids."""
+    db = get_db()
+    user_doc = db["users"].find_one({"username": current_username})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    user_id = str(user_doc["_id"])
+    username = channel_username.lstrip("@").lower()
+
+    # Add post_id to set
+    db["user_channels"].update_one(
+        {"user_id": user_id, "channel_username": username},
+        {"$addToSet": {"read_post_ids": post_id}},
+    )
+    # Cap at 500 most-recent to prevent unbounded growth
+    sub = db["user_channels"].find_one(
+        {"user_id": user_id, "channel_username": username},
+        {"read_post_ids": 1},
+    )
+    if sub and len(sub.get("read_post_ids", [])) > 500:
+        db["user_channels"].update_one(
+            {"user_id": user_id, "channel_username": username},
+            {"$set": {"read_post_ids": sub["read_post_ids"][-500:]}},
+        )
+    return {"ok": True}

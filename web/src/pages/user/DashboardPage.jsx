@@ -7,7 +7,7 @@
  *   • Hủy đăng ký kênh
  *   • Nút xem trang tin công khai
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -57,6 +57,9 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import CheckIcon from '@mui/icons-material/Check';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import OpenWithIcon from '@mui/icons-material/OpenWith';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -128,41 +131,47 @@ function StatusBadge({ status }) {
 // Post card (used inside ChannelCard posts panel)
 // ---------------------------------------------------------------------------
 
-function PostCard({ post: p, channelUsername }) {
+function PostCard({ post: p, channelUsername, onRead, isRead }) {
   const [expanded, setExpanded] = useState(false);
   const tgLink = p.id ? `https://t.me/${channelUsername}/${p.id.split('_').at(-1)}` : null;
   const externalLink = p.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
   const primaryTopic = p.topics?.[0];
 
+  const handleRead = () => { if (onRead && p.id) onRead(p.id); };
+
   return (
     <Card elevation={0} sx={{
       borderRadius: 2,
       border: '1px solid',
-      borderColor: p.is_new ? '#bfdbfe' : 'divider',
-      bgcolor: p.is_new ? '#f0f7ff' : 'white',
-      transition: 'box-shadow 0.18s',
-      '&:hover': { boxShadow: '0 4px 14px rgba(0,0,0,0.08)' },
+      borderColor: isRead ? '#e5e7eb' : p.is_new ? '#bfdbfe' : 'divider',
+      bgcolor: isRead ? '#fafafa' : p.is_new ? '#f0f7ff' : 'white',
+      opacity: isRead ? 0.72 : 1,
+      transition: 'box-shadow 0.18s, opacity 0.3s',
+      '&:hover': { boxShadow: '0 4px 14px rgba(0,0,0,0.08)', opacity: 1 },
     }}>
       <CardContent sx={{ pb: 0, pt: 1.5, px: 2 }}>
         {/* Meta row */}
         <Box display="flex" alignItems="center" gap={0.75} mb={0.75} flexWrap="wrap">
-          {p.is_new && (
+          {isRead ? (
+            <Chip label="Đã đọc" size="small"
+              sx={{ height: 18, fontSize: '0.6rem', fontWeight: 600, bgcolor: '#f3f4f6', color: 'text.disabled' }} />
+          ) : p.is_new ? (
             <Chip label="Mới" size="small" color="primary"
               sx={{ height: 18, fontSize: '0.6rem', fontWeight: 700 }} />
-          )}
+          ) : null}
           {primaryTopic && (
             <Chip label={primaryTopic} size="small"
               sx={{ height: 18, fontSize: '0.63rem', fontWeight: 600, bgcolor: '#fef3c7', color: '#92400e' }} />
           )}
           <Typography variant="caption" color="text.disabled"
             title={p.created_at ? new Date(p.created_at).toLocaleString('vi-VN') : ''}>
-            <FiberManualRecordIcon sx={{ fontSize: 7, color: '#2563eb', mr: 0.3, verticalAlign: 'middle' }} />
+            <FiberManualRecordIcon sx={{ fontSize: 7, color: isRead ? '#9ca3af' : '#2563eb', mr: 0.3, verticalAlign: 'middle' }} />
             {timeAgo(p.created_at)}
           </Typography>
         </Box>
 
         {/* Text */}
-        <Typography variant="body2" color="text.secondary" sx={{
+        <Typography variant="body2" color={isRead ? 'text.disabled' : 'text.secondary'} sx={{
           display: '-webkit-box',
           WebkitLineClamp: expanded ? 100 : 5,
           WebkitBoxOrient: 'vertical',
@@ -185,6 +194,7 @@ function PostCard({ post: p, channelUsername }) {
         {tgLink && (
           <Button size="small" startIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
             href={tgLink} target="_blank" rel="noopener noreferrer"
+            onClick={handleRead}
             sx={{ textTransform: 'none', fontSize: '0.75rem', color: '#0369a1', px: 1, py: 0.25 }}>
             Telegram
           </Button>
@@ -193,12 +203,226 @@ function PostCard({ post: p, channelUsername }) {
           <Button size="small" variant="contained"
             endIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
             href={externalLink} target="_blank" rel="noopener noreferrer"
+            onClick={handleRead}
             sx={{ textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1.5, py: 0.35, boxShadow: 'none' }}>
             Đọc bài gốc
           </Button>
         )}
       </CardActions>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Full-summary popup dialog
+// ---------------------------------------------------------------------------
+
+function SummaryDialog({ open, onClose, channelName, summaryDate, summary }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
+  // Parse bullet points (• or -) into array for nicer rendering
+  const lines = summary
+    ? summary.split('\n').map((l) => l.trim()).filter(Boolean)
+    : [];
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="md"
+      fullWidth
+      fullScreen={isMobile}
+      PaperProps={{ sx: { borderRadius: isMobile ? 0 : 3, maxHeight: '90vh' } }}
+    >
+      <DialogTitle sx={{ pb: 1, borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#f0f9ff' }}>
+        <Box display="flex" alignItems="center" gap={1}>
+          <AutoAwesomeIcon sx={{ color: '#0369a1', fontSize: 20 }} />
+          <Box flex={1}>
+            <Typography variant="subtitle1" fontWeight={700} color="#0369a1">
+              Tóm tắt AI — {channelName}
+            </Typography>
+            {summaryDate && (
+              <Typography variant="caption" color="text.secondary">
+                {summaryDate}
+              </Typography>
+            )}
+          </Box>
+          <IconButton size="small" onClick={onClose}>
+            <CheckIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      </DialogTitle>
+
+      <DialogContent sx={{ px: { xs: 2.5, sm: 4 }, py: 2.5 }}>
+        {lines.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">Không có tóm tắt.</Typography>
+        ) : (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+            {lines.map((line, i) => {
+              const isBullet = line.startsWith('•') || line.startsWith('-');
+              const text = isBullet ? line.replace(/^[•-]\s*/, '') : line;
+              return (
+                <Box key={i} display="flex" alignItems="flex-start" gap={1.25}>
+                  <Box sx={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    bgcolor: '#0369a1', mt: '8px', flexShrink: 0,
+                  }} />
+                  <Typography variant="body2" sx={{ lineHeight: 1.75, color: 'text.primary', fontSize: '0.9rem' }}>
+                    {text}
+                  </Typography>
+                </Box>
+              );
+            })}
+          </Box>
+        )}
+      </DialogContent>
+
+      <DialogActions sx={{ px: 3, pb: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+        <Typography variant="caption" color="text.disabled" sx={{ flex: 1 }}>
+          {lines.length} điểm tóm tắt
+        </Typography>
+        <Button onClick={onClose} variant="outlined" size="small" sx={{ textTransform: 'none', borderRadius: 2 }}>
+          Đóng
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Posts popup dialog
+// ---------------------------------------------------------------------------
+
+const HOURS_OPTIONS = [
+  { label: '24 giờ', value: 24 },
+  { label: '3 ngày', value: 72 },
+  { label: '7 ngày', value: 168 },
+];
+
+function PostsDialog({ open, onClose, channelUsername, channelName, initialUnread }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const [hours, setHours] = useState(24);
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [readIds, setReadIds] = useState(() => new Set());
+
+  useEffect(() => {
+    if (!open) return;
+    setLoaded(false);
+    setLoading(true);
+    apiGet(`/user/channels/${channelUsername}/posts?hours=${hours}&limit=100`)
+      .then((data) => {
+        setPosts(data);
+        // Seed readIds from server-side is_read on initial load
+        setReadIds(new Set(data.filter((p) => p.is_read).map((p) => p.id)));
+        setLoaded(true);
+      })
+      .catch(() => { setPosts([]); setLoaded(true); })
+      .finally(() => setLoading(false));
+  }, [open, channelUsername, hours]);
+
+  const handleRead = useCallback((postId) => {
+    if (!postId) return;
+    setReadIds((prev) => {
+      if (prev.has(postId)) return prev;
+      const next = new Set(prev);
+      next.add(postId);
+      return next;
+    });
+    // Persist to backend (fire-and-forget)
+    apiPost(`/user/channels/${channelUsername}/posts/${postId}/read`, {}).catch(() => {});
+  }, [channelUsername]);
+
+  // Re-sort whenever posts or readIds change:
+  // unread+new → unread+old → read (sinks to bottom), then by date desc within each group
+  const sortedPosts = useMemo(() => {
+    return [...posts].sort((a, b) => {
+      const aRead = readIds.has(a.id);
+      const bRead = readIds.has(b.id);
+      if (aRead !== bRead) return aRead ? 1 : -1;
+      if (a.is_new !== b.is_new) return a.is_new ? -1 : 1;
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+  }, [posts, readIds]);
+
+  const unreadCount = sortedPosts.filter((p) => !readIds.has(p.id)).length;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="md"
+      fullWidth
+      fullScreen={isMobile}
+      PaperProps={{ sx: { borderRadius: isMobile ? 0 : 3, maxHeight: '92vh' } }}
+    >
+      <DialogTitle sx={{ pb: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Box display="flex" alignItems="center" gap={1}>
+          <Box flex={1}>
+            <Typography variant="subtitle1" fontWeight={700}>
+              Tin tức — {channelName}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {loaded
+                ? `${sortedPosts.length} bài${unreadCount > 0 ? `, ${unreadCount} chưa đọc` : ' — đã đọc hết'}`
+                : 'Đang tải…'}
+            </Typography>
+          </Box>
+          {/* Time-range toggle */}
+          <Stack direction="row" spacing={0.5}>
+            {HOURS_OPTIONS.map((opt) => (
+              <Button
+                key={opt.value}
+                size="small"
+                variant={hours === opt.value ? 'contained' : 'outlined'}
+                onClick={() => setHours(opt.value)}
+                sx={{ textTransform: 'none', fontSize: '0.72rem', minWidth: 0, px: 1, py: 0.25, borderRadius: 2 }}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </Stack>
+          <IconButton size="small" onClick={onClose} sx={{ ml: 0.5 }}>
+            <CheckIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      </DialogTitle>
+
+      <DialogContent sx={{ px: { xs: 1.5, sm: 2.5 }, py: 2 }}>
+        {loading ? (
+          <Stack spacing={1.5}>
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} variant="rectangular" height={110} sx={{ borderRadius: 2 }} />
+            ))}
+          </Stack>
+        ) : !loaded || sortedPosts.length === 0 ? (
+          <Typography variant="body2" color="text.secondary" textAlign="center" py={4}>
+            Không có bài viết nào trong {HOURS_OPTIONS.find(o => o.value === hours)?.label} qua.
+          </Typography>
+        ) : (
+          <Stack spacing={1.5}>
+            {sortedPosts.map((p, i) => (
+              <PostCard
+                key={p.id || i}
+                post={p}
+                channelUsername={channelUsername}
+                isRead={readIds.has(p.id)}
+                onRead={handleRead}
+              />
+            ))}
+          </Stack>
+        )}
+      </DialogContent>
+
+      <DialogActions sx={{ px: 3, pb: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+        <Button onClick={onClose} variant="outlined" size="small" sx={{ textTransform: 'none', borderRadius: 2 }}>
+          Đóng
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
@@ -212,9 +436,8 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
   const [summaryDone, setSummaryDone] = useState(false);
   const [localSummary, setLocalSummary] = useState(null);
   const [localSummaryDate, setLocalSummaryDate] = useState(null);
-  const [postsOpen, setPostsOpen] = useState(false);
-  const [posts, setPosts] = useState([]);
-  const [postsLoading, setPostsLoading] = useState(false);
+  const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
+  const [postsDialogOpen, setPostsDialogOpen] = useState(false);
 
   const displaySummary = localSummary || ch.latest_summary;
   const displaySummaryDate = localSummaryDate || ch.summary_date;
@@ -249,19 +472,13 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
     }
   };
 
-  const handleTogglePosts = async () => {
-    if (!postsOpen) {
-      setPostsLoading(true);
-      try {
-        const data = await apiGet(`/user/channels/${ch.username}/posts`);
-        setPosts(data);
-        // Mark as seen
-        await apiPost(`/user/channels/${ch.username}/seen`, {});
-        if (onSummarized) onSummarized(); // refresh channel list to reset badge
-      } catch (_) { /* ignore */ }
-      setPostsLoading(false);
-    }
-    setPostsOpen((v) => !v);
+  const handleOpenPosts = async () => {
+    setPostsDialogOpen(true);
+    // Mark as seen so unread badge resets
+    try {
+      await apiPost(`/user/channels/${ch.username}/seen`, {});
+      if (onSummarized) onSummarized();
+    } catch (_) { /* ignore */ }
   };
 
   const unread = ch.unread_count || 0;
@@ -331,32 +548,52 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
             </Typography>
           </Box>
         ) : displaySummary ? (
-          <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.5, mb: 1 }}>
-            <Box display="flex" alignItems="center" gap={0.5} mb={0.5}>
-              <AutoAwesomeIcon sx={{ fontSize: 14, color: '#0369a1' }} />
-              <Typography variant="caption" fontWeight={700} color="#0369a1">
-                Tóm tắt AI{displaySummaryDate ? ` – ${displaySummaryDate}` : ''}
+          <>
+            <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.5, mb: 1 }}>
+              <Box display="flex" alignItems="center" gap={0.5} mb={0.5}>
+                <AutoAwesomeIcon sx={{ fontSize: 14, color: '#0369a1' }} />
+                <Typography variant="caption" fontWeight={700} color="#0369a1">
+                  Tóm tắt AI{displaySummaryDate ? ` – ${displaySummaryDate}` : ''}
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="text.secondary"
+                sx={{
+                  display: '-webkit-box',
+                  WebkitLineClamp: expanded ? 100 : 5,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                  lineHeight: 1.6,
+                  fontSize: '0.82rem',
+                  whiteSpace: 'pre-line',
+                }}>
+                {displaySummary}
               </Typography>
+              <Box display="flex" alignItems="center" gap={0.5} mt={0.5}>
+                {displaySummary.length > 200 && (
+                  <Button size="small" onClick={() => setExpanded((e) => !e)}
+                    sx={{ textTransform: 'none', fontSize: '0.73rem', p: 0, minWidth: 0 }}>
+                    {expanded ? 'Thu gọn' : 'Xem thêm'}
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  startIcon={<OpenWithIcon sx={{ fontSize: '12px !important' }} />}
+                  onClick={() => setSummaryDialogOpen(true)}
+                  sx={{ textTransform: 'none', fontSize: '0.73rem', ml: 'auto', color: '#0369a1' }}
+                >
+                  Xem đầy đủ
+                </Button>
+              </Box>
             </Box>
-            <Typography variant="body2" color="text.secondary"
-              sx={{
-                display: '-webkit-box',
-                WebkitLineClamp: expanded ? 100 : 5,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                lineHeight: 1.6,
-                fontSize: '0.82rem',
-                whiteSpace: 'pre-line',
-              }}>
-              {displaySummary}
-            </Typography>
-            {displaySummary.length > 200 && (
-              <Button size="small" onClick={() => setExpanded((e) => !e)}
-                sx={{ textTransform: 'none', fontSize: '0.73rem', p: 0, mt: 0.5, minWidth: 0 }}>
-                {expanded ? 'Thu gọn' : 'Xem thêm'}
-              </Button>
-            )}
-          </Box>
+
+            <SummaryDialog
+              open={summaryDialogOpen}
+              onClose={() => setSummaryDialogOpen(false)}
+              channelName={ch.display_name || `@${ch.username}`}
+              summaryDate={displaySummaryDate}
+              summary={displaySummary}
+            />
+          </>
         ) : ch.status === 'active' && (
           <Box sx={{ bgcolor: '#fafafa', borderRadius: 1.5, p: 1.5, mb: 1, textAlign: 'center' }}>
             <Typography variant="caption" color="text.disabled">
@@ -364,27 +601,6 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
             </Typography>
           </Box>
         )}
-
-        {/* Posts panel */}
-        <Collapse in={postsOpen}>
-          <Box sx={{ mt: 1, mb: 1 }}>
-            {postsLoading ? (
-              <Stack spacing={1}>
-                {[1,2,3].map(i => <Skeleton key={i} variant="rectangular" height={90} sx={{ borderRadius: 2 }} />)}
-              </Stack>
-            ) : posts.length === 0 ? (
-              <Typography variant="caption" color="text.disabled" display="block" textAlign="center" py={2}>
-                Chưa có bài viết nào.
-              </Typography>
-            ) : (
-              <Stack spacing={1.25}>
-                {posts.map((p, i) => (
-                  <PostCard key={p.id || i} post={p} channelUsername={ch.username} />
-                ))}
-              </Stack>
-            )}
-          </Box>
-        </Collapse>
 
         {/* Stats row */}
         <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
@@ -435,10 +651,10 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
           {ch.status === 'active' && ch.post_count > 0 && (
             <Button
               size="small"
-              onClick={handleTogglePosts}
+              onClick={handleOpenPosts}
               sx={{ textTransform: 'none', fontSize: '0.78rem', color: 'text.secondary' }}
             >
-              {postsOpen ? 'Ẩn tin' : `Xem tin${unread > 0 ? ` (${unread} mới)` : ''}`}
+              {`Xem tin${unread > 0 ? ` (${unread} mới)` : ''}`}
             </Button>
           )}
         </Stack>
@@ -449,6 +665,14 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
           </IconButton>
         </Tooltip>
       </CardActions>
+
+      <PostsDialog
+        open={postsDialogOpen}
+        onClose={() => setPostsDialogOpen(false)}
+        channelUsername={ch.username}
+        channelName={ch.display_name || `@${ch.username}`}
+        initialUnread={unread}
+      />
     </Card>
   );
 }

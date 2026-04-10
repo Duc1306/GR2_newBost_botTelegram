@@ -93,10 +93,13 @@ const SENTIMENT_COLOR = {
 
 // ─── Article Card (link-only) ────────────────────────────────────────────────
 
-function ArticleCard({ post }) {
+function ArticleCard({ post, selectedTopic }) {
   const externalLink = post.links?.find((l) => !l.includes('t.me') && l.startsWith('http'));
   const title = post.full_article?.title || null;
-  const primaryTopic = post.topics?.[0];
+  // Show the actively-filtered topic as the primary chip so it always matches the selected filter
+  const primaryTopic = (selectedTopic && post.topics?.includes(selectedTopic))
+    ? selectedTopic
+    : post.topics?.[0];
 
   return (
     <Card
@@ -971,7 +974,7 @@ function ArticlesTab() {
         <Fade in>
           <Box>
             {displayPosts.map((post, idx) => (
-              <ArticleCard key={post._id || idx} post={post} />
+              <ArticleCard key={post._id || idx} post={post} selectedTopic={selectedTopic} />
             ))}
             {hasMore && (
               <Box textAlign="center" mt={2} mb={4}>
