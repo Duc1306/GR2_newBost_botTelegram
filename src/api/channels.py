@@ -16,6 +16,83 @@ router = APIRouter(prefix="/user/channels", tags=["Channel Subscriptions"])
 # Path to the channel catalog JSON (relative to project root)
 _CATALOG_PATH = Path(__file__).resolve().parents[2] / "channel.json"
 
+
+# ---------------------------------------------------------------------------
+# Background task: trigger channel_queue_worker cho kênh mới
+# ---------------------------------------------------------------------------
+
+async def _trigger_channel_processing(username: str) -> None:
+    """
+    Bước 3 — Trigger Worker:
+    Chạy process kênh mới ngay trong background khi user subscribe,
+    thay vì chờ poll 30 giây của channel_queue_worker.
+    
+    Với X/Twitter: cào tweet ngay qua Apify.
+    Với Telegram  : đẩy vào pending_channels (worker tự poll).
+    """
+    db = get_db()
+    channels_col = db["channels"]
+
+    def _mark_active(uname: str, post_count: int = 0) -> None:
+        channels_col.update_one(
+            {"username": uname},
+            {"$set": {
+                "status": "active",
+                "processed_at": __import__("datetime").datetime.utcnow(),
+                "error_message": None,
+                "post_count": post_count,
+            }},
+        )
+
+    def _mark_error(uname: str, msg: str) -> None:
+        channels_col.update_one(
+            {"username": uname},
+            {"$set": {"status": "error", "error_message": msg}},
+        )
+
+    try:
+        if username.startswith("xkw:"):         # X keyword / hashtag search
+            kw = username[4:]
+            logger.info(f"[Subscribe-Trigger] Bắt đầu cào X keyword: #{kw}")
+            from src.ingestion.x_worker import ingest_once
+            from src.ingestion.channel_queue_worker import _generate_summary, _save_summary
+            import re as _re
+            saved = await ingest_once(mode="keyword", keywords=[kw], max_items=50)
+            total = db["posts"].count_documents({
+                "platform": "twitter",
+                "text": {"$regex": _re.escape(kw), "$options": "i"},
+            })
+            _mark_active(username, total)
+            logger.info(f"[Subscribe-Trigger] xkw:{kw} → active ({total} posts)")
+            # Generate AI summary
+            summary = await _generate_summary(username, db)
+            if summary:
+                _save_summary(username, summary, total, db)
+                logger.info(f"[Subscribe-Trigger] xkw:{kw} summary saved")
+        elif username.startswith("x:"):         # X/Twitter account
+            real_username = username[2:]        # bỏ prefix "x:"
+            logger.info(f"[Subscribe-Trigger] Bắt đầu cào X account: @{real_username}")
+            from src.ingestion.x_worker import ingest_once
+            from src.ingestion.channel_queue_worker import _generate_summary, _save_summary
+            saved = await ingest_once(mode="user", usernames=[real_username], max_items=50)
+            total = db["posts"].count_documents({"source": username})
+            _mark_active(username, total)
+            logger.info(f"[Subscribe-Trigger] x:{real_username} → active ({total} posts)")
+            # Generate AI summary
+            summary = await _generate_summary(username, db)
+            if summary:
+                _save_summary(username, summary, total, db)
+                logger.info(f"[Subscribe-Trigger] x:{real_username} summary saved")
+        else:                                   # Telegram channel
+            # channel_queue_worker.py đang poll pending_channels rồi
+            # — chỉ log, không cần làm gì thêm
+            logger.info(f"[Subscribe-Trigger] Kênh Telegram '{username}' đã vào pending_channels, worker sẽ xử lý trong <30 giây")
+    except Exception as e:
+        # Không được raise trong background task — chỉ log
+        logger.error(f"[Subscribe-Trigger] Lỗi khi trigger worker cho '{username}': {e}")
+        if username.startswith(("x:", "xkw:")):
+            _mark_error(username, str(e))
+
 # ---------------------------------------------------------------------------
 # Catalog: all 106 curated channels from channel.json, grouped by category
 # ---------------------------------------------------------------------------
@@ -112,34 +189,97 @@ _TGLINK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# x.com/user  hoặc  twitter.com/user
+_XLINK_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,50})",
+    re.IGNORECASE,
+)
+
+# #hashtag hoặc x:#hashtag  →  X keyword search
+_XHASHTAG_RE = re.compile(r"^(?:x:)?#(\S+)$", re.IGNORECASE)
+
+
+def parse_channel_input(raw: str) -> tuple[str, str]:
+    """
+    Parse input từ user, trả về (username, platform).
+
+    Input hỗ trợ:
+      Telegram : t.me/vnexpress  |  @vnexpress  |  vnexpress
+      X user   : x.com/TechCrunch  |  twitter.com/TechCrunch
+      X keyword: #bitcoin  |  #AI  |  x:#ReactJS
+
+    Phân biệt nội bộ:
+      - Telegram username lưu thẳng ("vnexpress")
+      - X user    lưu với prefix "x:"   ("x:TechCrunch")
+      - X keyword lưu với prefix "xkw:" ("xkw:bitcoin")
+    """
+    raw = raw.strip()
+
+    # X hashtag / keyword search  (#bitcoin, x:#AI)
+    mh = _XHASHTAG_RE.match(raw)
+    if mh:
+        kw = mh.group(1)
+        return f"xkw:{kw}", "twitter"
+
+    # X / Twitter user link
+    mx = _XLINK_RE.match(raw)
+    if mx:
+        username = mx.group(1).lstrip("@")
+        return f"x:{username}", "twitter"
+
+    # Telegram link / @handle / plain username
+    mt = _TGLINK_RE.match(raw)
+    if mt:
+        username = (mt.group(1) or mt.group(2) or mt.group(3)).lstrip("@").lower()
+        return username, "telegram"
+
+    raise HTTPException(
+        status_code=422,
+        detail="Link không hợp lệ. Dùng: t.me/ten_kenh, @ten_kenh, x.com/user, twitter.com/user, hoặc #hashtag",
+    )
+
 
 def parse_channel_username(raw: str) -> str:
-    """Extract bare username from a t.me link, @handle, or plain username."""
-    raw = raw.strip()
-    m = _TGLINK_RE.match(raw)
-    if not m:
-        raise HTTPException(
-            status_code=422,
-            detail="Link kênh không hợp lệ. Dùng định dạng: t.me/ten_kenh hoặc @ten_kenh",
-        )
-    username = m.group(1) or m.group(2) or m.group(3)
-    return username.lstrip("@").lower()
+    """Backward-compatible wrapper — chỉ dùng cho Telegram."""
+    username, _ = parse_channel_input(raw)
+    return username
+
+
+def _normalize_username(raw: str) -> str:
+    """Normalize channel username for DB lookup.
+    Telegram: lowercase. x:/xkw: prefixes: preserve original case.
+    """
+    s = raw.lstrip("@")
+    if s.startswith(("x:", "xkw:")):
+        return s
+    return s.lower()
 
 
 def normalize_link(username: str) -> str:
+    """Tạo display link từ username (có prefix x:, xkw: hoặc không)."""
+    if username.startswith("xkw:"):
+        from urllib.parse import quote
+        return f"x.com/search?q={quote('#' + username[4:])}"
+    if username.startswith("x:"):
+        return f"x.com/{username[2:]}"
     return f"t.me/{username}"
 
 
 def _subscribe_one(db, user_id: str, raw_link: str) -> dict:
     """
-    Core subscribe logic. Returns a result dict with status/message.
+    Core subscribe logic (Bước 1 + 2). Returns a result dict with status/message.
     Raises HTTPException on hard errors (bad link format, DB errors).
     Returns {"status": "duplicate"} if already subscribed (soft skip).
+
+    Bước 1 — De-duplication: kiểm tra kênh đã có trong DB chưa.
+    Bước 2 — Subscription: lưu quan hệ user ↔ channel vào user_channels.
+    (Bước 3 — Trigger Worker: do endpoint gọi _trigger_channel_processing qua BackgroundTasks)
     """
     channels_col = db["channels"]
     user_channels_col = db["user_channels"]
 
-    username = parse_channel_username(raw_link)
+    # parse — tự nhận diện Telegram hay X
+    username, platform = parse_channel_input(raw_link)
     channel_link = normalize_link(username)
 
     # Already subscribed? → soft skip
@@ -152,16 +292,19 @@ def _subscribe_one(db, user_id: str, raw_link: str) -> dict:
         now = datetime.utcnow()
         channel_doc = {
             "channel_link": channel_link, "username": username,
+            "platform": platform,                # "telegram" hoặc "twitter"
             "display_name": None, "status": "pending",
             "added_at": now, "processed_at": None,
             "error_message": None, "post_count": 0,
         }
         result = channels_col.insert_one(channel_doc)
         channel_doc["_id"] = result.inserted_id
-        db["pending_channels"].insert_one({
-            "channel_username": username, "channel_link": channel_link,
-            "queued_at": now, "attempts": 0,
-        })
+        # Telegram cần queue riêng; X sẽ được trigger trực tiếp qua BackgroundTasks
+        if platform == "telegram":
+            db["pending_channels"].insert_one({
+                "channel_username": username, "channel_link": channel_link,
+                "queued_at": now, "attempts": 0,
+            })
 
     user_channels_col.insert_one({
         "user_id": user_id, "channel_username": username,
@@ -186,9 +329,10 @@ def _subscribe_one(db, user_id: str, raw_link: str) -> dict:
 @router.post("", status_code=201)
 async def subscribe_channel(
     body: SubscribeChannelRequest,
+    background_tasks: BackgroundTasks,
     current_username: str = Depends(get_current_user),
 ):
-    """Đăng ký một kênh Telegram để AI tóm tắt hàng ngày."""
+    """Đăng ký một kênh Telegram/X để AI tóm tắt hàng ngày."""
     db = get_db()
     user_doc = db["users"].find_one({"username": current_username})
     if not user_doc:
@@ -198,6 +342,10 @@ async def subscribe_channel(
     result = _subscribe_one(db, user_id, body.channel_link)
     if result["status"] == "duplicate":
         raise HTTPException(status_code=409, detail=result["message"])
+
+    # Bước 3 — Trigger Worker ngay nếu là nguồn mới hoàn toàn
+    if result["status"] == "pending":
+        background_tasks.add_task(_trigger_channel_processing, result["username"])
     return result
 
 
@@ -280,14 +428,24 @@ async def list_subscribed_channels(
 
         # Unread count: posts since user last viewed this channel
         last_seen_at = sub.get("last_seen_at")
-        total_post_count = db["posts"].count_documents({"source": ch_username})
-        if last_seen_at:
-            unread_count = db["posts"].count_documents({
-                "source": ch_username,
-                "created_at": {"$gt": last_seen_at},
-            })
+        # xkw: channels match by keyword in text (posts have source = "x:authorname")
+        if ch_username.startswith("xkw:"):
+            kw = ch_username[4:]
+            kw_query: dict = {"platform": "twitter", "text": {"$regex": re.escape(kw), "$options": "i"}}
+            total_post_count = db["posts"].count_documents(kw_query)
+            if last_seen_at:
+                unread_count = db["posts"].count_documents({**kw_query, "created_at": {"$gt": last_seen_at}})
+            else:
+                unread_count = total_post_count
         else:
-            unread_count = total_post_count
+            total_post_count = db["posts"].count_documents({"source": ch_username})
+            if last_seen_at:
+                unread_count = db["posts"].count_documents({
+                    "source": ch_username,
+                    "created_at": {"$gt": last_seen_at},
+                })
+            else:
+                unread_count = total_post_count
 
         result.append(
             ChannelWithSummary(
@@ -328,9 +486,14 @@ async def unsubscribe_channel(
         raise HTTPException(status_code=404, detail="User not found")
     user_id = str(user_doc["_id"])
 
+    # Telegram usernames are stored lowercase; x:/xkw: prefixes preserve original case
+    raw = channel_username.lstrip("@")
+    if not raw.startswith(("x:", "xkw:")):
+        raw = raw.lower()
+
     deleted = user_channels_col.delete_one({
         "user_id": user_id,
-        "channel_username": channel_username.lstrip("@").lower(),
+        "channel_username": raw,
     })
     if deleted.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -358,7 +521,7 @@ async def get_channel_summary(
         raise HTTPException(status_code=404, detail="User not found")
     user_id = str(user_doc["_id"])
 
-    username = channel_username.lstrip("@").lower()
+    username = _normalize_username(channel_username)
 
     # Ensure user is subscribed
     sub = user_channels_col.find_one({"user_id": user_id, "channel_username": username})
@@ -379,43 +542,78 @@ async def get_channel_summary(
 # ---------------------------------------------------------------------------
 
 async def _run_summarize(channel_username: str) -> None:
-    """Background task: clean old posts → push channel to pending queue → worker re-fetches & summarizes.
+    """Background task: re-fetch and regenerate AI summary for a channel.
 
-    NOTE: We intentionally do NOT create a Telethon client here because the channel-queue
-    worker already runs a managed session in the same process. Creating a second concurrent
-    client on the same session file causes auth conflicts and failed fetches.
+    - Telegram : push to pending_channels (worker re-fetches via Telethon)
+    - X user/keyword : directly re-ingest via x_worker then summarize
     """
-    from src.ingestion.channel_queue_worker import FETCH_DAYS
+    from src.ingestion.channel_queue_worker import FETCH_DAYS, _generate_summary, _save_summary
     from datetime import timedelta
     db = get_db()
+
+    # Remove any existing summary so the frontend can detect when a new one arrives
+    db["channel_summaries"].delete_many({"channel_username": channel_username})
+
     try:
-        # 1. Clean posts older than FETCH_DAYS
-        cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
-        deleted = db["posts"].delete_many({
-            "source": channel_username,
-            "created_at": {"$lt": cutoff},
-        })
-        if deleted.deleted_count:
-            logger.info(f"Cleaned {deleted.deleted_count} old posts for @{channel_username}")
+        if channel_username.startswith("xkw:"):
+            import re as _re
+            kw = channel_username[4:]
+            from src.ingestion.x_worker import ingest_once
+            logger.info(f"[Summarize] Re-fetching X keyword: #{kw}")
+            await ingest_once(mode="keyword", keywords=[kw], max_items=100)
+            total = db["posts"].count_documents({
+                "platform": "twitter",
+                "text": {"$regex": _re.escape(kw), "$options": "i"},
+            })
+            summary = await _generate_summary(channel_username, db)
+            if summary:
+                _save_summary(channel_username, summary, total, db)
+                db["channels"].update_one(
+                    {"username": channel_username},
+                    {"$set": {"post_count": total, "status": "active"}},
+                )
+                logger.info(f"[Summarize] xkw:{kw} summary saved ({total} posts)")
 
-        # 2. Remove any existing summary so the frontend can detect when a new one arrives
-        db["channel_summaries"].delete_many({"channel_username": channel_username})
+        elif channel_username.startswith("x:"):
+            real_username = channel_username[2:]
+            from src.ingestion.x_worker import ingest_once
+            logger.info(f"[Summarize] Re-fetching X account: @{real_username}")
+            await ingest_once(mode="user", usernames=[real_username], max_items=100)
+            total = db["posts"].count_documents({"source": channel_username})
+            summary = await _generate_summary(channel_username, db)
+            if summary:
+                _save_summary(channel_username, summary, total, db)
+                db["channels"].update_one(
+                    {"username": channel_username},
+                    {"$set": {"post_count": total, "status": "active"}},
+                )
+                logger.info(f"[Summarize] x:{real_username} summary saved ({total} posts)")
 
-        # 3. Push channel back into the pending queue — worker will re-fetch + re-summarize
-        db["pending_channels"].update_one(
-            {"channel_username": channel_username},
-            {"$set": {
-                "channel_username": channel_username,
-                "attempts": 0,
-                "next_attempt": datetime.utcnow(),
-                "queued_at": datetime.utcnow(),
-            }},
-            upsert=True,
-        )
-        # Keep channel status as-is (active) — worker will update when done
-        logger.info(f"@{channel_username} re-queued for fresh fetch + summary (worker will process)")
+        else:
+            # Telegram: clean old posts then push to pending queue
+            cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
+            deleted = db["posts"].delete_many({
+                "source": channel_username,
+                "created_at": {"$lt": cutoff},
+            })
+            if deleted.deleted_count:
+                logger.info(f"Cleaned {deleted.deleted_count} old posts for @{channel_username}")
+
+            # Push channel back into the pending queue — worker will re-fetch + re-summarize
+            db["pending_channels"].update_one(
+                {"channel_username": channel_username},
+                {"$set": {
+                    "channel_username": channel_username,
+                    "attempts": 0,
+                    "next_attempt": datetime.utcnow(),
+                    "queued_at": datetime.utcnow(),
+                }},
+                upsert=True,
+            )
+            logger.info(f"@{channel_username} re-queued for fresh fetch + summary (worker will process)")
+
     except Exception as exc:
-        logger.warning(f"Re-queue failed for @{channel_username}: {exc}")
+        logger.warning(f"Re-summarize failed for @{channel_username}: {exc}")
 
 
 @router.post("/{channel_username}/summarize", status_code=202)
@@ -430,7 +628,7 @@ async def trigger_summarize(
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
-    username = channel_username.lstrip("@").lower()
+    username = _normalize_username(channel_username)
     sub = db["user_channels"].find_one({"user_id": str(user_doc["_id"]), "channel_username": username})
     if not sub:
         raise HTTPException(status_code=403, detail="Bạn chưa đăng ký kênh này.")
@@ -464,17 +662,30 @@ async def get_channel_posts(
         raise HTTPException(status_code=404, detail="User not found")
     user_id = str(user_doc["_id"])
 
-    username = channel_username.lstrip("@").lower()
+    username = _normalize_username(channel_username)
     sub = db["user_channels"].find_one({"user_id": user_id, "channel_username": username})
     if not sub:
         raise HTTPException(status_code=403, detail="Bạn chưa đăng ký kênh này.")
 
     cutoff = datetime.utcnow() - timedelta(hours=hours)
     last_seen_at = sub.get("last_seen_at")
+
+    # xkw: channels: posts stored with source="x:author", match by keyword text
+    if username.startswith("xkw:"):
+        import re as _re
+        kw = username[4:]
+        _posts_query: dict = {
+            "platform": "twitter",
+            "text": {"$regex": _re.escape(kw), "$options": "i"},
+            "created_at": {"$gte": cutoff},
+        }
+    else:
+        _posts_query = {"source": username, "created_at": {"$gte": cutoff}}
+
     posts = list(
         db["posts"]
         .find(
-            {"source": username, "created_at": {"$gte": cutoff}},
+            _posts_query,
             {"_id": 0, "id": 1, "text": 1, "links": 1, "created_at": 1, "topics": 1},
         )
         .sort("created_at", -1)
@@ -520,7 +731,7 @@ async def mark_channel_seen(
         raise HTTPException(status_code=404, detail="User not found")
     user_id = str(user_doc["_id"])
 
-    username = channel_username.lstrip("@").lower()
+    username = _normalize_username(channel_username)
     db["user_channels"].update_one(
         {"user_id": user_id, "channel_username": username},
         {"$set": {"last_seen_at": datetime.utcnow()}},
@@ -544,7 +755,7 @@ async def mark_post_read(
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
     user_id = str(user_doc["_id"])
-    username = channel_username.lstrip("@").lower()
+    username = _normalize_username(channel_username)
 
     # Add post_id to set
     db["user_channels"].update_one(

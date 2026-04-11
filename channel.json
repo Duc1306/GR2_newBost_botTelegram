@@ -1,5 +1,39 @@
 [
     {
+        "_comment": "=== X / Twitter accounts (platform: twitter) ===",
+        "platform": "twitter",
+        "username": "VNExpress",
+        "link": "https://x.com/VNExpress",
+        "category": "Thế giới",
+        "topic_hint": "general",
+        "is_active": true
+    },
+    {
+        "platform": "twitter",
+        "username": "TechCrunch",
+        "link": "https://x.com/TechCrunch",
+        "category": "Công nghệ",
+        "topic_hint": "tech",
+        "is_active": true
+    },
+    {
+        "platform": "twitter",
+        "username": "coindesk",
+        "link": "https://x.com/coindesk",
+        "category": "Crypto",
+        "topic_hint": "crypto",
+        "is_active": true
+    },
+    {
+        "platform": "twitter",
+        "username": "Reuters",
+        "link": "https://x.com/Reuters",
+        "category": "Kinh tế",
+        "topic_hint": "economy",
+        "is_active": true
+    },
+    {
+        "_comment": "=== Telegram channels (platform: telegram) ===",
         "platform": "telegram",
         "username": "revheadcrypto",
         "link": "https://t.me/revheadcrypto",

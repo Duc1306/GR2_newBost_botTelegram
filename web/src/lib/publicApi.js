@@ -28,13 +28,7 @@ export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false
 
   const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch posts');
-  const data = await res.json();
-
-  // /public/posts returns a plain array; hot-topic endpoint returns an object
-  if (Array.isArray(data)) {
-    return { posts: data, total: data.length };
-  }
-  return data;
+  return res.json();
 }
 
 /**
@@ -47,8 +41,7 @@ export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = ''
   if (q) params.set('q', q);
   const res = await fetch(`${API_BASE}/public/posts?${params}`);
   if (!res.ok) throw new Error('Failed to fetch article posts');
-  const data = await res.json();
-  return Array.isArray(data) ? { posts: data, total: data.length } : data;
+  return res.json();
 }
 
 /**
@@ -58,8 +51,7 @@ export async function searchPublicPosts(q, limit = 20, skip = 0) {
   const params = new URLSearchParams({ q, limit, skip });
   const res = await fetch(`${API_BASE}/public/posts?${params}`);
   if (!res.ok) throw new Error('Search failed');
-  const data = await res.json();
-  return Array.isArray(data) ? { posts: data, total: data.length } : data;
+  return res.json();
 }
 
 /**

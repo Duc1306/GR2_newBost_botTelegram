@@ -495,9 +495,13 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
         {/* Header row */}
         <Box display="flex" alignItems="center" gap={1.5} mb={1}>
           <Box position="relative" flexShrink={0}>
-            <Avatar sx={{ bgcolor: '#e0f2fe', color: '#0369a1', width: 40, height: 40 }}>
-              <TelegramIcon fontSize="small" />
-            </Avatar>
+            {/* Avatar: X (𝕏) for Twitter channels, Telegram bird for others */}
+            {(() => { const isX = ch.username.startsWith('x:') || ch.username.startsWith('xkw:'); return (
+            <Avatar sx={{ bgcolor: isX ? '#000' : '#e0f2fe', color: isX ? '#fff' : '#0369a1', width: 40, height: 40 }}>
+              {isX
+                ? <Typography variant="caption" fontWeight={900} sx={{ fontSize: '1.1rem' }}>𝕏</Typography>
+                : <TelegramIcon fontSize="small" />}
+            </Avatar>); })()}
             {unread > 0 && (
               <Box sx={{
                 position: 'absolute', top: -4, right: -4,
@@ -627,7 +631,7 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
             target="_blank" rel="noopener noreferrer"
             sx={{ textTransform: 'none', fontSize: '0.78rem', color: 'text.secondary' }}
           >
-            Telegram
+            {(ch.username.startsWith('x:') || ch.username.startsWith('xkw:')) ? 'Xem trên X' : 'Telegram'}
           </Button>
 
           {(ch.status === 'active') && (
@@ -833,7 +837,7 @@ export default function DashboardPage() {
           Kênh đang theo dõi
         </Typography>
         <Typography variant="body2" color="text.secondary" mb={3}>
-          Thêm kênh Telegram để AI tóm tắt nội dung mới nhất mỗi ngày.
+          Thêm kênh <strong>Telegram</strong> hoặc tài khoản <strong>X (Twitter)</strong> để AI tóm tắt nội dung mới nhất mỗi ngày.
         </Typography>
 
         {/* ══════════════════════════════════════════════════════════
@@ -848,7 +852,10 @@ export default function DashboardPage() {
               Thêm kênh (dán link)
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>
-              Dán một hoặc nhiều link cùng lúc — phân cách bằng dấu phẩy, Enter, hoặc dấu cách.
+              Dán một hoặc nhiều link cùng lúc — phân cách bằng dấu phẩy, Enter, hoặc dấu cách.<br />
+              <strong>Telegram:</strong> dùng <code>t.me/ten_kenh</code> hoặc <code>@ten_kenh</code> &nbsp;·&nbsp;
+              <strong>X tài khoản:</strong> <code>x.com/username</code> &nbsp;·&nbsp;
+              <strong>X hashtag:</strong> <code>#bitcoin</code>, <code>#AI</code>
             </Typography>
 
             <Box sx={{ display: 'flex', gap: 1.5, flexWrap: { xs: 'wrap', sm: 'nowrap' }, alignItems: 'flex-start' }}>
@@ -857,7 +864,7 @@ export default function DashboardPage() {
                 minRows={1}
                 maxRows={4}
                 size="small"
-                placeholder="t.me/vnexpress, t.me/devvn, @itviec, ..."
+                placeholder="Telegram: t.me/vnexpress, @devvn  ·  X user: x.com/Reuters  ·  X hashtag: #bitcoin, #AI"
                 value={bulkInput}
                 onChange={(e) => { setBulkInput(e.target.value); setBulkResult(null); }}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleBulkAdd(); } }}
@@ -903,7 +910,11 @@ export default function DashboardPage() {
             )}
 
             <Typography variant="caption" color="text.disabled" display="block" mt={1}>
-              Hỗ trợ: <code>t.me/ten_kenh</code> · <code>@ten_kenh</code> · <code>ten_kenh</code>
+              📱 <strong>Telegram:</strong> <code>t.me/ten_kenh</code> · <code>@ten_kenh</code> · <code>ten_kenh</code>
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              🐦 <strong>X tài khoản:</strong> <code>x.com/username</code> · <code>twitter.com/username</code>
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              🔍 <strong>X hashtag:</strong> <code>#bitcoin</code> · <code>#AI</code>
             </Typography>
           </Box>
         </Paper>

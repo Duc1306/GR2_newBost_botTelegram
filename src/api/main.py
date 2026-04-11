@@ -445,17 +445,46 @@ async def get_stats(
         "topics": {"$exists": True, "$ne": []}
     })
 
+    # Count by platform (telegram vs x)
+    platform_pipeline = [
+        {"$match": base_query},
+        {"$group": {"_id": "$platform", "count": {"$sum": 1}}}
+    ]
+    platforms = list(coll.aggregate(platform_pipeline))
+    # Normalise: "twitter" → "x", None/missing → "telegram"
+    _PLATFORM_MAP = {"twitter": "x", "x": "x", "telegram": "telegram"}
+    by_platform: dict = {"telegram": 0, "x": 0}
+    for p in platforms:
+        raw_key = (p["_id"] or "telegram").lower()
+        key = _PLATFORM_MAP.get(raw_key, raw_key)
+        by_platform[key] = by_platform.get(key, 0) + p["count"]
+
+    # Count active channels
+    channels_coll = db["channels"]
+    channel_meta_coll = db["channel_metadata"]
+    # channel_metadata = 108 telegram channels (no status field, all active)
+    active_channels_telegram = channel_meta_coll.count_documents({"platform": "telegram"})
+    # channels collection may have X/Twitter entries with status tracking
+    active_channels_x = channels_coll.count_documents({"status": "active", "platform": {"$in": ["x", "twitter"]}})
+    active_channels_total = active_channels_telegram + active_channels_x
+
     # Latest post theo filter
     latest = coll.find_one(base_query, sort=[("created_at", -1)])
     latest_date = latest["created_at"] if latest else None
 
     return {
         "total_posts": total_filtered,
-        "labeled_posts": labeled_posts_count,  # NEW: unique posts with topics
+        "labeled_posts": labeled_posts_count,
         "filter": base_query,
         "by_source": {s["_id"]: s["count"] for s in sources if s["_id"] is not None},
         "by_language": {l["_id"]: l["count"] for l in languages if l["_id"] is not None},
         "by_topic": {t["_id"]: t["count"] for t in topics if t["_id"] is not None},
+        "by_platform": by_platform,
+        "active_channels": {
+            "total": active_channels_total,
+            "telegram": active_channels_telegram,
+            "x": active_channels_x,
+        },
         "latest_post_date": latest_date
     }
 
@@ -1267,13 +1296,14 @@ async def get_public_posts(
         "created_at": 1, "links": 1, "topics": 1, "lang": 1,
         "full_article": 1, "platform": 1, "media": 1,
     }
+    total = coll.count_documents(query)
     cursor = coll.find(query, projection).sort("created_at", -1).skip(skip).limit(limit)
     posts = []
     for p in cursor:
         p["_id"] = str(p["_id"])
         posts.append(p)
 
-    return posts
+    return {"posts": posts, "total": total}
 
 
 @app.get("/public/hot-topics", tags=["Public"])

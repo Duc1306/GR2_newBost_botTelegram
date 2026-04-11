@@ -56,13 +56,18 @@ export default function OverviewPage() {
   const topicStats = stats?.by_topic || {};
   const totalTopics = Object.keys(topicStats).length;
   const totalSources = stats?.by_source ? Object.keys(stats.by_source).length : 0;
-  // Use the correct labeled_posts field from API (unique posts with topics)
   const labeledPosts = stats?.labeled_posts || 0;
 
-  // Calculate platform stats (all posts are from Telegram since Twitter was removed)
-  const platformStats = {
-    telegram: totalPosts,
-  };
+  // Platform stats from real API data
+  const byPlatform = stats?.by_platform || {};
+  const telegramCount = byPlatform.telegram || 0;
+  const xCount = byPlatform.x || 0;
+
+  // Active channels from real API data
+  const activeChannels = stats?.active_channels || {};
+  const activeTotal = activeChannels.total || 0;
+  const activeTelegram = activeChannels.telegram || 0;
+  const activeX = activeChannels.x || 0;
 
   // Prepare pie chart data
   const topicDistribution = Object.entries(topicStats).map(([name, value]) => ({
@@ -104,34 +109,34 @@ export default function OverviewPage() {
       <Grid container spacing={0} sx={{ mb: 4, mx: 0 }}>
         <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
-            title="Total Posts"
+            title="Tổng bài viết"
             value={totalPosts.toLocaleString()}
-            subtitle="All time"
+            subtitle="Tất cả thời gian"
             icon={ArticleIcon}
           />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
-            title="Topics"
-            value={totalTopics}
-            subtitle="ML Categories"
-            icon={CategoryIcon}
-          />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
-          <StatCard
-            title="Labeled Posts"
+            title="Đã phân loại"
             value={labeledPosts.toLocaleString()}
-            subtitle={`${((labeledPosts / totalPosts) * 100).toFixed(1)}% classified`}
+            subtitle={totalPosts > 0 ? `${((labeledPosts / totalPosts) * 100).toFixed(1)}% có chủ đề` : '0%'}
             icon={LabelIcon}
           />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
           <StatCard
-            title="Sources"
-            value={totalSources}
-            subtitle="Active platforms"
+            title="Kênh đang hoạt động"
+            value={activeTotal.toLocaleString()}
+            subtitle={`${activeTelegram} Telegram · ${activeX} X`}
             icon={SourceIcon}
+          />
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }} sx={{ px: 1 }}>
+          <StatCard
+            title="Chủ đề ML"
+            value={totalTopics}
+            subtitle={`${totalSources} nguồn · ${totalTopics} danh mục`}
+            icon={CategoryIcon}
           />
         </Grid>
       </Grid>
@@ -256,24 +261,44 @@ export default function OverviewPage() {
             }}
           >
             <Typography variant="h6" gutterBottom fontWeight="bold">Platform Split</Typography>
-            <Box sx={{ mt: 4 }}>
+            <Box sx={{ mt: 2 }}>
+              {/* Telegram */}
               <Box sx={{ mb: 3 }}>
-                <Box display="flex" justifyContent="space-between" mb={1}>
-                  <Typography variant="body1">Telegram</Typography>
-                  <Typography variant="body1" fontWeight="bold">
-                    {(platformStats.telegram || 0).toLocaleString()} ({((platformStats.telegram || 0) / (totalPosts || 1) * 100).toFixed(1)}%)
+                <Box display="flex" justifyContent="space-between" mb={0.5}>
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#0088cc' }} />
+                    <Typography variant="body2" fontWeight={600}>Telegram</Typography>
+                  </Box>
+                  <Typography variant="body2" fontWeight="bold">
+                    {telegramCount.toLocaleString()} ({totalPosts > 0 ? ((telegramCount / totalPosts) * 100).toFixed(1) : 0}%)
                   </Typography>
                 </Box>
-                <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 24 }}>
-                  <Box 
-                    sx={{ 
-                      bgcolor: '#0088cc', 
-                      height: '100%', 
-                      borderRadius: 1,
-                      width: `${(platformStats.telegram || 0) / (totalPosts || 1) * 100}%`,
-                    }}
-                  />
+                <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 20, overflow: 'hidden' }}>
+                  <Box sx={{ bgcolor: '#0088cc', height: '100%', borderRadius: 1, width: `${totalPosts > 0 ? (telegramCount / totalPosts) * 100 : 0}%`, transition: 'width 0.5s' }} />
                 </Box>
+                <Typography variant="caption" color="text.disabled">{activeTelegram} kênh active</Typography>
+              </Box>
+              {/* X / Twitter */}
+              <Box sx={{ mb: 3 }}>
+                <Box display="flex" justifyContent="space-between" mb={0.5}>
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#000000' }} />
+                    <Typography variant="body2" fontWeight={600}>X / Twitter</Typography>
+                  </Box>
+                  <Typography variant="body2" fontWeight="bold">
+                    {xCount.toLocaleString()} ({totalPosts > 0 ? ((xCount / totalPosts) * 100).toFixed(1) : 0}%)
+                  </Typography>
+                </Box>
+                <Box sx={{ bgcolor: '#e0e0e0', borderRadius: 1, height: 20, overflow: 'hidden' }}>
+                  <Box sx={{ bgcolor: '#000000', height: '100%', borderRadius: 1, width: `${totalPosts > 0 ? (xCount / totalPosts) * 100 : 0}%`, transition: 'width 0.5s' }} />
+                </Box>
+                <Typography variant="caption" color="text.disabled">{activeX} kênh active</Typography>
+              </Box>
+              {/* Summary */}
+              <Box sx={{ mt: 3, p: 1.5, bgcolor: 'action.hover', borderRadius: 1.5 }}>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Tổng: <strong>{totalPosts.toLocaleString()} bài</strong> · <strong>{activeTotal} kênh active</strong> · {totalTopics} chủ đề
+                </Typography>
               </Box>
             </Box>
           </Box>

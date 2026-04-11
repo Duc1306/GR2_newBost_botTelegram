@@ -33,6 +33,7 @@ import {
   DialogActions,
   Divider,
   Grid,
+  Pagination,
 } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -774,7 +775,7 @@ function ArticlesTab() {
   const [selectedTopic, setSelectedTopic] = useState('');
   const [posts, setPosts] = useState([]);
   const [total, setTotal] = useState(0);
-  const [skip, setSkip] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState('');
@@ -784,6 +785,8 @@ function ArticlesTab() {
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const timerRef = useRef(null);
 
+  const totalPages = Math.max(1, Math.ceil(total / ARTICLES_LIMIT));
+
   useEffect(() => {
     fetchPostTopics()
       .then((d) => setPostTopics(d.topics || []))
@@ -791,14 +794,14 @@ function ArticlesTab() {
       .finally(() => setTopicsLoading(false));
   }, []);
 
-  const loadPosts = useCallback(async (topic, currentSkip, append = false) => {
+  const loadPosts = useCallback(async (topic, currentPage) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchArticlePosts(topic, currentSkip, ARTICLES_LIMIT);
-      const incoming = data.posts || [];
-      setPosts((prev) => (append ? [...prev, ...incoming] : incoming));
-      setTotal(data.total ?? incoming.length);
+      const skip = (currentPage - 1) * ARTICLES_LIMIT;
+      const data = await fetchArticlePosts(topic, skip, ARTICLES_LIMIT);
+      setPosts(data.posts || []);
+      setTotal(data.total ?? (data.posts || []).length);
       setLastUpdate(new Date());
     } catch (e) {
       setError(e.message);
@@ -811,22 +814,22 @@ function ArticlesTab() {
     setSearchQuery('');
     setSearchInput('');
     setSearchResults(null);
-    setSkip(0);
-    loadPosts(selectedTopic, 0);
+    setPage(1);
+    loadPosts(selectedTopic, 1);
   }, [selectedTopic, loadPosts]);
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
-      if (!searchQuery) { setSkip(0); loadPosts(selectedTopic, 0); }
+      if (!searchQuery) loadPosts(selectedTopic, page);
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timerRef.current);
-  }, [selectedTopic, searchQuery, loadPosts]);
+  }, [selectedTopic, searchQuery, page, loadPosts]);
 
-  const handleLoadMore = () => {
-    const newSkip = skip + ARTICLES_LIMIT;
-    setSkip(newSkip);
-    loadPosts(selectedTopic, newSkip, true);
+  const handlePageChange = (newPage) => {
+    setPage(newPage);
+    loadPosts(selectedTopic, newPage);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSearch = async () => {
@@ -850,7 +853,6 @@ function ArticlesTab() {
   const handleClearSearch = () => { setSearchInput(''); setSearchQuery(''); setSearchResults(null); };
 
   const displayPosts = searchResults !== null ? searchResults : posts;
-  const hasMore = searchResults === null && posts.length < total;
 
   return (
     <Box>
@@ -976,20 +978,22 @@ function ArticlesTab() {
             {displayPosts.map((post, idx) => (
               <ArticleCard key={post._id || idx} post={post} selectedTopic={selectedTopic} />
             ))}
-            {hasMore && (
-              <Box textAlign="center" mt={2} mb={4}>
-                <Button
-                  variant="outlined"
-                  onClick={handleLoadMore}
+            {searchResults === null && totalPages > 1 && (
+              <Box display="flex" flexDirection="column" alignItems="center" gap={1} mt={2} mb={4}>
+                <Pagination
+                  count={totalPages}
+                  page={page}
+                  onChange={(e, value) => handlePageChange(value)}
+                  color="primary"
+                  shape="rounded"
                   disabled={loading}
-                  startIcon={loading ? <CircularProgress size={14} /> : null}
-                  sx={{ textTransform: 'none', borderRadius: 3, px: 4 }}
-                >
-                  {loading ? 'Đang tải…' : `Xem thêm (còn ${total - posts.length} bài)`}
-                </Button>
+                />
+                <Typography variant="caption" color="text.disabled">
+                  Trang {page}/{totalPages} · {total} bài · Tự động làm mới sau 60 giây
+                </Typography>
               </Box>
             )}
-            {!hasMore && displayPosts.length > 0 && (
+            {searchResults === null && totalPages <= 1 && displayPosts.length > 0 && (
               <Box textAlign="center" mt={1} mb={4}>
                 <Typography variant="caption" color="text.disabled">
                   Đã hiển thị tất cả · Tự động làm mới sau 60 giây

@@ -1,375 +1,496 @@
-# Tổng Quan Hệ Thống — Nền Tảng Tổng Hợp Tin Tức Tự Động từ Telegram
+# Hướng Dẫn Chạy Dự Án & Luồng Dữ Liệu — NewsBot
 
-## 1. Giới Thiệu
-
-Hệ thống là một **nền tảng tổng hợp và phân loại tin tức tự động** từ các kênh Telegram. Hệ thống thu thập bài viết từ nhiều kênh tin tức, tự động phân loại chủ đề bằng mô hình học máy, lưu trữ vào MongoDB và cung cấp giao diện web để đọc tin và phân tích xu hướng.
+> Tài liệu này bao gồm: cách cài đặt, cách chạy từng thành phần, và sơ đồ chi tiết các luồng dữ liệu (Telegram, X/Twitter, Subscribe).
 
 ---
 
-## 2. Stack Công Nghệ
+## Mục Lục
+
+1. [Quick Start](#1-quick-start)  
+2. [Cấu Trúc Thư Mục Quan Trọng](#2-cấu-trúc-thư-mục-quan-trọng)  
+3. [Cách Chạy Từng Thành Phần](#3-cách-chạy-từng-thành-phần)  
+4. [Luồng Dữ Liệu Telegram](#4-luồng-dữ-liệu-telegram)  
+5. [Luồng Dữ Liệu X/Twitter](#5-luồng-dữ-liệu-xtwitter)  
+6. [Luồng Subscribe Kênh](#6-luồng-subscribe-kênh)  
+7. [Background Workers (Auto-Start)](#7-background-workers-auto-start)  
+8. [Pipeline Phân Loại ML (4 Tầng)](#8-pipeline-phân-loại-ml-4-tầng)  
+9. [Scripts Tiện Ích](#9-scripts-tiện-ích)  
+10. [Biến Môi Trường (.env)](#10-biến-môi-trường-env)  
+11. [Stack Công Nghệ](#11-stack-công-nghệ)
+
+---
+
+## 1. Quick Start
+
+### 1.1 Yêu Cầu
+
+| Công cụ | Phiên bản | Ghi chú |
+|---|---|---|
+| Python | 3.12+ | |
+| MongoDB | 6+ | local hoặc Atlas |
+| Node.js | 18+ | chỉ cần nếu chạy frontend |
+| Telegram API credentials | — | từ [my.telegram.org](https://my.telegram.org) |
+| Apify account + token | — | cho luồng X/Twitter ($5 credit/tháng miễn phí) |
+
+### 1.2 Cài Đặt
+
+```bash
+# 1. Clone và cài Python dependencies
+git clone <repo>
+cd botTele
+pip install -r requirements.txt
+
+# 2. Tạo file .env (xem Mục 10 để biết tất cả biến)
+cp .env.example .env   # hoặc tạo mới từ mục 10
+
+# 3. Tạo session Telegram (chỉ cần làm 1 lần)
+python scripts/create_session.py
+# → Điền số điện thoại + OTP → tạo file telegram_session.session
+
+# 4. (Tuỳ chọn) Seed danh sách kênh X/Twitter vào DB
+python scripts/seed_x_sources.py
+```
+
+### 1.3 Chạy Lần Đầu
+
+```bash
+# Khởi động API server (tự động bật cả 2 background workers)
+uvicorn src.api.main:app --reload --port 8000
+```
+
+API sẽ lắng nghe tại `http://localhost:8000`. Swagger UI: `http://localhost:8000/docs`.
+
+---
+
+
+
+## 2. Cấu Trúc Thư Mục Quan Trọng
+
+```
+botTele/
+├── src/
+│   ├── api/
+│   │   ├── main.py              ← FastAPI app, lifespan (khởi động background workers)
+│   │   ├── channels.py          ← Subscribe/Unsubscribe kênh (trigger ingestion)
+│   │   └── ...                  ← các route khác (posts, analytics, auth...)
+│   ├── ingestion/
+│   │   ├── telegram_worker.py   ← Fetch tin từ Telegram (Telethon)
+│   │   ├── x_worker.py          ← Fetch tweet từ X/Twitter (Apify)
+│   │   ├── channel_queue_worker.py  ← Background worker: poll queue + refresh 12h
+│   │   └── run_scheduled_refresh.py ← Cron one-shot: refresh toàn bộ kênh active
+│   ├── processing/
+│   │   ├── cleaning.py          ← Làm sạch text, tách link
+│   │   ├── lang.py              ← Nhận dạng ngôn ngữ (langdetect)
+│   │   ├── ml_topic_classifier.py ← TF-IDF + LinearSVC
+│   │   ├── topic_classifier.py  ← 4-tier cascade (P1→P2→P3→P4)
+│   │   └── web_scraper.py       ← Làm giàu nội dung từ URL gốc (tuỳ chọn)
+│   ├── models/
+│   │   └── post.py              ← Dataclass Post (dedupe_key SHA-256)
+│   └── config.py                ← Tất cả biến môi trường, đọc từ .env
+├── models/
+│   └── topic_classifier_svm.pkl ← Model ML đã train (TF-IDF + SVM)
+├── scripts/
+│   ├── create_session.py        ← Tạo Telegram session (chỉ làm 1 lần)
+│   ├── fetch_telegram.cmd       ← Trigger thủ công: fetch Telegram
+│   ├── fetch_x.cmd              ← Trigger thủ công: fetch X/Twitter
+│   ├── seed_x_sources.py        ← Seed danh sách tài khoản X vào DB
+│   └── train_ml_classifier.py   ← Train lại model offline
+├── docs/
+│   ├── system_overview.md       ← File này
+│   ├── deploy.md                ← Hướng dẫn deploy (Render + Vercel + Atlas)
+│   └── database_schema.md       ← Schema MongoDB chi tiết
+├── telegram_session.session     ← Telegram session file (không commit)
+└── .env                         ← Biến môi trường (không commit)
+```
+
+---
+
+## 3. Cách Chạy Từng Thành Phần
+
+### 3.1 API Server (+ Background Workers tự khởi động)
+
+```bash
+uvicorn src.api.main:app --reload --port 8000
+```
+
+Khi API server khởi động, FastAPI **tự động bật 2 background workers** (xem Mục 7):
+- `run_worker()` — poll hàng đợi `pending_channels` mỗi 30 giây
+- `run_refresh_loop()` — refresh tất cả kênh active mỗi 12 giờ
+
+> **Lưu ý:** Để chạy trong production, bỏ `--reload` và thêm `--workers 1`.
+
+---
+
+### 3.2 Fetch Telegram Thủ Công
+
+```bash
+# CMD script (Windows)
+scripts\fetch_telegram.cmd           # fetch bình thường (100 tin/kênh)
+scripts\fetch_telegram.cmd full      # fetch đầy đủ (1000 tin/kênh)
+scripts\fetch_telegram.cmd full scrape  # + scrape bài báo gốc
+
+# Hoặc chạy trực tiếp
+python -m src.ingestion.telegram_worker
+```
+
+---
+
+### 3.3 Fetch X/Twitter Thủ Công
+
+```bash
+# CMD script (Windows)
+scripts\fetch_x.cmd                  # mode=both, max=50
+scripts\fetch_x.cmd user 100         # chỉ từ user accounts, tối đa 100 tweet
+scripts\fetch_x.cmd keyword 200      # chỉ từ từ khóa, tối đa 200 tweet
+scripts\fetch_x.cmd both 500         # cả user + keyword, tối đa 500 tweet
+
+# Hoặc chạy trực tiếp
+python -m src.ingestion.x_worker
+```
+
+> **Chi phí:** Actor Apify `kaitoeasyapi` tính phí ~$0.25/1,000 tweets. Free plan: $5 credit/tháng ≈ 20,000 tweets.
+
+---
+
+### 3.4 Scheduled Refresh (Cron One-Shot)
+
+```bash
+# Chạy một lần, refresh toàn bộ kênh đang active trong DB
+python -m src.ingestion.run_scheduled_refresh
+```
+
+Dùng để cài làm cron job (cron/Task Scheduler) nếu không chạy API server liên tục.
+
+---
+
+### 3.5 Frontend (React)
+
+```bash
+cd web
+npm install
+npm run dev    # Development: http://localhost:5173
+npm run build  # Build production
+```
+
+---
+
+## 4. Luồng Dữ Liệu Telegram
+
+```
+channel.json (danh sách username kênh)
+    │
+    ▼ scripts/seed_channels.py  (hoặc API POST /channels)
+MongoDB: channel_metadata
+  {username, category, platform="telegram", status="active"}
+    │
+    ▼ telegram_worker.py: get_channels_from_db()
+Danh sách username[] cần fetch
+    │
+    ▼ build_client() → TelegramClient (Telethon, MTProto)
+    │   Session: telegram_session.session
+    │   Credentials: TELEGRAM_API_ID + TELEGRAM_API_HASH
+    │
+    ▼ fetch_channel_messages(client, channel, limit=200)
+Raw Message objects từ Telegram API
+    │
+    ┌──────────────────────────────────────────┐
+    │           process_message(m, channel)    │
+    │                                          │
+    │  1. clean_text(raw.message)              │
+    │     └─ extract_links() → (text, [urls])  │
+    │     └─ remove_emojis()                   │
+    │     └─ normalize_whitespace()            │
+    │                                          │
+    │  2. detect_language(text)                │
+    │     └─ "vi" | "en" | "other" | None      │
+    │                                          │
+    │  3. Post.from_raw(...)                   │
+    │     └─ dedupe_key = SHA-256(             │
+    │            text + sorted(links)          │
+    │         )[:32]                           │
+    │                                          │
+    │  4. Phân loại chủ đề (4-tier cascade)    │
+    │     P1 → P2 → P3 → P4                   │
+    │     (xem Mục 8)                          │
+    └───────────────────┬──────────────────────┘
+                        │
+    (tuỳ chọn) enrich_post_with_article(post)
+        └─ ArticleScraper.scrape(url)
+           → title, summary, full_content
+                        │
+                        ▼
+    MongoDB: posts  (upsert by dedupe_key)
+    {
+      source: "telegram",
+      channel: "vnexpress",
+      text, links, language, topics,
+      date, dedupe_key
+    }
+```
+
+**Khi nào chạy:**
+- Thủ công: `scripts\fetch_telegram.cmd`
+- Tự động: `run_worker()` poll queue mỗi 30s (khi có channel mới subscribe)
+- Tự động: `run_refresh_loop()` refresh mỗi 12h
+
+---
+
+## 5. Luồng Dữ Liệu X/Twitter
+
+```
+MongoDB: channels
+  {username, platform="x", status="active"}
+    │
+    ▼ x_worker.py: get_x_channels_from_db()
+Danh sách username[] (VD: ["Reuters", "BBCBreaking"])
+    │
+    ▼ fetch_by_users(usernames, max_items)
+Apify API call:
+  Actor: kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest
+  Input:
+    searchTerms: ["from:Reuters", "from:BBCBreaking"]
+    maxItems: max(20, max_items)   ← Actor tối thiểu 20
+    lang: "en"                     ← tuỳ cấu hình
+    │
+    ▼ actor.call(run_input=input)
+    │  (Apify chạy actor, poll đến khi xong)
+    │
+    ▼ dataset.iterate_items()
+Raw tweet objects từ Apify dataset
+    │
+    ┌──────────────────────────────────────────┐
+    │           parse_tweet(item)              │
+    │                                          │
+    │  text   = item["text"]                   │
+    │  author = item["author"]["userName"]     │
+    │  date   = item["createdAt"]              │
+    │  url    = item["url"]                    │
+    │  links  = item["urls"] + [url]           │
+    │                                          │
+    │  → Post object                           │
+    │    dedupe_key = SHA-256(text+links)[:32] │
+    └───────────────────┬──────────────────────┘
+                        │
+    Phân loại chủ đề (4-tier cascade)
+    P1 → P2 → P3 → P4
+                        │
+                        ▼
+    MongoDB: posts  (upsert by dedupe_key)
+    {
+      source: "twitter",
+      channel: "Reuters",
+      text, links, language, topics,
+      date, dedupe_key
+    }
+```
+
+**Khi nào chạy:**
+- Thủ công: `scripts\fetch_x.cmd [user|keyword|both] [max]`
+- Tự động: ngay khi user subscribe kênh X (BackgroundTask, xem Mục 6)
+- Tự động: `run_refresh_loop()` phát hiện kênh X → gọi `x_worker.ingest_once()`
+
+---
+
+## 6. Luồng Subscribe Kênh
+
+Khi user gọi `POST /channels/subscribe`, hệ thống thực hiện 3 bước:
+
+```
+POST /channels/subscribe
+  Body: { "channel": "@vnexpress" }  hoặc  { "channel": "https://x.com/Reuters" }
+    │
+    ▼ BƯỚC 1: DEDUPLICATION
+    parse_channel_input(channel)
+    └─ Nhận dạng platform: telegram | x
+    └─ Chuẩn hoá username (bỏ @, bỏ URL prefix)
+    
+    Kiểm tra user_channels collection:
+    └─ Nếu đã subscribe → trả về 409 Conflict
+    │
+    ▼ BƯỚC 2: LƯU VÀO DB
+    Insert vào user_channels:
+    {user_id, channel_username, platform, subscribed_at}
+    
+    Upsert vào channels:
+    {username, platform, status="active"}
+    │
+    ▼ BƯỚC 3: TRIGGER INGESTION (BackgroundTasks)
+    
+    ┌─────────────────────────────────────────────────┐
+    │  if platform == "x":                            │
+    │      BackgroundTask → x_worker.ingest_once()   │
+    │      (Apify call ngay lập tức, ~30-60 giây)    │
+    │                                                 │
+    │  if platform == "telegram":                     │
+    │      Insert vào pending_channels collection     │
+    │      {username, requested_at, status="pending"} │
+    │      → channel_queue_worker poll mỗi 30s       │
+    │      → Telethon fetch sau tối đa 30 giây        │
+    └─────────────────────────────────────────────────┘
+    │
+    ▼
+    202 Accepted  (ingestion đang chạy ở background)
+```
+
+---
+
+## 7. Background Workers (Auto-Start)
+
+`src/api/main.py` dùng FastAPI `lifespan` để tự động khởi động 2 workers khi API server bật:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(run_worker())         # Worker 1
+    asyncio.create_task(run_refresh_loop())   # Worker 2
+    yield
+```
+
+### Worker 1: Pending Queue (`run_worker`)
+
+```
+Vòng lặp vô hạn (interval = 30 giây):
+    │
+    ▼
+Poll MongoDB: pending_channels
+  {status: "pending", platform: "telegram"|"x"}
+    │
+    ├─ Không có gì → sleep 30s → lặp lại
+    │
+    └─ Có channels pending:
+         │
+         ├─ platform = "telegram"
+         │    └─ telegram_worker.fetch_channel(username)
+         │
+         └─ platform = "x"
+              └─ x_worker.ingest_once(mode="user", usernames=[...])
+         │
+         ▼
+         Cập nhật status = "done" trong pending_channels
+         sleep 30s → lặp lại
+```
+
+### Worker 2: Active Refresh (`run_refresh_loop`)
+
+```
+Vòng lặp vô hạn (interval = 12 giờ = 43200 giây):
+    │
+    ▼
+refresh_active_channels(db)
+    │
+    ▼ Lấy tất cả kênh có status="active" từ MongoDB
+    │
+    ├─ tg_channels = [kênh có platform="telegram"]
+    │    └─ telegram_worker.fetch_channels(tg_channels)
+    │
+    └─ x_channels = [kênh có platform="x"]
+         └─ x_worker.ingest_once(
+              mode="user",
+              usernames=[c.username for c in x_channels]
+            )
+    │
+    ▼
+sleep 43200s → lặp lại
+```
+
+---
+
+## 8. Pipeline Phân Loại ML (4 Tầng)
+
+Mỗi bài viết được phân loại qua 4 tầng theo thứ tự ưu tiên:
+
+```
+INPUT: text + channel_name + links[]
+    │
+    ▼
+P1: DB Category Lookup  (channel_metadata.category → map_category_to_topic)
+    │ Tìm thấy → DONE (độ tin cậy cao nhất)
+    │ Không tìm thấy ↓
+    ▼
+P2: URL Path Extraction  (_extract_category_from_url → regex trên đường dẫn)
+    │ Match → DONE
+    │ Không match ↓
+    ▼
+P3: ML Classifier  (TF-IDF + LinearSVC, confidence ≥ 0.3)
+    │ confidence đủ cao → DONE
+    │ confidence thấp ↓
+    ▼
+P4: Rule-Based Keywords  (từ điển song ngữ vi/en — luôn có kết quả)
+    │
+    ▼
+OUTPUT: post.topics = ["Kinh tế"] (hoặc chủ đề khác)
+```
+
+**14 chủ đề:** Kinh tế · Công nghệ · Crypto · Chính trị · Thế giới · Pháp luật · Ô tô - Xe máy · Khoa học · Thể thao · Giải trí · Sức khỏe · Giáo dục · Du lịch · Ẩm thực
+
+---
+
+## 9. Scripts Tiện Ích
+
+| Script | Lệnh | Mục đích |
+|---|---|---|
+| `create_session.py` | `python scripts/create_session.py` | Tạo file session Telegram (chỉ 1 lần) |
+| `fetch_telegram.cmd` | `scripts\fetch_telegram.cmd [full] [scrape]` | Fetch thủ công từ Telegram |
+| `fetch_x.cmd` | `scripts\fetch_x.cmd [user\|keyword\|both] [max]` | Fetch thủ công từ X/Twitter |
+| `seed_x_sources.py` | `python scripts/seed_x_sources.py` | Thêm tài khoản X mẫu vào DB |
+| `train_ml_classifier.py` | `python scripts/train_ml_classifier.py` | Train lại model ML từ dữ liệu DB |
+| `evaluate_model.py` | `python scripts/evaluate_model.py` | Đánh giá model hiện tại |
+| `balance_training_data.py` | `python scripts/balance_training_data.py` | Cân bằng nhãn training |
+| `auto_retrain.cmd` | `scripts\auto_retrain.cmd` | Pipeline train + evaluate tự động |
+| `run_scheduled_refresh.py` | `python -m src.ingestion.run_scheduled_refresh` | Refresh tất cả kênh active (cron) |
+| `aggregate_topic_stats.py` | `python scripts/aggregate_topic_stats.py` | Cập nhật thống kê chủ đề |
+| `extract_keyword_trends.py` | `python scripts/extract_keyword_trends.py` | Trích xuất từ khóa nổi bật |
+
+---
+
+## 10. Biến Môi Trường (.env)
+
+Tạo file `.env` ở thư mục gốc `botTele/`:
+
+```env
+# === MongoDB ===
+MONGODB_URI=mongodb://localhost:27017   # local, hoặc Atlas URI
+MONGODB_DB=newsbot
+
+# === Telegram (bắt buộc cho luồng Telegram) ===
+TELEGRAM_API_ID=12345678               # từ my.telegram.org
+TELEGRAM_API_HASH=abcdef1234567890     # từ my.telegram.org
+TELEGRAM_SESSION_NAME=telegram_session # tên file .session
+
+# === Apify (bắt buộc cho luồng X/Twitter) ===
+APIFY_API_TOKEN=apify_api_xxxxxxxxxxxx # từ console.apify.com
+
+# === FastAPI / Auth ===
+SECRET_KEY=your-very-long-secret-key   # dùng: openssl rand -hex 32
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_HOURS=24
+API_KEY=your-api-key-for-scripts       # tùy chọn, cho X-API-Key header
+
+# === OpenAI (tuỳ chọn — hệ thống chạy được mà không có) ===
+OPENAI_API_KEY=sk-...
+
+# === Cấu hình Fetch ===
+FETCH_LIMIT=200                        # số tin mỗi kênh Telegram
+REFRESH_INTERVAL_HOURS=12             # chu kỳ auto-refresh (giờ)
+X_DEFAULT_MAX_ITEMS=50                # số tweet mặc định mỗi lần fetch X
+
+# === CORS (Frontend URLs) ===
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+```
+
+---
+
+## 11. Stack Công Nghệ
 
 | Tầng | Công nghệ |
 |---|---|
-| **Thu thập dữ liệu** | Python, Telethon (Telegram MTProto API), asyncio |
+| **Thu thập Telegram** | Python 3.12, Telethon (MTProto), asyncio |
+| **Thu thập X/Twitter** | Apify Python SDK, Actor `kaitoeasyapi` (PPR) |
 | **Xử lý & Phân loại** | scikit-learn (TF-IDF + LinearSVC), langdetect, BeautifulSoup4 |
 | **AI tùy chọn** | OpenAI GPT-4o-mini, text-embedding-3-small |
-| **Lưu trữ** | MongoDB (pymongo) |
-| **API Backend** | FastAPI, Uvicorn, JWT (python-jose), bcrypt (passlib), slowapi |
+| **Lưu trữ** | MongoDB (pymongo), GridFS |
+| **API Backend** | FastAPI, Uvicorn, python-jose (JWT), passlib (bcrypt), slowapi |
 | **Frontend** | React 18, Vite, MUI (Material UI), React Query, React Router v6 |
-| **Logging** | Loguru |
+| **Logging** | Loguru (file rotation 500MB, giữ 30 ngày) |
+| **Deploy** | Render (API), Vercel (Frontend), MongoDB Atlas (DB) |
 
----
-
-## 3. Kiến Trúc Tổng Thể
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        TELEGRAM API                             │
-│                   (MTProto Protocol)                            │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ Telethon
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              TẦNG THU THẬP DỮ LIỆU (Ingestion)                  │
-│  channel.json → channel_metadata (MongoDB)                      │
-│  telegram_worker.py → fetch_channel_messages()                  │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ raw messages
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              TẦNG XỬ LÝ (Processing Pipeline)                   │
-│  1. Làm sạch văn bản        (cleaning.py)                       │
-│  2. Nhận dạng ngôn ngữ      (lang.py)                           │
-│  3. Tạo Post + dedupe_key   (models/post.py)                    │
-│  4. Phân loại chủ đề        (4-tier cascade)                    │
-│  5. Làm giàu nội dung       (web_scraper.py - tuỳ chọn)         │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ Post objects
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              TẦNG LƯU TRỮ (MongoDB — newsbot)                   │
-│  posts / channel_metadata / keyword_trends                      │
-│  hot_topics / notifications / user_settings                     │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ pymongo
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              TẦNG API (FastAPI)                                  │
-│  JWT Auth + Role-Based Access Control                           │
-│  Rate Limiting: 60 req/min, 1000 req/hr                         │
-│  REST Endpoints: /posts, /stats, /analytics/*, /topics          │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ HTTP/JSON
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              TẦNG GIAO DIỆN (React + Vite)                      │
-│  NewsPage (user) — OverviewPage, PostsPage, AnalyticsPage (admin)│
-│  AuthContext (JWT) + React Query (cache) + MUI                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 4. Luồng Xử Lý Chính (End-to-End)
-
-```
-channel.json
-    │  seed
-    ▼
-MongoDB: channel_metadata
-    │  get_channels_from_db()
-    ▼
-telegram_worker.py
-    │  build_client() → TelegramClient (Telethon)
-    │  fetch_channel_messages(client, channel, limit=200)
-    ▼
-raw Message objects (Telethon)
-    │
-    ├─── process_message(m, channel_name)
-    │         │
-    │         ├── 1. clean_text(raw)
-    │         │       ├── extract_links()       → (text, [urls])
-    │         │       ├── remove_emojis()
-    │         │       └── normalize_whitespace()
-    │         │
-    │         ├── 2. detect_language(text)      → "vi" | "en" | None
-    │         │
-    │         ├── 3. Post.from_raw(...)
-    │         │       └── dedupe_key = SHA-256(text + sorted_links)[:32]
-    │         │
-    │         └── 4. Topic Classification (4-tier priority)
-    │                 │
-    │                 ├── P1: channel_metadata.category  (DB lookup)
-    │                 ├── P2: URL path extraction         (web_scraper)
-    │                 ├── P3: MLTopicClassifier.predict() (TF-IDF + SVM, conf ≥ 0.3)
-    │                 └── P4: TopicClassifier keywords    (rule-based, fallback)
-    │
-    ├─── (tùy chọn) enrich_post_with_article()
-    │         └── ArticleScraper.scrape(url) → FullArticle
-    │
-    └─── save_posts(posts)
-              └── upsert by dedupe_key → MongoDB: posts
-```
-
----
-
-## 5. Module Phân Loại Chủ Đề (4-Tier Cascade)
-
-Đây là thành phần cốt lõi của hệ thống. Mỗi bài viết được phân loại qua 4 tầng theo thứ tự ưu tiên giảm dần:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  INPUT: post.text + channel_name                             │
-└──────────────────┬───────────────────────────────────────────┘
-                   │
-                   ▼
-    ┌─────────────────────────────────────┐
-    │  P1: DB Category Lookup             │  ← Độ tin cậy CAO NHẤT
-    │  channel_metadata.category          │
-    │  → map_category_to_topic()          │
-    └────────────────┬────────────────────┘
-                     │ Không tìm thấy
-                     ▼
-    ┌─────────────────────────────────────┐
-    │  P2: URL Path Extraction            │  ← Không tốn HTTP
-    │  _extract_category_from_url(link)   │
-    │  → _map_category_to_topic()         │
-    └────────────────┬────────────────────┘
-                     │ Không match
-                     ▼
-    ┌─────────────────────────────────────┐
-    │  P3: ML Classifier                  │  ← TF-IDF + LinearSVC
-    │  MLTopicClassifier.predict(text)    │
-    │  → (topic, confidence)              │
-    │  Chỉ chấp nhận nếu confidence ≥ 0.3 │
-    └────────────────┬────────────────────┘
-                     │ confidence thấp
-                     ▼
-    ┌─────────────────────────────────────┐
-    │  P4: Rule-Based Keywords            │  ← Fallback cuối cùng
-    │  TopicClassifier.classify(text, lang)│
-    │  Đối chiếu từ điển song ngữ vi/en   │
-    └────────────────┬────────────────────┘
-                     │
-                     ▼
-    ┌─────────────────────────────────────┐
-    │  OUTPUT: post.topics = [topic_name] │
-    └─────────────────────────────────────┘
-```
-
-**14 chủ đề được hỗ trợ:**
-Kinh tế · Công nghệ · Crypto · Chính trị · Thế giới · Pháp luật · Ô tô - Xe máy · Khoa học · Thể thao · Giải trí · Sức khỏe · Giáo dục · Du lịch · Ẩm thực
-
----
-
-## 6. Mô Hình ML (TF-IDF + LinearSVC)
-
-**File:** `src/processing/ml_topic_classifier.py`, model lưu tại `models/topic_classifier_svm.pkl`
-
-```
-Văn bản đầu vào
-    │
-    ▼
-TfidfVectorizer
-  max_features = 5,000
-  ngram_range  = (1, 2)   ← unigram + bigram
-  sublinear_tf = True     ← log(tf) thay vì tf
-
-    │
-    ▼
-LinearSVC
-  class_weight = 'balanced'  ← xử lý mất cân bằng nhãn
-
-    │
-    ▼
-predict()  →  (topic_label, confidence_score)
-```
-
-- **Training:** script offline `scripts/train_ml_classifier.py`
-- **Đánh giá:** stratified train/test split 80/20, in classification report + confusion matrix
-- **Lazy load:** worker chỉ load model 1 lần khi khởi động (singleton)
-- **Fallback:** nếu file `.pkl` không tồn tại → tự động dùng rule-based (P4)
-
----
-
-## 7. Tầng API (FastAPI)
-
-**File:** `src/api/main.py`
-
-### Xác thực & Phân quyền
-
-```
-Client Request
-    │
-    ├── Header: Authorization: Bearer <JWT>
-    │       └── decode_access_token() → TokenData(username, role)
-    │
-    └── Header: X-API-Key: <key>
-            └── validate API key
-
-Role:
-  admin → toàn quyền (dashboard, analytics, quản lý)
-  user  → chỉ đọc tin tức (/news)
-```
-
-### Các Endpoint Chính
-
-| Nhóm | Endpoint | Mô tả |
-|---|---|---|
-| **Auth** | `POST /auth/login` | Đăng nhập, trả JWT + role |
-| **Auth** | `GET /auth/me` | Thông tin user hiện tại |
-| **Core** | `GET /posts` | Danh sách bài (filter: topic, lang, source, q) |
-| **Core** | `GET /posts/{id}` | Chi tiết một bài |
-| **Core** | `GET /stats` | Thống kê tổng quan |
-| **Core** | `GET /topics` | Danh sách chủ đề + số lượng |
-| **Analytics** | `GET /topics/trending` | Chủ đề tăng trưởng (2 kỳ so sánh) |
-| **Analytics** | `GET /analytics/keywords` | Tần suất từ khóa theo ngày |
-| **Analytics** | `GET /analytics/keywords/trending` | Từ khóa tăng nhanh nhất |
-| **Analytics** | `GET /analytics/timeline` | Chuỗi thời gian số bài |
-| **Analytics** | `GET /analytics/comparison` | So sánh Telegram vs Twitter |
-| **Analytics** | `GET /analytics/heatmap` | Hoạt động theo giờ/ngày trong tuần |
-| **Public** | `GET /public/hot-topics` | Chủ đề nóng cho trang tin tức |
-| **Settings** | `GET/PUT /settings` | Cài đặt người dùng |
-| **Notifications** | `GET /notifications` | Danh sách thông báo |
-
-### Middleware & Bảo Mật
-
-| Thành phần | Cấu hình |
-|---|---|
-| **Rate Limiting** | 60 req/phút, 1000 req/giờ (theo IP) |
-| **CORS** | `localhost:3000`, `localhost:5173`, `localhost:3001` |
-| **JWT** | HS256, TTL 24 giờ |
-| **Password** | bcrypt (passlib) |
-| **Logging** | loguru — file `logs/api.log`, xoay vòng 500MB, giữ 30 ngày |
-
----
-
-## 8. Tầng Giao Diện (React)
-
-**Thư mục:** `web/src/`
-
-### Phân Quyền Route
-
-```
-/login          → GuestOnly (redirect nếu đã đăng nhập)
-/news           → AuthRequired (user + admin)
-/admin          → AdminRequired (chỉ admin)
-/admin/analytics → AdminRequired
-/admin/posts    → AdminRequired
-/admin/trending → AdminRequired
-/admin/settings → AdminRequired
-```
-
-### Các Trang Chính
-
-**NewsPage** (`/news`) — Giao diện người dùng thường:
-- Ticker breaking news (8 bài mới nhất)
-- Chip lọc chủ đề nóng (từ `hot_topics`)
-- Tìm kiếm debounce 500ms
-- Card bài viết: chip chủ đề, tên kênh, thời gian, tiêu đề bài scraped, link gốc
-
-**OverviewPage** (`/admin`) — Dashboard admin:
-- Thống kê tổng: tổng bài, bài có nhãn, phân bổ nguồn
-- Cards số liệu nhanh
-
-**AnalyticsPage** (`/admin/analytics`) — Phân tích:
-- `TimelineChart` — chuỗi thời gian số bài
-- `TopicPieChart` — phân bổ chủ đề (pie chart)
-- `KeywordsBarChart` — top từ khóa
-- `KeywordCloud` — word cloud
-
-**PostsPage** (`/admin/posts`) — Quản lý bài viết:
-- Filter: topic, lang, search (debounce)
-- Pagination + tổng số kết quả
-- Click card → `PostDetailModal` (nội dung đầy đủ, media, link, topic predictions)
-
-**TrendingPage** (`/admin/trending`) — Xu hướng chủ đề:
-- Danh sách chủ đề tăng trưởng với % thay đổi và arrow indicator
-
-### State Management
-
-| Cơ chế | Dùng cho |
-|---|---|
-| **React Query** | Cache API calls, tự refetch, loading/error state |
-| **AuthContext** | JWT token, user info, role — persist localStorage |
-| **ThemeContext** | Dark/Light mode toggle |
-
----
-
-## 9. Sơ Đồ Luồng Dữ Liệu Tổng Thể
-
-```
-channel.json ──► MongoDB: channel_metadata
-                          │
-                    CHANNELS list (username[])
-                          │
-              Telethon ◄──┘──► Telegram MTProto API
-                          │
-               raw messages (200/kênh)
-                          │
-              ┌───────────▼───────────────┐
-              │     process_message()     │
-              │  1. clean_text()          │
-              │  2. detect_language()     │
-              │  3. Post.from_raw()       │
-              │     dedupe_key (SHA-256)  │
-              │  4. Topic (4-tier)        │
-              │     P1→P2→P3→P4          │
-              └───────────┬───────────────┘
-                          │
-              (optional) enrich_post_with_article()
-              ArticleScraper → bài báo gốc
-                          │
-              MongoDB: posts (upsert by dedupe_key)
-                          │
-                    FastAPI REST API
-              (JWT HS256 + rate limiting + logging)
-                          │
-              ┌───────────┴───────────┐
-              │                       │
-         /news (user)        /admin/* (admin)
-         NewsPage            OverviewPage
-         - Hot topics        AnalyticsPage
-         - Search            PostsPage
-         - Feed              TrendingPage
-```
-
----
-
-## 10. Các Điểm Kỹ Thuật Nổi Bật
-
-### 10.1 Chiến Lược Phân Loại Cascade
-Phân loại 4 tầng đảm bảo **tối đa hóa độ chính xác** với chi phí tính toán hợp lý:
-- Tầng P1 và P2 không tốn CPU (chỉ lookup DB / regex URL)
-- Tầng P3 (ML) chỉ chạy khi 2 tầng trên không đủ
-- Tầng P4 (keyword) luôn có kết quả → không có bài nào bị bỏ sót hoàn toàn
-
-### 10.2 Deduplication Deterministic
-`SHA-256(text + sorted_links)[:32]` là hàm thuần túy (không phụ thuộc thời gian, ID Telegram). Cùng một bài đăng từ nhiều lần fetch → luôn ra cùng key → `upsert` an toàn mà không cần query trước.
-
-### 10.3 Dual Authentication
-```
-Bearer JWT  → cho người dùng tương tác (web frontend)
-X-API-Key   → cho tích hợp bên ngoài (scripts, services)
-```
-Cả hai đều được xác thực bởi cùng một dependency FastAPI `get_current_user()`.
-
-### 10.4 Tính Năng AI Tùy Chọn
-OpenAI GPT-4o-mini được dùng để:
-- Phát hiện chủ đề nóng mới (`detect_new_hot_topics()`)
-- Mở rộng danh sách từ khóa (`expand_keywords()`)
-- Xếp hạng bài viết theo semantic similarity (`score_posts_by_embedding()`)
-
-Tất cả các hàm này đều kiểm tra `OPENAI_API_KEY` trước và **trả về giá trị rỗng/mặc định** nếu không có key — hệ thống hoạt động đầy đủ mà không cần OpenAI.
-
-### 10.5 ML Model Training Offline
-```
-scripts/train_ml_classifier.py
-    │
-    ├── Lấy dữ liệu training từ MongoDB (posts có labels)
-    ├── build_pipeline(): TfidfVectorizer → LinearSVC
-    ├── Stratified split 80/20
-    ├── In classification report + confusion matrix
-    └── Lưu models/topic_classifier_svm.pkl
-```
-Worker lazy-load model 1 lần khi khởi động. Việc train lại không ảnh hưởng đến uptime của API.

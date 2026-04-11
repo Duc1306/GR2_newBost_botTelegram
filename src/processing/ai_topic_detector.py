@@ -636,6 +636,43 @@ def discover_hot_events(
     if not top_keywords:
         return []
 
+    # ── Step 1b: GPT filter – keep only newsworthy keywords ──────────────────
+    # Remove generic/meaningless terms that passed the stopword filter but
+    # still have no news value (e.g. "tháng", "năm", "ngày", "1000", "mới").
+    client = _get_client()
+    if client:
+        try:
+            from src.config import OPENAI_MODEL
+            filter_prompt = (
+                "Bạn là biên tập viên tin tức. Từ danh sách từ khóa dưới đây, "
+                "hãy GIỮ LẠI chỉ những từ khóa có GIÁ TRỊ TIN TỨC (tên người, "
+                "địa điểm, tổ chức, sự kiện cụ thể, chỉ số giá cả, tên sản phẩm, v.v.).\n"
+                "LOẠI BỎ những từ quá chung chung hoặc không mang thông tin: "
+                "số tròn, đơn vị thời gian, tính từ mơ hồ, từ mô tả hành động chung.\n"
+                "Trả về JSON: {\"keywords\": [\"...\"]}\n\n"
+                f"Danh sách: {json.dumps(top_keywords, ensure_ascii=False)}"
+            )
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "Chỉ trả về JSON hợp lệ."},
+                    {"role": "user", "content": filter_prompt},
+                ],
+                temperature=0.0,
+                max_tokens=300,
+                response_format={"type": "json_object"},
+            )
+            parsed_kw = json.loads(resp.choices[0].message.content.strip())
+            filtered_kws = parsed_kw.get("keywords", [])
+            if isinstance(filtered_kws, list) and len(filtered_kws) >= 3:
+                top_keywords = [kw for kw in top_keywords if kw in filtered_kws]
+                logger.info("GPT keyword filter: %d → %d keywords", len(scored), len(top_keywords))
+        except Exception as exc:
+            logger.warning("GPT keyword filter skipped: %s", exc)
+
+    if not top_keywords:
+        return []
+
     # ── Step 2: assign each post a set of matched top-keywords ───────────────
     post_keyword_sets: list[set[str]] = []
     for toks in post_tokens:

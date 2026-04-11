@@ -155,24 +155,41 @@ async def _generate_summary(channel_username: str, db) -> Optional[str]:
     if not OPENAI_API_KEY:
         return None
 
+    import re as _re
     posts_col = db["posts"]
     cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
-    recent = list(
-        posts_col.find(
-            {"source": channel_username, "created_at": {"$gte": cutoff}},
-            {"text": 1, "created_at": 1},
-        )
-        .sort("created_at", -1)
-        .limit(SUMMARY_POSTS)
-    )
 
-    if not recent:
-        # Fall back to last N posts regardless of date
+    # xkw: channels don't have matching source field — query by keyword text
+    if channel_username.startswith("xkw:"):
+        kw = channel_username[4:]
+        kw_filter = {"platform": "twitter", "text": {"$regex": _re.escape(kw), "$options": "i"}}
         recent = list(
-            posts_col.find({"source": channel_username}, {"text": 1})
+            posts_col.find({**kw_filter, "created_at": {"$gte": cutoff}}, {"text": 1, "created_at": 1})
             .sort("created_at", -1)
             .limit(SUMMARY_POSTS)
         )
+        if not recent:
+            recent = list(
+                posts_col.find(kw_filter, {"text": 1})
+                .sort("created_at", -1)
+                .limit(SUMMARY_POSTS)
+            )
+    else:
+        recent = list(
+            posts_col.find(
+                {"source": channel_username, "created_at": {"$gte": cutoff}},
+                {"text": 1, "created_at": 1},
+            )
+            .sort("created_at", -1)
+            .limit(SUMMARY_POSTS)
+        )
+        if not recent:
+            # Fall back to last N posts regardless of date
+            recent = list(
+                posts_col.find({"source": channel_username}, {"text": 1})
+                .sort("created_at", -1)
+                .limit(SUMMARY_POSTS)
+            )
 
     if not recent:
         return None
@@ -345,46 +362,106 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 
 async def refresh_active_channels(db) -> None:
-    """Fetch new posts from all `active` channels and re-generate summaries if new data found."""
+    """Fetch new posts from all `active` channels and re-generate summaries if new data found.
+    
+    - platform=telegram : dùng Telethon (như cũ)
+    - platform=twitter  : dùng Apify x_worker (mới)
+    """
     channels_col = db["channels"]
-    active = list(channels_col.find({"status": "active"}, {"username": 1}))
+    active = list(channels_col.find({"status": "active"}, {"username": 1, "platform": 1}))
     if not active:
         logger.debug("Refresh: no active channels.")
         return
 
-    logger.info(f"Refreshing {len(active)} active channel(s)…")
-    client = _build_client()
-    try:
-        await client.connect()
-        if not await client.is_user_authorized():
-            logger.error("Refresh: Telegram session not authorized. Skipping.")
-            return
+    # Tách Telegram và X
+    tg_channels = [ch for ch in active if ch.get("platform", "telegram") == "telegram"]
+    x_channels  = [ch for ch in active if ch.get("platform") == "twitter"]
 
-        for ch in active:
-            username = ch["username"]
-            try:
-                # Delete posts older than FETCH_DAYS to keep DB fresh
-                cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
-                channels_col.database["posts"].delete_many({
-                    "source": username,
-                    "created_at": {"$lt": cutoff},
-                })
-                saved = await _fetch_and_store(client, username, db)
-                total_posts = db["posts"].count_documents({"source": username})
-                # Always sync post_count to actual total
-                channels_col.update_one(
-                    {"username": username},
-                    {"$set": {"post_count": total_posts}},
-                )
-                if saved > 0:
-                    logger.info(f"  @{username}: +{saved} new posts → regenerating summary")
-                    summary = await _generate_summary(username, db)
-                    if summary:
-                        _save_summary(username, summary, total_posts, db)
-            except Exception as exc:
-                logger.warning(f"  Refresh failed for @{username}: {exc}")
-    finally:
-        await client.disconnect()
+    logger.info(f"Refreshing {len(tg_channels)} Telegram + {len(x_channels)} X channel(s)…")
+
+    # ── Telegram ──────────────────────────────────────────────
+    if tg_channels:
+        client = _build_client()
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                logger.error("Refresh: Telegram session not authorized. Skipping Telegram.")
+            else:
+                for ch in tg_channels:
+                    username = ch["username"]
+                    try:
+                        cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
+                        channels_col.database["posts"].delete_many({
+                            "source": username,
+                            "created_at": {"$lt": cutoff},
+                        })
+                        saved = await _fetch_and_store(client, username, db)
+                        total_posts = db["posts"].count_documents({"source": username})
+                        channels_col.update_one(
+                            {"username": username},
+                            {"$set": {"post_count": total_posts}},
+                        )
+                        if saved > 0:
+                            logger.info(f"  @{username}: +{saved} new posts → regenerating summary")
+                            summary = await _generate_summary(username, db)
+                            if summary:
+                                _save_summary(username, summary, total_posts, db)
+                    except Exception as exc:
+                        logger.warning(f"  Refresh failed for @{username}: {exc}")
+        finally:
+            await client.disconnect()
+
+    # ── X / Twitter ───────────────────────────────────────────
+    if x_channels:
+        try:
+            from src.ingestion.x_worker import ingest_once
+            import re as _re
+
+            # username lưu dạng "x:TechCrunch" → bỏ prefix lấy tên thật
+            usernames = [ch["username"][2:] for ch in x_channels
+                         if ch["username"].startswith("x:")]
+            if usernames:
+                logger.info(f"  X refresh: {usernames}")
+                saved_x = await ingest_once(mode="user", usernames=usernames)
+                logger.info(f"  X refresh done: {saved_x} posts saved")
+                # Cập nhật post_count + tạo summary cho từng X user channel
+                for raw_username in usernames:
+                    full_username = f"x:{raw_username}"
+                    total = db["posts"].count_documents({"source": full_username})
+                    channels_col.update_one(
+                        {"username": full_username},
+                        {"$set": {"post_count": total}},
+                    )
+                    if saved_x > 0:
+                        summary = await _generate_summary(full_username, db)
+                        if summary:
+                            _save_summary(full_username, summary, total, db)
+                            logger.info(f"  x:{raw_username} summary regenerated")
+
+            # username lưu dạng "xkw:bitcoin" → keyword search
+            kw_entries = [ch for ch in x_channels if ch["username"].startswith("xkw:")]
+            keywords = [ch["username"][4:] for ch in kw_entries]
+            if keywords:
+                logger.info(f"  X keyword refresh: {keywords}")
+                saved_xkw = await ingest_once(mode="keyword", keywords=keywords)
+                logger.info(f"  X keyword refresh done: {saved_xkw} posts saved")
+                for kw in keywords:
+                    full_username = f"xkw:{kw}"
+                    total = db["posts"].count_documents({
+                        "platform": "twitter",
+                        "text": {"$regex": _re.escape(kw), "$options": "i"},
+                    })
+                    channels_col.update_one(
+                        {"username": full_username},
+                        {"$set": {"post_count": total}},
+                    )
+                    if saved_xkw > 0:
+                        summary = await _generate_summary(full_username, db)
+                        if summary:
+                            _save_summary(full_username, summary, total, db)
+                            logger.info(f"  xkw:{kw} summary regenerated")
+        except Exception as exc:
+            logger.warning(f"  X refresh failed: {exc}")
 
 
 async def run_refresh_loop() -> None:

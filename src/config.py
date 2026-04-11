@@ -77,6 +77,28 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Optional – features gracefully
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")           # cheap & fast
 OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
+# =============================================================================
+# Apify Configuration (cho X / Twitter scraping)
+# =============================================================================
+APIFY_API_TOKEN: str | None = os.getenv("APIFY_API_TOKEN")  # Lấy tại console.apify.com
+
+# Từ khóa cào tweet — phân cách bằng ;
+# VD: "ReactJS;AI Việt Nam;#Công nghệ"
+_raw_x_keywords = os.getenv("X_KEYWORDS", "")
+X_KEYWORDS: List[str] = [
+    k.strip() for k in _raw_x_keywords.split(";") if k.strip()
+]
+
+# Tài khoản X cần theo dõi — phân cách bằng ; (không cần @)
+# VD: "VnExpress;tuoitrenews;BBCBreaking"
+_raw_x_users = os.getenv("X_USERNAMES", "")
+X_USERNAMES: List[str] = [
+    u.strip().lstrip("@") for u in _raw_x_users.split(";") if u.strip()
+]
+
+# Số tweet tối đa mỗi lần cào (per keyword hoặc per user)
+X_FETCH_LIMIT: int = int(os.getenv("X_FETCH_LIMIT", "50"))
+
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "logs/api.log")
