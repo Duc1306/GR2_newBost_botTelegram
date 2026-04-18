@@ -1,7 +1,10 @@
-import { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import { api } from '../lib/api';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// Tự động logout sau X phút không hoạt động (0 = tắt tính năng)
+const INACTIVITY_TIMEOUT_MS = 60 * 60 * 1000; // 60 phút
 
 const AuthContext = createContext(null);
 
@@ -28,6 +31,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const inactivityTimerRef = useRef(null);
 
   // Load token from localStorage on mount
   useEffect(() => {
@@ -71,6 +75,26 @@ export const AuthProvider = ({ children }) => {
     
     setLoading(false);
   }, []);
+
+  // ── Inactivity auto-logout ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!token || !INACTIVITY_TIMEOUT_MS) return;
+
+    const resetTimer = () => {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = setTimeout(() => logout(), INACTIVITY_TIMEOUT_MS);
+    };
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer(); // bắt đầu đếm ngay khi đăng nhập
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, resetTimer));
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const login = async (username, password) => {
     try {
@@ -199,26 +223,21 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = async () => {
-    try {
-      // Call logout endpoint (optional, for logging)
-      if (token) {
-        await fetch(`${API_BASE_URL}/auth/logout`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      // Clear local storage and state
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_user');
-      setToken(null);
-      setUser(null);
-      api.setAuthToken(null);
+  const logout = () => {
+    // Xóa state ngay lập tức — không đợi server
+    const currentToken = token;
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
+    setToken(null);
+    setUser(null);
+    api.setAuthToken(null);
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    // Gọi server fire-and-forget (chỉ để ghi log)
+    if (currentToken) {
+      fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${currentToken}` },
+      }).catch(() => {});
     }
   };
 

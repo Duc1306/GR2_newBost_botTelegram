@@ -204,15 +204,15 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
         if links:
             from src.processing.web_scraper import ArticleScraper
             try:
-                # Fast extraction from URL pattern (no HTTP request needed)
-                category = ArticleScraper._extract_category_from_url(links[0])
+                # Wrap blocking HTTP redirect resolution in executor
+                loop = asyncio.get_running_loop()
+                category = await loop.run_in_executor(
+                    None, ArticleScraper._extract_category_from_url, links[0]
+                )
                 if category:
-                    source_topic = ArticleScraper._map_category_to_topic(category)
-                    if source_topic:
-                        post.topics = [source_topic]
-                        # Store metadata for training validation
-                        post.source_category = category
-                        post.source_topic = source_topic
+                    source_topic = category
+                    post.topics = [source_topic]
+                    post.source_topic = source_topic
             except Exception:
                 pass
         
@@ -244,19 +244,18 @@ async def save_posts(posts: List[Post], scrape_articles: bool = False) -> None:
     inserted = 0
     updated = 0
     duplicates = 0
-    
-    for d in docs:
-        try:
-            # upsert theo id để tránh ghi đè trùng
-            result = coll.update_one({"id": d["id"]}, {"$set": d}, upsert=True)
-            if result.upserted_id:
-                inserted += 1
-            elif result.modified_count > 0:
-                updated += 1
-        except DuplicateKeyError:
-            # Bài viết trùng dedupe_key (nội dung giống nhau), bỏ qua
-            duplicates += 1
-            continue
+
+    from pymongo import UpdateOne
+    from pymongo.errors import BulkWriteError
+    operations = [UpdateOne({"id": d["id"]}, {"$set": d}, upsert=True) for d in docs]
+    try:
+        bulk_result = coll.bulk_write(operations, ordered=False)
+        inserted = bulk_result.upserted_count
+        updated = bulk_result.modified_count
+    except BulkWriteError as bwe:
+        inserted = bwe.details.get("nUpserted", 0)
+        updated = bwe.details.get("nModified", 0)
+        duplicates = len(bwe.details.get("writeErrors", []))
     
     status_msg = f"   💾 DB: {inserted} mới, {updated} cập nhật, {len(docs) - inserted - updated - duplicates} đã tồn tại, {duplicates} trùng lặp"
     if scrape_articles and scraped_count > 0:

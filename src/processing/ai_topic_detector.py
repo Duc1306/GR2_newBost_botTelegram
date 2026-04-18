@@ -23,16 +23,23 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Module-level singleton — created once, reused across all calls.
+_openai_client = None
+
 
 def _get_client():
-    """Lazy-import openai and return an OpenAI client with a sensible timeout."""
+    """Lazy-import openai and return a cached OpenAI client with a sensible timeout."""
+    global _openai_client
+    if _openai_client is not None:
+        return _openai_client
     try:
         from openai import OpenAI
         from src.config import OPENAI_API_KEY
         if not OPENAI_API_KEY:
             logger.warning("OPENAI_API_KEY not set — AI features disabled")
             return None
-        return OpenAI(api_key=OPENAI_API_KEY, timeout=45.0)
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY, timeout=45.0)
+        return _openai_client
     except ImportError:
         logger.warning("openai package not installed. Run: pip install openai")
         return None

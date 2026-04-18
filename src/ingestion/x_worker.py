@@ -429,7 +429,7 @@ async def ingest_once(
     user_list = usernames or _get_x_users()
 
     raw_tweets: List[dict] = []
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # ---- Actor A: từ khóa ----
     if mode in ("keyword", "both") and kw_list:

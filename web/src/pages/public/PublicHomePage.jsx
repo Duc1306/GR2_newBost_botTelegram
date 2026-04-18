@@ -315,10 +315,12 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
     setData(null);
     setError(null);
     setLoading(true);
-    fetchHotNewsSummary(cluster.slug, hours)
+    const ac = new AbortController();
+    fetchHotNewsSummary(cluster.slug, hours, ac.signal)
       .then(setData)
-      .catch((e) => setError(e.message))
+      .catch((e) => { if (e?.name !== 'AbortError') setError(e.message); })
       .finally(() => setLoading(false));
+    return () => ac.abort();
   }, [open, cluster, hours]);
 
   const sentimentColor = data ? (SENTIMENT_COLOR[data.sentiment] || '#6b7280') : '#6b7280';
@@ -627,8 +629,9 @@ function HotNewsTab() {
   }, [hours, load]);
 
   useEffect(() => {
+    const ac = new AbortController();
     const id = setInterval(() => {
-      fetchHotNewsClusters(hours)
+      fetchHotNewsClusters(hours, ac.signal)
         .then((d) => {
           const incoming = d.clusters || [];
           const truly = incoming.filter(c => !currentSlugsRef.current.has(c.slug));
@@ -643,7 +646,7 @@ function HotNewsTab() {
         })
         .catch(() => {});
     }, 60_000);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); ac.abort(); };
   }, [hours]);
 
   const applyPending = () => {
@@ -789,29 +792,37 @@ function ArticlesTab() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const timerRef = useRef(null);
+  const loadAbortRef = useRef(null);
+  const searchAbortRef = useRef(null);
 
   const totalPages = Math.max(1, Math.ceil(total / ARTICLES_LIMIT));
 
   useEffect(() => {
-    fetchPostTopics()
+    const ac = new AbortController();
+    fetchPostTopics(ac.signal)
       .then((d) => setPostTopics(d.topics || []))
       .catch(() => {})
       .finally(() => setTopicsLoading(false));
+    return () => ac.abort();
   }, []);
 
   const loadPosts = useCallback(async (topic, currentPage) => {
+    if (loadAbortRef.current) loadAbortRef.current.abort();
+    const ac = new AbortController();
+    loadAbortRef.current = ac;
     setLoading(true);
     setError(null);
     try {
       const skip = (currentPage - 1) * ARTICLES_LIMIT;
-      const data = await fetchArticlePosts(topic, skip, ARTICLES_LIMIT);
+      const data = await fetchArticlePosts(topic, skip, ARTICLES_LIMIT, '', ac.signal);
+      if (ac.signal.aborted) return;
       setPosts(data.posts || []);
       setTotal(data.total ?? (data.posts || []).length);
       setLastUpdate(new Date());
     } catch (e) {
-      setError(e.message);
+      if (e?.name !== 'AbortError') setError(e.message);
     } finally {
-      setLoading(false);
+      if (!ac.signal.aborted) setLoading(false);
     }
   }, []);
 
@@ -840,18 +851,22 @@ function ArticlesTab() {
   const handleSearch = async () => {
     const q = searchInput.trim();
     if (!q) { setSearchResults(null); setSearchQuery(''); return; }
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    const ac = new AbortController();
+    searchAbortRef.current = ac;
     setSearchQuery(q);
     setSearchLoading(true);
     try {
-      const data = await searchPublicPosts(q, 30);
+      const data = await searchPublicPosts(q, 30, 0, ac.signal);
+      if (ac.signal.aborted) return;
       const withLinks = (data.posts || []).filter((p) =>
         p.links?.some((l) => !l.includes('t.me') && l.startsWith('http'))
       );
       setSearchResults(withLinks);
     } catch (e) {
-      setError(e.message);
+      if (e?.name !== 'AbortError') setError(e.message);
     } finally {
-      setSearchLoading(false);
+      if (!ac.signal.aborted) setSearchLoading(false);
     }
   };
 
@@ -1022,9 +1037,11 @@ export default function PublicHomePage() {
   const [tickerPosts, setTickerPosts] = useState([]);
 
   useEffect(() => {
-    fetchArticlePosts('', 0, 10)
+    const ac = new AbortController();
+    fetchArticlePosts('', 0, 10, '', ac.signal)
       .then((d) => setTickerPosts(d.posts || []))
       .catch(() => {});
+    return () => ac.abort();
   }, []);
 
   const tickerTexts = tickerPosts
@@ -1183,8 +1200,8 @@ export default function PublicHomePage() {
           </Typography>
         </Alert>
 
-        {activeTab === 0 && <HotNewsTab />}
-        {activeTab === 1 && <ArticlesTab />}
+        <Box sx={{ display: activeTab === 0 ? 'block' : 'none' }}><HotNewsTab /></Box>
+        <Box sx={{ display: activeTab === 1 ? 'block' : 'none' }}><ArticlesTab /></Box>
 
         {/* Footer */}
         <Box textAlign="center" py={3} mt={2} borderTop="1px solid" borderColor="divider">

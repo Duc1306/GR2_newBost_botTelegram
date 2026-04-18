@@ -262,12 +262,13 @@ async def process_one(pending_doc: dict, db):
     ch_username = pending_doc["channel_username"]
     pending_col = db["pending_channels"]
     channels_col = db["channels"]
+    loop = asyncio.get_running_loop()
 
     attempts = pending_doc.get("attempts", 0) + 1
-    pending_col.update_one(
+    await loop.run_in_executor(None, lambda: pending_col.update_one(
         {"_id": pending_doc["_id"]},
         {"$set": {"attempts": attempts, "last_attempt": datetime.utcnow()}},
-    )
+    ))
 
     try:
         client = _build_client()
@@ -285,13 +286,15 @@ async def process_one(pending_doc: dict, db):
 
         # Generate AI summary
         summary = await _generate_summary(ch_username, db)
-        total_posts = db["posts"].count_documents({"source": ch_username})
+        total_posts = await loop.run_in_executor(
+            None, lambda: db["posts"].count_documents({"source": ch_username})
+        )
         if summary:
             _save_summary(ch_username, summary, total_posts, db)
             logger.info(f"  Summary saved for @{ch_username}")
 
         # Mark channel as active
-        channels_col.update_one(
+        await loop.run_in_executor(None, lambda: channels_col.update_one(
             {"username": ch_username},
             {
                 "$set": {
@@ -301,26 +304,26 @@ async def process_one(pending_doc: dict, db):
                     "post_count": total_posts,
                 }
             },
-        )
+        ))
 
         # Remove from pending queue
-        pending_col.delete_one({"_id": pending_doc["_id"]})
+        await loop.run_in_executor(None, lambda: pending_col.delete_one({"_id": pending_doc["_id"]}))
         logger.info(f"  @{ch_username} → active ✓")
 
     except Exception as exc:
         logger.error(f"Failed to process @{ch_username}: {exc}")
         if attempts >= MAX_ATTEMPTS:
-            channels_col.update_one(
+            await loop.run_in_executor(None, lambda: channels_col.update_one(
                 {"username": ch_username},
                 {"$set": {"status": "error", "error_message": str(exc)}},
-            )
-            pending_col.delete_one({"_id": pending_doc["_id"]})
+            ))
+            await loop.run_in_executor(None, lambda: pending_col.delete_one({"_id": pending_doc["_id"]}))
             logger.warning(f"  @{ch_username} marked as error after {attempts} attempts.")
         else:
-            pending_col.update_one(
+            await loop.run_in_executor(None, lambda: pending_col.update_one(
                 {"_id": pending_doc["_id"]},
                 {"$set": {"next_attempt": datetime.utcnow() + timedelta(minutes=5)}},
-            )
+            ))
 
 
 async def run_worker():

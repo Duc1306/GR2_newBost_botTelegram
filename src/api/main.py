@@ -49,7 +49,24 @@ def _hotnews_mem_ttl(hours: int) -> timedelta:
     return timedelta(hours=3)
 
 
+def _cleanup_hotnews_cache() -> None:
+    """Remove expired entries from in-memory cache and orphaned locks."""
+    now = datetime.utcnow()
+    expired = []
+    for k, v in list(_hotnews_mem.items()):
+        try:
+            hours = int(k.split(':')[1])
+        except (IndexError, ValueError):
+            hours = 72
+        if now - v["ts"] > _hotnews_mem_ttl(hours):
+            expired.append(k)
+    for k in expired:
+        _hotnews_mem.pop(k, None)
+        _hotnews_locks.pop(k, None)
+
+
 def _get_hotnews_lock(key: str) -> asyncio.Lock:
+    _cleanup_hotnews_cache()
     if key not in _hotnews_locks:
         _hotnews_locks[key] = asyncio.Lock()
     return _hotnews_locks[key]
@@ -59,7 +76,7 @@ def _get_hotnews_lock(key: str) -> asyncio.Lock:
 async def lifespan(app: FastAPI):
     """Start background workers when the API boots; cancel them on shutdown."""
     from scripts.create_indexes import create_indexes
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, create_indexes)
     from src.ingestion.channel_queue_worker import run_worker, run_refresh_loop
     pending_task = asyncio.create_task(run_worker())
@@ -1831,7 +1848,7 @@ async def get_hotnews_summary(
                         topic_display_name = cluster["name"]
                         link_posts = _extract_link_posts(posts)
                         import asyncio as _asyncio
-                        result = await _asyncio.get_event_loop().run_in_executor(
+                        result = await _asyncio.get_running_loop().run_in_executor(
                             None, summarize_cluster, posts, topic_display_name
                         )
                         expires_at = datetime.utcnow() + timedelta(minutes=30)
@@ -1861,7 +1878,7 @@ async def get_hotnews_summary(
     link_posts = _extract_link_posts(posts)
     # Run blocking OpenAI call in thread pool to avoid blocking the async event loop
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, summarize_cluster, posts, topic_display_name)
 
     # Cache result

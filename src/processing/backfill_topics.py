@@ -4,9 +4,13 @@ Run: python -m src.processing.backfill_topics [--limit 10000]
 from __future__ import annotations
 import sys
 from typing import List
+from pymongo import UpdateOne
+from pymongo.errors import BulkWriteError
 from src.db.mongo import get_posts_collection
 from src.processing.topic_classifier import classify_post_topics
 from src.processing.lang import detect_language
+
+_BATCH_SIZE = 500
 
 
 def backfill(limit: int = 10000) -> None:
@@ -21,17 +25,30 @@ def backfill(limit: int = 10000) -> None:
     cursor = coll.find(query).limit(limit)
     count = 0
     updated = 0
+    batch: list[UpdateOne] = []
+
+    def _flush(ops: list) -> int:
+        if not ops:
+            return 0
+        try:
+            result = coll.bulk_write(ops, ordered=False)
+            return result.modified_count
+        except BulkWriteError as bwe:
+            return bwe.details.get("nModified", 0)
+
     for doc in cursor:
         text = doc.get("text", "")
         lang = doc.get("lang") or detect_language(text)
         topics = classify_post_topics(text, lang)
         if topics:
-            res = coll.update_one({"id": doc["id"]}, {"$set": {"topics": topics}})
-            if res.modified_count:
-                updated += 1
+            batch.append(UpdateOne({"id": doc["id"]}, {"$set": {"topics": topics}}))
         count += 1
-        if count % 500 == 0:
+        if len(batch) >= _BATCH_SIZE:
+            updated += _flush(batch)
+            batch = []
             print(f"Processed {count} docs, updated {updated}")
+
+    updated += _flush(batch)
     print(f"Done. Scanned {count}, updated {updated} posts.")
 
 

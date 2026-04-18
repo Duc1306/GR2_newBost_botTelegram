@@ -175,7 +175,7 @@ async def send_code(body: SendCodeRequest):
     def _db_check():
         return users_col.find_one({"phone_number": phone}, {"full_name": 1})
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     connect_task = asyncio.ensure_future(client.connect())
     db_task = loop.run_in_executor(None, _db_check)
     try:

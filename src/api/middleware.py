@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from loguru import logger
 from fastapi import Request, Response
 import time
+import random
 from typing import Callable
 
 from src.config import (
@@ -104,12 +105,13 @@ async def log_requests_middleware(request: Request, call_next: Callable) -> Resp
         
         # Calculate duration
         duration = time.time() - start_time
-        
-        # Log response
-        logger.info(
-            f"← {request.method} {request.url.path} "
-            f"status={response.status_code} duration={duration:.3f}s"
-        )
+
+        # Only log ~10% of successful 2xx requests; always log errors and slow requests
+        if response.status_code >= 400 or duration > 1.0 or random.random() < 0.1:
+            logger.info(
+                f"← {request.method} {request.url.path} "
+                f"status={response.status_code} duration={duration:.3f}s"
+            )
         
         return response
     

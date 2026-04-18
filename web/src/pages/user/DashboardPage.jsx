@@ -7,7 +7,7 @@
  *   • Hủy đăng ký kênh
  *   • Nút xem trang tin công khai
  */
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -441,6 +441,9 @@ const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSumma
   const [localSummaryDate, setLocalSummaryDate] = useState(null);
   const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
   const [postsDialogOpen, setPostsDialogOpen] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
   const displaySummary = localSummary || ch.latest_summary;
   const displaySummaryDate = localSummaryDate || ch.summary_date;
@@ -458,6 +461,7 @@ const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSumma
       for (let i = 0; i < 15; i++) {          // up to 45 s (exponential backoff)
         const delay = i < 5 ? 2000 : i < 10 ? 3000 : 4000;
         await new Promise((r) => setTimeout(r, delay));
+        if (!mountedRef.current) break;
         try {
           const res = await apiGet(`/user/channels/${ch.username}/summary`);
           if (res.summaries?.length > 0) {
@@ -768,7 +772,7 @@ export default function DashboardPage() {
   }, []);
 
   // Subscribe one Telegram channel by its ID
-  const handleTgSubscribe = async (channel) => {
+  const handleTgSubscribe = useCallback(async (channel) => {
     setTgSubscribing((prev) => new Set([...prev, channel.id]));
     try {
       await apiPost('/auth/telegram/select-channels', { channel_ids: [channel.id] });
@@ -783,10 +787,10 @@ export default function DashboardPage() {
     } finally {
       setTgSubscribing((prev) => { const s = new Set(prev); s.delete(channel.id); return s; });
     }
-  };
+  }, [loadChannels]);
 
   // ── Bulk import ─────────────────────────────────────────────────────────────
-  const handleBulkAdd = async () => {
+  const handleBulkAdd = useCallback(async () => {
     // Parse comma/newline/space-separated links
     const links = bulkInput
       .split(/[\s,;|\n]+/)
@@ -817,10 +821,10 @@ export default function DashboardPage() {
     } finally {
       setBulkAdding(false);
     }
-  };
+  }, [bulkInput, loadChannels]);
 
   // ── Quick subscribe (from suggestions) ─────────────────────────────────────
-  const handleQuickSubscribe = async (channelUsername) => {
+  const handleQuickSubscribe = useCallback(async (channelUsername) => {
     setQuickSubscribing((prev) => new Set([...prev, channelUsername]));
     try {
       await apiPost('/user/channels', { channel_link: `t.me/${channelUsername}` });
@@ -836,10 +840,10 @@ export default function DashboardPage() {
     } finally {
       setQuickSubscribing((prev) => { const s = new Set(prev); s.delete(channelUsername); return s; });
     }
-  };
+  }, [loadChannels, loadDiscover]);
 
   // ── Unsubscribe ─────────────────────────────────────────────────────────────
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = useCallback(async () => {
     if (!toDelete) return;
     setDeleting(true);
     try {
@@ -852,9 +856,11 @@ export default function DashboardPage() {
       setDeleting(false);
       setToDelete(null);
     }
-  };
+  }, [toDelete]);
 
-  const handleLogout = async () => { await logout(); navigate('/'); };
+  const handleLogout = useCallback(async () => { await logout(); navigate('/'); }, [logout, navigate]);
+
+  const handleSummarized = useCallback(() => loadChannels(true), [loadChannels]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -1220,7 +1226,7 @@ export default function DashboardPage() {
         ) : (
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', md: 'repeat(3,1fr)' } }}>
             {channels.map((ch) => (
-              <ChannelCard key={ch.username} ch={ch} onUnsubscribe={setToDelete} onSummarized={() => loadChannels(true)} />
+              <ChannelCard key={ch.username} ch={ch} onUnsubscribe={setToDelete} onSummarized={handleSummarized} />
             ))}
           </Box>
         )}

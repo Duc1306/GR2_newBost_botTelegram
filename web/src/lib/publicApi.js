@@ -5,8 +5,8 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
  * Fetch active hot topics list.
  * @returns {{ topics: Array, seeded: boolean }}
  */
-export async function fetchHotTopics() {
-  const res = await fetch(`${API_BASE}/public/hot-topics`);
+export async function fetchHotTopics(signal) {
+  const res = await fetch(`${API_BASE}/public/hot-topics`, { signal });
   if (!res.ok) throw new Error('Failed to fetch hot topics');
   return res.json();
 }
@@ -15,7 +15,7 @@ export async function fetchHotTopics() {
  * Fetch posts for a hot-topic slug, or all posts when slug === 'all'.
  * Returns { posts, total, topic?, skip, limit, ai_ranked? }
  */
-export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false) {
+export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false, signal) {
   let url;
   if (slug === 'all') {
     const params = new URLSearchParams({ limit, skip });
@@ -26,7 +26,7 @@ export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false
     url = `${API_BASE}/public/hot-topics/${encodeURIComponent(slug)}/${endpoint}?${params}`;
   }
 
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error('Failed to fetch posts');
   return res.json();
 }
@@ -35,11 +35,11 @@ export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false
  * Fetch only posts that have external links, optionally filtered by topic.
  * Returns { posts: Array, total: number }
  */
-export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = '') {
+export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = '', signal) {
   const params = new URLSearchParams({ limit, skip, link_only: 'true' });
   if (topic) params.set('topic', topic);
   if (q) params.set('q', q);
-  const res = await fetch(`${API_BASE}/public/posts?${params}`);
+  const res = await fetch(`${API_BASE}/public/posts?${params}`, { signal });
   if (!res.ok) throw new Error('Failed to fetch article posts');
   return res.json();
 }
@@ -47,9 +47,9 @@ export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = ''
 /**
  * Search posts (public endpoint).
  */
-export async function searchPublicPosts(q, limit = 20, skip = 0) {
+export async function searchPublicPosts(q, limit = 20, skip = 0, signal) {
   const params = new URLSearchParams({ q, limit, skip });
-  const res = await fetch(`${API_BASE}/public/posts?${params}`);
+  const res = await fetch(`${API_BASE}/public/posts?${params}`, { signal });
   if (!res.ok) throw new Error('Search failed');
   return res.json();
 }
@@ -69,9 +69,10 @@ export async function fetchHotNewsClusters(hours = 48, signal) {
  * Results are cached server-side for 30 minutes.
  * @returns {{ summary, key_points, sentiment, ai, post_count }}
  */
-export async function fetchHotNewsSummary(slug, hours = 48) {
+export async function fetchHotNewsSummary(slug, hours = 48, signal) {
   const res = await fetch(`${API_BASE}/public/hotnews/${encodeURIComponent(slug)}/summary?hours=${hours}`, {
     method: 'POST',
+    signal,
   });
   if (!res.ok) throw new Error('Failed to fetch summary');
   return res.json();
@@ -82,8 +83,8 @@ export async function fetchHotNewsSummary(slug, hours = 48) {
  * Used to populate the topic filter chips on the articles tab.
  * @returns {{ topics: Array<{ name, slug, count, color }> }}
  */
-export async function fetchPostTopics() {
-  const res = await fetch(`${API_BASE}/public/post-topics`);
+export async function fetchPostTopics(signal) {
+  const res = await fetch(`${API_BASE}/public/post-topics`, { signal });
   if (!res.ok) throw new Error('Failed to fetch post topics');
   return res.json();
 }
