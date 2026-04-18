@@ -1,9 +1,5 @@
 """X (Twitter) ingestion worker — dùng Apify thay vì Twitter API v2.
 
-Hỗ trợ 2 Actor:
-  - apidojo/tweet-scraper        : cào theo từ khóa / hashtag
-  - apidojo/twitter-user-scraper : cào theo timeline tài khoản cụ thể
-
 Chạy trực tiếp:
   python -m src.ingestion.x_worker --mode keyword
   python -m src.ingestion.x_worker --mode user
@@ -236,7 +232,7 @@ def fetch_by_keywords(
     query_type: str = "Latest",  # "Latest" | "Top"
 ) -> List[dict]:
     """
-    Dùng Actor apidojo/tweet-scraper để cào tweet theo từ khóa.
+    Cào tweet theo từ khóa/hashtag.
 
     Args:
         keywords:   Danh sách từ khóa / hashtag, VD: ["ReactJS", "#AI", "Việt Nam công nghệ"]
@@ -286,7 +282,7 @@ def fetch_by_users(
     max_tweets_per_user: int = X_FETCH_LIMIT,
 ) -> List[dict]:
     """
-    Dùng Actor apidojo/tweet-scraper (Actor A) với twitterHandles
+    Cào tweet theo timeline tài khoản.
     để cào tweet từ timeline của từng tài khoản.
 
     Args:
@@ -433,13 +429,17 @@ async def ingest_once(
     user_list = usernames or _get_x_users()
 
     raw_tweets: List[dict] = []
+    loop = asyncio.get_event_loop()
 
     # ---- Actor A: từ khóa ----
     if mode in ("keyword", "both") and kw_list:
         logger.info(f"\n[X-Worker] === Actor A: Tweet Scraper (Từ khóa) ===")
         logger.info(f"  Keywords : {kw_list}")
         logger.info(f"  Max items: {max_items} | Lang: {language}")
-        kw_tweets = fetch_by_keywords(kw_list, max_items=max_items, language=language)
+        kw_tweets = await loop.run_in_executor(
+            None,
+            lambda: fetch_by_keywords(kw_list, max_items=max_items, language=language),
+        )
         raw_tweets.extend(kw_tweets)
         logger.info(f"  → {len(kw_tweets)} tweets từ keyword search")
 
@@ -447,7 +447,10 @@ async def ingest_once(
     if mode in ("user", "both") and user_list:
         logger.info(f"\n[X-Worker] === Actor B: User Scraper (Tài khoản) ===")
         logger.info(f"  Users: {user_list}")
-        user_tweets = fetch_by_users(user_list, max_tweets_per_user=max_items)
+        user_tweets = await loop.run_in_executor(
+            None,
+            lambda: fetch_by_users(user_list, max_tweets_per_user=max_items),
+        )
         raw_tweets.extend(user_tweets)
         logger.info(f"  → {len(user_tweets)} tweets từ user timelines")
 

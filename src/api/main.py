@@ -33,10 +33,34 @@ from loguru import logger
 # Initialize logging first
 setup_logging()
 
+# ---------------------------------------------------------------------------
+# In-memory hotnews cache — prevents duplicate GPT calls for concurrent
+# requests with the same (hours, bucket) key.
+# TTL matches bucket_size: 1h for 24h window, 2h for 48h, 3h for 72h+.
+# ---------------------------------------------------------------------------
+_hotnews_mem: dict[str, dict] = {}          # cache_key → {"result": ..., "ts": datetime}
+_hotnews_locks: dict[str, asyncio.Lock] = {}  # cache_key → Lock (one GPT call at a time)
+
+def _hotnews_mem_ttl(hours: int) -> timedelta:
+    if hours <= 24:
+        return timedelta(hours=1)
+    elif hours <= 48:
+        return timedelta(hours=2)
+    return timedelta(hours=3)
+
+
+def _get_hotnews_lock(key: str) -> asyncio.Lock:
+    if key not in _hotnews_locks:
+        _hotnews_locks[key] = asyncio.Lock()
+    return _hotnews_locks[key]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background workers when the API boots; cancel them on shutdown."""
+    from scripts.create_indexes import create_indexes
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, create_indexes)
     from src.ingestion.channel_queue_worker import run_worker, run_refresh_loop
     pending_task = asyncio.create_task(run_worker())
     refresh_task = asyncio.create_task(run_refresh_loop())
@@ -324,12 +348,9 @@ async def get_posts(
     if lang:
         query["lang"] = lang
     if q:
-        query["text"] = {"$regex": re.escape(q), "$options": "i"}
+        query["$text"] = {"$search": q}
     if link_only:
         query["links"] = {"$exists": True, "$ne": []}
-    
-    # Log query for debugging
-    print(f"[API] Query: {query}")
     
     # Fetch posts
     cursor = coll.find(query).sort("created_at", -1).skip(skip).limit(limit)
@@ -432,43 +453,48 @@ async def get_stats(
     if lang:
         base_query["lang"] = lang
 
-    total_filtered = coll.count_documents(base_query)
-
-    # Count by source (theo filter)
-    sources_pipeline = [
+    # Single $facet pipeline: all stats in one collection scan
+    facet_result = list(coll.aggregate([
         {"$match": base_query},
-        {"$group": {"_id": "$source", "count": {"$sum": 1}}}
-    ]
-    sources = list(coll.aggregate(sources_pipeline))
+        {"$facet": {
+            "total": [{"$count": "n"}],
+            "sources": [
+                {"$group": {"_id": "$source", "count": {"$sum": 1}}}
+            ],
+            "languages": [
+                {"$group": {"_id": "$lang", "count": {"$sum": 1}}}
+            ],
+            "topics": [
+                {"$match": {"topics": {"$exists": True, "$ne": []}}},
+                {"$unwind": "$topics"},
+                {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}}
+            ],
+            "platforms": [
+                {"$group": {"_id": "$platform", "count": {"$sum": 1}}}
+            ],
+            "labeled_count": [
+                {"$match": {"topics": {"$exists": True, "$ne": []}}},
+                {"$count": "count"}
+            ],
+            "latest": [
+                {"$sort": {"created_at": -1}},
+                {"$limit": 1},
+                {"$project": {"created_at": 1}}
+            ],
+        }}
+    ]))
 
-    # Count by language (theo filter)
-    languages_pipeline = [
-        {"$match": base_query},
-        {"$group": {"_id": "$lang", "count": {"$sum": 1}}}
-    ]
-    languages = list(coll.aggregate(languages_pipeline))
+    facet = facet_result[0] if facet_result else {}
+    total_filtered = (facet.get("total", [{}])[0] or {}).get("n", 0)
+    sources = facet.get("sources", [])
+    languages = facet.get("languages", [])
+    topics = facet.get("topics", [])
+    platforms = facet.get("platforms", [])
+    labeled_posts_count = (facet.get("labeled_count", [{}])[0] or {}).get("count", 0)
+    latest_doc = (facet.get("latest") or [None])[0]
+    latest_date = latest_doc["created_at"] if latest_doc else None
 
-    # Count by topic (theo filter)
-    topics_pipeline = [
-        {"$match": {**base_query, "topics": {"$exists": True, "$ne": []}}},
-        {"$unwind": "$topics"},
-        {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}}
-    ]
-    topics = list(coll.aggregate(topics_pipeline))
-    
-    # Count UNIQUE posts with topics (not total topic assignments)
-    labeled_posts_count = coll.count_documents({
-        **base_query, 
-        "topics": {"$exists": True, "$ne": []}
-    })
-
-    # Count by platform (telegram vs x)
-    platform_pipeline = [
-        {"$match": base_query},
-        {"$group": {"_id": "$platform", "count": {"$sum": 1}}}
-    ]
-    platforms = list(coll.aggregate(platform_pipeline))
     # Normalise: "twitter" → "x", None/missing → "telegram"
     _PLATFORM_MAP = {"twitter": "x", "x": "x", "telegram": "telegram"}
     by_platform: dict = {"telegram": 0, "x": 0}
@@ -477,18 +503,11 @@ async def get_stats(
         key = _PLATFORM_MAP.get(raw_key, raw_key)
         by_platform[key] = by_platform.get(key, 0) + p["count"]
 
-    # Count active channels
+    # Count active channels (2 fast indexed queries)
     channels_coll = db["channels"]
     channel_meta_coll = db["channel_metadata"]
-    # channel_metadata = 108 telegram channels (no status field, all active)
     active_channels_telegram = channel_meta_coll.count_documents({"platform": "telegram"})
-    # channels collection may have X/Twitter entries with status tracking
     active_channels_x = channels_coll.count_documents({"status": "active", "platform": {"$in": ["x", "twitter"]}})
-    active_channels_total = active_channels_telegram + active_channels_x
-
-    # Latest post theo filter
-    latest = coll.find_one(base_query, sort=[("created_at", -1)])
-    latest_date = latest["created_at"] if latest else None
 
     return {
         "total_posts": total_filtered,
@@ -499,7 +518,7 @@ async def get_stats(
         "by_topic": {t["_id"]: t["count"] for t in topics if t["_id"] is not None},
         "by_platform": by_platform,
         "active_channels": {
-            "total": active_channels_total,
+            "total": active_channels_telegram + active_channels_x,
             "telegram": active_channels_telegram,
             "x": active_channels_x,
         },
@@ -546,39 +565,31 @@ async def get_trending_topics(
     # Build platform query
     platform_filter = {} if platform == "all" else {"platform": platform}
     
-    # Get recent posts by topic
-    recent_pipeline = [
+    # Single $facet pipeline for both halves
+    facet_result = list(posts.aggregate([
         {"$match": {
-            "created_at": {"$gte": mid_date, "$lt": end_date},
+            "created_at": {"$gte": start_date, "$lt": end_date},
             "topics": {"$exists": True, "$ne": []},
             **platform_filter
         }},
-        {"$unwind": "$topics"},
-        {"$group": {
-            "_id": "$topics",
-            "count": {"$sum": 1}
+        {"$facet": {
+            "recent": [
+                {"$match": {"created_at": {"$gte": mid_date}}},
+                {"$unwind": "$topics"},
+                {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+            ],
+            "previous": [
+                {"$match": {"created_at": {"$lt": mid_date}}},
+                {"$unwind": "$topics"},
+                {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+            ],
         }}
-    ]
-    recent_stats = list(posts.aggregate(recent_pipeline))
-    
-    # Get previous posts by topic
-    previous_pipeline = [
-        {"$match": {
-            "created_at": {"$gte": start_date, "$lt": mid_date},
-            "topics": {"$exists": True, "$ne": []},
-            **platform_filter
-        }},
-        {"$unwind": "$topics"},
-        {"$group": {
-            "_id": "$topics",
-            "count": {"$sum": 1}
-        }}
-    ]
-    previous_stats = list(posts.aggregate(previous_pipeline))
+    ]))
+    facet = facet_result[0] if facet_result else {}
     
     # Build lookup dictionaries
-    recent_by_topic = {stat["_id"]: stat["count"] for stat in recent_stats}
-    previous_by_topic = {stat["_id"]: stat["count"] for stat in previous_stats}
+    recent_by_topic = {s["_id"]: s["count"] for s in facet.get("recent", [])}
+    previous_by_topic = {s["_id"]: s["count"] for s in facet.get("previous", [])}
     
     # Calculate trends
     trends = []
@@ -915,38 +926,51 @@ async def get_platform_comparison(
     # Query
     query = {"created_at": {"$gte": start_date, "$lte": end_date}}
     
-    platforms = ["telegram", "twitter"]
+    days = (end_date - start_date).days + 1
+
+    # Single $facet: counts + top topics for both platforms in one scan
+    facet_result = list(posts.aggregate([
+        {"$match": query},
+        {"$facet": {
+            "telegram_count": [
+                {"$match": {"platform": "telegram"}},
+                {"$count": "n"},
+            ],
+            "telegram_topics": [
+                {"$match": {"platform": "telegram", "topics": {"$exists": True, "$ne": []}}},
+                {"$unwind": "$topics"},
+                {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 5},
+            ],
+            "twitter_count": [
+                {"$match": {"platform": "twitter"}},
+                {"$count": "n"},
+            ],
+            "twitter_topics": [
+                {"$match": {"platform": "twitter", "topics": {"$exists": True, "$ne": []}}},
+                {"$unwind": "$topics"},
+                {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 5},
+            ],
+        }}
+    ]))
+    f = facet_result[0] if facet_result else {}
+
     comparison = {}
-    
-    for platform in platforms:
-        platform_query = {**query, "platform": platform}
-        
-        # Total posts
-        total_posts = posts.count_documents(platform_query)
-        
-        # Days
-        days = (end_date - start_date).days + 1
-        avg_daily = total_posts / days if days > 0 else 0
-        
-        # Top topics
-        topics_pipeline = [
-            {"$match": platform_query},
-            {"$unwind": "$topics"},
-            {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-            {"$limit": 5}
-        ]
+    for plat in ["telegram", "twitter"]:
+        total_posts = (f.get(f"{plat}_count", [{}])[0] or {}).get("n", 0)
         top_topics = [
             {"topic": t["_id"], "count": t["count"]}
-            for t in posts.aggregate(topics_pipeline)
+            for t in f.get(f"{plat}_topics", [])
         ]
-        
-        comparison[platform] = {
+        comparison[plat] = {
             "total_posts": total_posts,
-            "avg_daily": round(avg_daily, 1),
-            "top_topics": top_topics
+            "avg_daily": round(total_posts / days, 1) if days > 0 else 0,
+            "top_topics": top_topics,
         }
-    
+
     return {
         "comparison": comparison,
         "period": {
@@ -1303,11 +1327,11 @@ async def get_public_posts(
         query["links"] = {"$elemMatch": {"$regex": "^https?://", "$not": {"$regex": "t\\.me"}}}
 
     if q:
-        query["text"] = {"$regex": re.escape(q), "$options": "i"}
+        query["$text"] = {"$search": q}
     elif keywords:
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
         if kw_list:
-            query["$or"] = [{"text": {"$regex": re.escape(kw), "$options": "i"}} for kw in kw_list]
+            query["$text"] = {"$search": " ".join(kw_list)}
 
     projection = {
         "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
@@ -1361,7 +1385,7 @@ async def get_public_hot_topic_posts(
     if not keywords:
         return {"topic": topic_doc, "posts": [], "total": 0, "skip": skip, "limit": limit}
 
-    query = {"$or": [{"text": {"$regex": kw, "$options": "i"}} for kw in keywords]}
+    query = {"$text": {"$search": " ".join(keywords)}}
     projection = {
         "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
         "created_at": 1, "links": 1, "topics": 1, "lang": 1,
@@ -1498,18 +1522,45 @@ async def get_public_hotnews(
     posts_coll = db["posts"]
     cache_coll = db["hotnews_v2_cache"]
 
-    since = datetime.utcnow() - timedelta(hours=hours)
-    bucket_hour = (datetime.utcnow().hour // 2) * 2
-    cache_key = f"hotnews_kw:{hours}:{datetime.utcnow().strftime('%Y%m%d')}{bucket_hour:02d}"
+    now = datetime.utcnow()
+    since = now - timedelta(hours=hours)
 
+    # Bucket size scales with window so cache stays fresh relative to the window:
+    #   24h → 1h bucket  (data refreshes each hour)
+    #   48h → 2h bucket
+    #   72h+ → 3h bucket
+    if hours <= 24:
+        bucket_size = 1
+    elif hours <= 48:
+        bucket_size = 2
+    else:
+        bucket_size = 3
+    bucket_hour = (now.hour // bucket_size) * bucket_size
+    cache_key = f"hotnews_kw:{hours}:{now.strftime('%Y%m%d')}{bucket_hour:02d}"
+
+    # ── L1: in-memory cache (instant, no DB round-trip) ──────────────────────
+    mem = _hotnews_mem.get(cache_key)
+    if mem and (now - mem["ts"]) < _hotnews_mem_ttl(hours):
+        return {**mem["result"], "cached": True}
+
+    # ── L2: MongoDB cache ─────────────────────────────────────────────────────
     cached = cache_coll.find_one({"key": cache_key})
     if cached and cached.get("clusters"):
-        return {
-            "clusters": cached["clusters"],
-            "since": since.isoformat(),
-            "hours": hours,
-            "cached": True,
-        }
+        result = {"clusters": cached["clusters"], "since": since.isoformat(), "hours": hours, "cached": True}
+        _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
+        return result
+
+    # ── L3: compute (expensive GPT call) — serialized per key via Lock ────────
+    async with _get_hotnews_lock(cache_key):
+        # Re-check after acquiring lock (another request may have computed it)
+        mem = _hotnews_mem.get(cache_key)
+        if mem and (datetime.utcnow() - mem["ts"]) < _hotnews_mem_ttl(hours):
+            return {**mem["result"], "cached": True}
+        cached = cache_coll.find_one({"key": cache_key})
+        if cached and cached.get("clusters"):
+            result = {"clusters": cached["clusters"], "since": since.isoformat(), "hours": hours, "cached": True}
+            _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
+            return result
 
     projection = {
         "_id": 1, "text": 1, "source": 1, "created_at": 1,
@@ -1517,23 +1568,33 @@ async def get_public_hotnews(
         "channel_username": 1,
     }
 
-    # ── Step 1: fetch recent posts, link-posts first ──────────────────────────
-    # Link-posts have richer content and represent real news articles
-    link_posts = list(
-        posts_coll.find(
-            {"created_at": {"$gte": since}, "links": {"$exists": True, "$ne": []}},
-            projection,
-        ).sort("created_at", -1).limit(300)
-    )
-    no_link_posts = list(
-        posts_coll.find(
-            {"created_at": {"$gte": since}, "$or": [{"links": {"$exists": False}}, {"links": []}]},
-            projection,
-        ).sort("created_at", -1).limit(200)
-    )
-    all_posts = link_posts + no_link_posts
-    for p in all_posts:
-        p["_id"] = str(p["_id"])
+    # ── Step 1: fetch posts across the full time window ───────────────────────
+    # Divide window into slices so older posts are always represented.
+    # Each slice = hours/3, fetch up to posts_per_slice posts per slice.
+    # This prevents 500 recent posts from drowning out posts from 2-3 days ago.
+    slice_hours = hours // 3          # e.g. 24h→8h, 48h→16h, 72h→24h per slice
+    posts_per_slice = 150             # 3 slices × 150 = 450 posts total (manageable)
+
+    all_posts: list[dict] = []
+    seen_ids: set = set()
+    for i in range(3):
+        slice_end   = now - timedelta(hours=i * slice_hours)
+        slice_start = now - timedelta(hours=(i + 1) * slice_hours)
+        # Ensure we don't go beyond the overall window boundary
+        if slice_start < since:
+            slice_start = since
+        slice_posts = list(
+            posts_coll.find(
+                {"created_at": {"$gte": slice_start, "$lt": slice_end}},
+                projection,
+            ).sort("created_at", -1).limit(posts_per_slice)
+        )
+        for p in slice_posts:
+            pid = str(p["_id"])
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                p["_id"] = pid
+                all_posts.append(p)
 
     clusters: list[dict] = []
 
@@ -1668,8 +1729,9 @@ async def get_public_hotnews(
         {"$set": {"key": cache_key, "clusters": clusters, "created_at": datetime.utcnow()}},
         upsert=True,
     )
-
-    return {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": False}
+    result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": False}
+    _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
+    return result
 
 
 

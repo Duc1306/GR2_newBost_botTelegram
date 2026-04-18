@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
@@ -85,19 +85,30 @@ export default function AdminUsersPage() {
 
   // ── filters ──
   const [q, setQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
 
+  // Debounce search input
+  const debounceRef = useRef(null);
+  useEffect(() => {
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQ(q);
+      setPage(0);
+    }, 400);
+    return () => clearTimeout(debounceRef.current);
+  }, [q]);
+
   // ── confirm dialog state ──
   const [confirm, setConfirm] = useState(null); // { type, username, payload }
 
   // ── queries ──
-  const usersKey = ['admin-users', q, statusFilter, roleFilter, page, rowsPerPage];
+  const usersKey = ['admin-users', debouncedQ, statusFilter, roleFilter, page, rowsPerPage];
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: usersKey,
-    queryFn: () => fetchUsers({ q, status: statusFilter, role: roleFilter, page, rowsPerPage }),
+    queryFn: () => fetchUsers({ q: debouncedQ, status: statusFilter, role: roleFilter, page, rowsPerPage }),
     keepPreviousData: true,
   });
 
@@ -175,7 +186,7 @@ export default function AdminUsersPage() {
       <Paper sx={{ p: 2, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
         <TextField
           size="small" placeholder="Tìm username / email…"
-          value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
+          value={q} onChange={(e) => setQ(e.target.value)}
           sx={{ minWidth: 220 }}
           InputProps={{ startAdornment: <InputAdornment position="start"><Search /></InputAdornment> }}
         />
@@ -197,7 +208,7 @@ export default function AdminUsersPage() {
           </Select>
         </FormControl>
         {(q || statusFilter || roleFilter) && (
-          <Button size="small" onClick={() => { setQ(''); setStatusFilter(''); setRoleFilter(''); setPage(0); }}>
+          <Button size="small" onClick={() => { setQ(''); setDebouncedQ(''); setStatusFilter(''); setRoleFilter(''); setPage(0); }}>
             Xóa bộ lọc
           </Button>
         )}

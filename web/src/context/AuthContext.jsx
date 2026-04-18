@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { api } from '../lib/api';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -222,35 +222,35 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const isTokenExpired = () => {
+  const isTokenExpired = useMemo(() => {
     if (!token) return true;
     try {
       const payload = token.split('.')[1];
       const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
       if (!decoded?.exp) return true;
-      // exp is in seconds; compare to current time in seconds
       return Date.now() / 1000 >= decoded.exp;
     } catch {
       return true;
     }
-  };
+  }, [token]);
 
   // Derive role directly from the signed JWT — cannot be spoofed via localStorage edits.
   const jwtRole = token ? decodeJwtRole(token) : null;
 
-  const value = {
+  const value = useMemo(() => ({
     user,
     token,
     loading,
     userRole: jwtRole,
-    isAuthenticated: !!token && !isTokenExpired(),
+    isAuthenticated: !!token && !isTokenExpired,
     isAdmin: jwtRole === 'admin',
     login,
     loginWithGoogle,
     loginWithTelegram,
     register,
     logout,
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [user, token, loading, jwtRole, isTokenExpired]);
 
   return (
     <AuthContext.Provider value={value}>

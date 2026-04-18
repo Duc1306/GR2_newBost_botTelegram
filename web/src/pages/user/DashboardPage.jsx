@@ -75,8 +75,8 @@ function authHeaders() {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
-async function apiGet(path) {
-  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+async function apiGet(path, signal) {
+  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders(), signal });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || res.status); }
   return res.json();
 }
@@ -116,7 +116,7 @@ const STATUS_META = {
   error:   { label: 'Lỗi', color: 'error', icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} /> },
 };
 
-function StatusBadge({ status }) {
+function StatusBadgeInner({ status }) {
   const m = STATUS_META[status] || STATUS_META.pending;
   return (
     <Chip
@@ -128,12 +128,13 @@ function StatusBadge({ status }) {
     />
   );
 }
+const StatusBadge = React.memo(StatusBadgeInner);
 
 // ---------------------------------------------------------------------------
 // Post card (used inside ChannelCard posts panel)
 // ---------------------------------------------------------------------------
 
-function PostCard({ post: p, channelUsername, onRead, isRead }) {
+const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead, isRead }) {
   const [expanded, setExpanded] = useState(false);
   const tgLink = p.id ? `https://t.me/${channelUsername}/${p.id.split('_').at(-1)}` : null;
   const externalLink = p.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
@@ -213,13 +214,13 @@ function PostCard({ post: p, channelUsername, onRead, isRead }) {
       </CardActions>
     </Card>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Full-summary popup dialog
 // ---------------------------------------------------------------------------
 
-function SummaryDialog({ open, onClose, channelName, summaryDate, summary }) {
+const SummaryDialog = React.memo(function SummaryDialog({ open, onClose, channelName, summaryDate, summary }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
@@ -290,7 +291,7 @@ function SummaryDialog({ open, onClose, channelName, summaryDate, summary }) {
       </DialogActions>
     </Dialog>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Posts popup dialog
@@ -302,7 +303,7 @@ const HOURS_OPTIONS = [
   { label: '7 ngày', value: 168 },
 ];
 
-function PostsDialog({ open, onClose, channelUsername, channelName, initialUnread }) {
+const PostsDialog = React.memo(function PostsDialog({ open, onClose, channelUsername, channelName, initialUnread }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [hours, setHours] = useState(24);
@@ -426,13 +427,13 @@ function PostsDialog({ open, onClose, channelUsername, channelName, initialUnrea
       </DialogActions>
     </Dialog>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Channel card
 // ---------------------------------------------------------------------------
 
-function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
+const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
   const [expanded, setExpanded] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [summaryDone, setSummaryDone] = useState(false);
@@ -454,8 +455,9 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
       await apiPost(`/user/channels/${ch.username}/summarize`, {});
       // Poll until worker finishes re-fetching and generates a NEW summary.
       // Server deletes old summaries before re-queuing, so any result = fresh.
-      for (let i = 0; i < 30; i++) {          // up to 60 s (30 × 2 s)
-        await new Promise((r) => setTimeout(r, 2000));
+      for (let i = 0; i < 15; i++) {          // up to 45 s (exponential backoff)
+        const delay = i < 5 ? 2000 : i < 10 ? 3000 : 4000;
+        await new Promise((r) => setTimeout(r, delay));
         try {
           const res = await apiGet(`/user/channels/${ch.username}/summary`);
           if (res.summaries?.length > 0) {
@@ -681,7 +683,7 @@ function ChannelCard({ ch, onUnsubscribe, onSummarized }) {
       />
     </Card>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Main page
@@ -716,30 +718,40 @@ export default function DashboardPage() {
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState(null);
 
-  const loadDiscover = useCallback(async () => {
+  const loadDiscover = useCallback(async (signal) => {
     setCatalogLoading(true);
     try {
-      const data = await apiGet('/user/channels/catalog');
+      const data = await apiGet('/user/channels/catalog', signal);
       setCatalog(Array.isArray(data) ? data : []);
-    } catch (_) {}
-    finally { setCatalogLoading(false); }
+    } catch (e) {
+      if (e?.name !== 'AbortError') console.error(e);
+    } finally { setCatalogLoading(false); }
   }, []);
 
-  useEffect(() => { loadDiscover(); }, [loadDiscover]);
+  useEffect(() => {
+    const ac = new AbortController();
+    loadDiscover(ac.signal);
+    return () => ac.abort();
+  }, [loadDiscover]);
 
-  const loadChannels = useCallback(async (silent = false) => {
+  const loadChannels = useCallback(async (silent = false, signal) => {
     if (!silent) setLoadingChannels(true);
     try {
-      const data = await apiGet('/user/channels');
+      const data = await apiGet('/user/channels', signal);
       setChannels(Array.isArray(data) ? data : []);
     } catch (e) {
+      if (e?.name === 'AbortError') return;
       if (!silent) setSnack({ open: true, msg: `Không tải được danh sách kênh: ${e.message}`, severity: 'error' });
     } finally {
       if (!silent) setLoadingChannels(false);
     }
   }, []);
 
-  useEffect(() => { loadChannels(); }, [loadChannels]);
+  useEffect(() => {
+    const ac = new AbortController();
+    loadChannels(false, ac.signal);
+    return () => ac.abort();
+  }, [loadChannels]);
 
   // ── Fetch my Telegram channels (from user's Telegram account) ───────────────
   const loadTelegramChannels = useCallback(async () => {

@@ -17,7 +17,6 @@ export function getAuthToken() {
 // Create headers with auth token
 function createHeaders(extraHeaders = {}) {
   const headers = {
-    'Cache-Control': 'no-cache',
     ...extraHeaders
   };
   
@@ -123,23 +122,17 @@ export async function fetchPosts(params = {}) {
   if (params.skip !== undefined) queryParams.set('skip', Math.max(0, params.skip).toString());
   if (params.link_only) queryParams.set('link_only', 'true');
   if (params.topics_only) queryParams.set('topics_only', 'true');
-  queryParams.set('_t', Date.now().toString());
 
   const url = `${API_BASE_URL}/posts?${queryParams}`;
-  console.log('[API] Fetching posts:', url);
 
   try {
-    const response = await fetchWithAuth(url, {
-      cache: 'no-store',
-    });
+    const response = await fetchWithAuth(url);
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Posts API Error:', response.status, errorText);
       throw new Error(`Failed to fetch posts: ${response.status} ${errorText}`);
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch posts:', error);
     throw error;
   }
 }
@@ -153,13 +146,10 @@ export async function fetchStats(params = {}) {
   try {
     const response = await fetchWithAuth(`${API_BASE_URL}/stats${qs ? `?${qs}` : ''}`);
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Stats API Error:', response.status, errorText);
       throw new Error(`Failed to fetch stats: ${response.status}`);
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch stats:', error);
     throw error;
   }
 }
@@ -168,8 +158,6 @@ export async function fetchTopics() {
   try {
     const response = await fetchWithAuth(`${API_BASE_URL}/topics`);
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Topics API Error:', response.status, errorText);
       throw new Error(`Failed to fetch topics: ${response.status}`);
     }
     const data = await response.json();
@@ -181,7 +169,6 @@ export async function fetchTopics() {
     }
     return [];
   } catch (error) {
-    console.error('Failed to fetch topics:', error);
     throw error;
   }
 }
@@ -193,24 +180,14 @@ export async function fetchPostsCount(params = {}) {
   if (params.lang) queryParams.set('lang', params.lang);
   if (params.link_only) queryParams.set('link_only', 'true');
   if (params.topics_only) queryParams.set('topics_only', 'true');
-  queryParams.set('_t', Date.now().toString());
-  
-  console.log('[API] Fetching posts count:', `${API_BASE_URL}/posts/count?${queryParams}`);
-  
+
   try {
-    const resp = await fetchWithAuth(`${API_BASE_URL}/posts/count?${queryParams}`, {
-      cache: 'no-store',
-    });
+    const resp = await fetchWithAuth(`${API_BASE_URL}/posts/count?${queryParams}`);
     if (!resp.ok) {
-      const errorText = await resp.text();
-      console.error('Posts count API Error:', resp.status, errorText);
       throw new Error(`Failed to count posts: ${resp.status}`);
     }
-    const data = await resp.json();
-    console.log('[API] Posts count result:', data);
-    return data;
+    return resp.json();
   } catch (error) {
-    console.error('Failed to count posts:', error);
     throw error;
   }
 }
@@ -228,7 +205,6 @@ export async function fetchTrendingTopics(params = {}) {
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch trending topics:', error);
     throw error;
   }
 }
@@ -248,7 +224,6 @@ export async function fetchKeywords(params = {}) {
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch keywords:', error);
     throw error;
   }
 }
@@ -265,7 +240,6 @@ export async function fetchTrendingKeywords(params = {}) {
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch trending keywords:', error);
     throw error;
   }
 }
@@ -285,7 +259,6 @@ export async function fetchTimeline(params = {}) {
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch timeline:', error);
     throw error;
   }
 }
@@ -303,7 +276,6 @@ export async function fetchComparison(params = {}) {
     }
     return response.json();
   } catch (error) {
-    console.error('Failed to fetch comparison:', error);
     throw error;
   }
 }

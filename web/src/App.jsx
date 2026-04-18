@@ -1,28 +1,29 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import Layout from './components/layout/Layout.jsx';
+import { CircularProgress, Box } from '@mui/material';
 
-// Admin pages
-import OverviewPage from './pages/admin/OverviewPage.jsx';
-import AnalyticsPage from './pages/admin/AnalyticsPage.jsx';
-import PostsPage from './pages/admin/PostsPage.jsx';
-import TrendingPage from './pages/admin/TrendingPage.jsx';
-import SettingsPage from './pages/admin/SettingsPage.jsx';
-import UsersPage from './pages/admin/UsersPage.jsx';
+// Lazy-loaded pages
+const OverviewPage = lazy(() => import('./pages/admin/OverviewPage.jsx'));
+const AnalyticsPage = lazy(() => import('./pages/admin/AnalyticsPage.jsx'));
+const PostsPage = lazy(() => import('./pages/admin/PostsPage.jsx'));
+const TrendingPage = lazy(() => import('./pages/admin/TrendingPage.jsx'));
+const SettingsPage = lazy(() => import('./pages/admin/SettingsPage.jsx'));
+const UsersPage = lazy(() => import('./pages/admin/UsersPage.jsx'));
+const DashboardPage = lazy(() => import('./pages/user/DashboardPage.jsx'));
+const PublicHomePage = lazy(() => import('./pages/public/PublicHomePage.jsx'));
+const LoginPage = lazy(() => import('./pages/auth/LoginPage.jsx'));
+const RegisterPage = lazy(() => import('./pages/auth/RegisterPage.jsx'));
+const TelegramLoginPage = lazy(() => import('./pages/auth/TelegramLoginPage.jsx'));
 
-// User pages
-import DashboardPage from './pages/user/DashboardPage.jsx';
-
-// Public page (no auth)
-import PublicHomePage from './pages/public/PublicHomePage.jsx';
-
-// Auth pages
-import LoginPage from './pages/auth/LoginPage.jsx';
-import RegisterPage from './pages/auth/RegisterPage.jsx';
-import TelegramLoginPage from './pages/auth/TelegramLoginPage.jsx';
+const PageLoader = () => (
+  <Box display="flex" justifyContent="center" alignItems="center" minHeight="60vh">
+    <CircularProgress />
+  </Box>
+);
 
 // Error boundary to show crash details instead of blank page
 class ErrorBoundary extends React.Component {
@@ -53,6 +54,7 @@ const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       retry: 1,
+      staleTime: 30_000,
     },
   },
 });
@@ -101,6 +103,7 @@ function UserRoute({ page }) {
 
 function AppRoutes() {
   return (
+    <Suspense fallback={<PageLoader />}>
     <Routes>
       {/* ── Public (no auth required) ────────────────────────── */}
       <Route path="/"     element={<PublicHomePage />} />
@@ -128,6 +131,7 @@ function AppRoutes() {
       {/* 404 → public home */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   );
 }
 

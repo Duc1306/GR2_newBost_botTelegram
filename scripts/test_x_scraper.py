@@ -42,7 +42,7 @@ async def main() -> None:
     usernames_to_test = X_USERNAMES or ["TechCrunch"]
 
     # ---- Test Actor A: từ khóa ----
-    print(f"\n[TEST A] Actor apidojo/tweet-scraper")
+    print(f"\n[TEST A] Tweet scraper (keyword)")
     print(f"  Keyword: {keywords_to_test[0]} | Lấy tối đa 5 tweets")
     kw_tweets = fetch_by_keywords([keywords_to_test[0]], max_items=5)
 

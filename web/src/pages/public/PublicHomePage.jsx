@@ -95,7 +95,7 @@ const SENTIMENT_COLOR = {
 
 // ─── Article Card (link-only) ────────────────────────────────────────────────
 
-function ArticleCard({ post, selectedTopic }) {
+const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic }) {
   const externalLink = post.links?.find((l) => !l.includes('t.me') && l.startsWith('http'));
   const title = post.full_article?.title || null;
   // Show the actively-filtered topic as the primary chip so it always matches the selected filter
@@ -184,11 +184,11 @@ function ArticleCard({ post, selectedTopic }) {
       )}
     </Card>
   );
-}
+});
 
 // ─── Hot News Cluster Card ────────────────────────────────────────────────────
 
-function HotClusterCard({ cluster, onReadSummary, isNew }) {
+const HotClusterCard = React.memo(function HotClusterCard({ cluster, onReadSummary, isNew }) {
   return (
     <Card
       elevation={0}
@@ -283,7 +283,7 @@ function HotClusterCard({ cluster, onReadSummary, isNew }) {
       </CardActions>
     </Card>
   );
-}
+});
 
 // ─── AI Summary Dialog ────────────────────────────────────────────────────────
 
@@ -604,23 +604,27 @@ function HotNewsTab() {
   const [lastRefreshed, setLastRefreshed] = useState(null);
   const currentSlugsRef = useRef(new Set());
 
-  const load = useCallback((h) => {
+  const load = useCallback((h, signal) => {
     setLoading(true);
     setError(null);
     setPendingClusters([]);
     setFreshSlugs(new Set());
-    fetchHotNewsClusters(h)
+    fetchHotNewsClusters(h, signal)
       .then((d) => {
         const fresh = d.clusters || [];
         setClusters(fresh);
         currentSlugsRef.current = new Set(fresh.map(c => c.slug));
         setLastRefreshed(new Date());
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => { if (e?.name !== 'AbortError') setError(e.message); })
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(hours); }, [hours, load]);
+  useEffect(() => {
+    const ac = new AbortController();
+    load(hours, ac.signal);
+    return () => ac.abort();
+  }, [hours, load]);
 
   useEffect(() => {
     const id = setInterval(() => {

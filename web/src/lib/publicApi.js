@@ -58,8 +58,8 @@ export async function searchPublicPosts(q, limit = 20, skip = 0) {
  * Fetch hot news clusters (grouped by topic) for the last N hours.
  * @returns {{ clusters: Array, since: string, hours: number }}
  */
-export async function fetchHotNewsClusters(hours = 48) {
-  const res = await fetch(`${API_BASE}/public/hotnews?hours=${hours}`);
+export async function fetchHotNewsClusters(hours = 48, signal) {
+  const res = await fetch(`${API_BASE}/public/hotnews?hours=${hours}`, { signal });
   if (!res.ok) throw new Error('Failed to fetch hot news clusters');
   return res.json();
 }

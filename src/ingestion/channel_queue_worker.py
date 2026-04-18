@@ -368,7 +368,7 @@ async def refresh_active_channels(db) -> None:
     - platform=twitter  : dùng Apify x_worker (mới)
     """
     channels_col = db["channels"]
-    active = list(channels_col.find({"status": "active"}, {"username": 1, "platform": 1}))
+    active = list(channels_col.find({"status": "active"}, {"username": 1, "platform": 1, "last_apify_fetch": 1}))
     if not active:
         logger.debug("Refresh: no active channels.")
         return
@@ -412,56 +412,10 @@ async def refresh_active_channels(db) -> None:
             await client.disconnect()
 
     # ── X / Twitter ───────────────────────────────────────────
+    # X channels (xkw: keyword và x: account) không auto-refresh.
+    # Dữ liệu được cập nhật khi user bấm "Tóm tắt lại" (_run_summarize).
     if x_channels:
-        try:
-            from src.ingestion.x_worker import ingest_once
-            import re as _re
-
-            # username lưu dạng "x:TechCrunch" → bỏ prefix lấy tên thật
-            usernames = [ch["username"][2:] for ch in x_channels
-                         if ch["username"].startswith("x:")]
-            if usernames:
-                logger.info(f"  X refresh: {usernames}")
-                saved_x = await ingest_once(mode="user", usernames=usernames)
-                logger.info(f"  X refresh done: {saved_x} posts saved")
-                # Cập nhật post_count + tạo summary cho từng X user channel
-                for raw_username in usernames:
-                    full_username = f"x:{raw_username}"
-                    total = db["posts"].count_documents({"source": full_username})
-                    channels_col.update_one(
-                        {"username": full_username},
-                        {"$set": {"post_count": total}},
-                    )
-                    if saved_x > 0:
-                        summary = await _generate_summary(full_username, db)
-                        if summary:
-                            _save_summary(full_username, summary, total, db)
-                            logger.info(f"  x:{raw_username} summary regenerated")
-
-            # username lưu dạng "xkw:bitcoin" → keyword search
-            kw_entries = [ch for ch in x_channels if ch["username"].startswith("xkw:")]
-            keywords = [ch["username"][4:] for ch in kw_entries]
-            if keywords:
-                logger.info(f"  X keyword refresh: {keywords}")
-                saved_xkw = await ingest_once(mode="keyword", keywords=keywords)
-                logger.info(f"  X keyword refresh done: {saved_xkw} posts saved")
-                for kw in keywords:
-                    full_username = f"xkw:{kw}"
-                    total = db["posts"].count_documents({
-                        "platform": "twitter",
-                        "text": {"$regex": _re.escape(kw), "$options": "i"},
-                    })
-                    channels_col.update_one(
-                        {"username": full_username},
-                        {"$set": {"post_count": total}},
-                    )
-                    if saved_xkw > 0:
-                        summary = await _generate_summary(full_username, db)
-                        if summary:
-                            _save_summary(full_username, summary, total, db)
-                            logger.info(f"  xkw:{kw} summary regenerated")
-        except Exception as exc:
-            logger.warning(f"  X refresh failed: {exc}")
+        logger.debug(f"  X refresh: skipped ({len(x_channels)} channels — on-demand only)")
 
 
 async def run_refresh_loop() -> None:

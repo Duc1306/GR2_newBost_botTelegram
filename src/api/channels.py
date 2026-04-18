@@ -13,8 +13,24 @@ from src.models.channel import SubscribeChannelRequest, BulkSubscribeRequest, Ch
 
 router = APIRouter(prefix="/user/channels", tags=["Channel Subscriptions"])
 
+# Minimum hours between Apify fetches for the same X channel/keyword
+_APIFY_COOLDOWN_HRS = 6
+
 # Path to the channel catalog JSON (relative to project root)
 _CATALOG_PATH = Path(__file__).resolve().parents[2] / "channel.json"
+
+# Cache the catalog in-memory (loaded once, never changes at runtime)
+_catalog_cache: list[dict] | None = None
+
+
+def _load_catalog() -> list[dict]:
+    global _catalog_cache
+    if _catalog_cache is None:
+        try:
+            _catalog_cache = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            _catalog_cache = []
+    return _catalog_cache
 
 
 # ---------------------------------------------------------------------------
@@ -51,17 +67,27 @@ async def _trigger_channel_processing(username: str) -> None:
         )
 
     try:
+        # Guard: nếu channel đã bị xóa (user unsubscribe trước khi task chạy) thì bỏ qua
+        if not channels_col.find_one({"username": username}, {"_id": 1}):
+            logger.info(f"[Subscribe-Trigger] '{username}' không còn trong DB — bỏ qua")
+            return
+
         if username.startswith("xkw:"):         # X keyword / hashtag search
             kw = username[4:]
-            logger.info(f"[Subscribe-Trigger] Bắt đầu cào X keyword: #{kw}")
             from src.ingestion.x_worker import ingest_once
             from src.ingestion.channel_queue_worker import _generate_summary, _save_summary
-            import re as _re
-            saved = await ingest_once(mode="keyword", keywords=[kw], max_items=50)
-            total = db["posts"].count_documents({
-                "platform": "twitter",
-                "text": {"$regex": _re.escape(kw), "$options": "i"},
-            })
+            # Cooldown: skip Apify if same keyword was fetched within _APIFY_COOLDOWN_HRS
+            channel_doc = channels_col.find_one({"username": username}, {"last_apify_fetch": 1})
+            last_fetch = (channel_doc or {}).get("last_apify_fetch")
+            if last_fetch and (datetime.utcnow() - last_fetch) < timedelta(hours=_APIFY_COOLDOWN_HRS):
+                logger.info(f"[Subscribe-Trigger] xkw:{kw} — cooldown aktif (last fetch {last_fetch}), bỏ qua Apify")
+                total = db["posts"].count_documents({"platform": "twitter", "$text": {"$search": kw}})
+                _mark_active(username, total)
+                return
+            logger.info(f"[Subscribe-Trigger] Bắt đầu cào X keyword: #{kw}")
+            saved = await ingest_once(mode="keyword", keywords=[kw], max_items=20)
+            channels_col.update_one({"username": username}, {"$set": {"last_apify_fetch": datetime.utcnow()}})
+            total = db["posts"].count_documents({"platform": "twitter", "$text": {"$search": kw}})
             _mark_active(username, total)
             logger.info(f"[Subscribe-Trigger] xkw:{kw} → active ({total} posts)")
             # Generate AI summary
@@ -71,10 +97,19 @@ async def _trigger_channel_processing(username: str) -> None:
                 logger.info(f"[Subscribe-Trigger] xkw:{kw} summary saved")
         elif username.startswith("x:"):         # X/Twitter account
             real_username = username[2:]        # bỏ prefix "x:"
-            logger.info(f"[Subscribe-Trigger] Bắt đầu cào X account: @{real_username}")
             from src.ingestion.x_worker import ingest_once
             from src.ingestion.channel_queue_worker import _generate_summary, _save_summary
-            saved = await ingest_once(mode="user", usernames=[real_username], max_items=50)
+            # Cooldown: skip Apify if same account was fetched within _APIFY_COOLDOWN_HRS
+            channel_doc = channels_col.find_one({"username": username}, {"last_apify_fetch": 1})
+            last_fetch = (channel_doc or {}).get("last_apify_fetch")
+            if last_fetch and (datetime.utcnow() - last_fetch) < timedelta(hours=_APIFY_COOLDOWN_HRS):
+                logger.info(f"[Subscribe-Trigger] x:{real_username} — cooldown aktif, bỏ qua Apify")
+                total = db["posts"].count_documents({"source": username})
+                _mark_active(username, total)
+                return
+            logger.info(f"[Subscribe-Trigger] Bắt đầu cào X account: @{real_username}")
+            saved = await ingest_once(mode="user", usernames=[real_username], max_items=20)
+            channels_col.update_one({"username": username}, {"$set": {"last_apify_fetch": datetime.utcnow()}})
             total = db["posts"].count_documents({"source": username})
             _mark_active(username, total)
             logger.info(f"[Subscribe-Trigger] x:{real_username} → active ({total} posts)")
@@ -102,10 +137,9 @@ async def get_channel_catalog(current_username: str = Depends(get_current_user))
     """Trả về toàn bộ danh mục kênh gợi ý (từ channel.json), nhóm theo category."""
     db = get_db()
 
-    # Load catalog
-    try:
-        catalog: list[dict] = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    # Load catalog (cached in memory)
+    catalog = _load_catalog()
+    if not catalog:
         return []
 
     # User subscriptions for cross-reference
@@ -164,9 +198,18 @@ async def discover_channels(
         {"_id": 0, "username": 1, "display_name": 1, "channel_link": 1, "category": 1},
     ))
 
-    # Count posts live from posts collection (accurate)
+    # Batch count posts using aggregation instead of N+1 queries
+    all_usernames = [ch["username"] for ch in channels]
+    post_count_map = {}
+    if all_usernames:
+        for doc in db["posts"].aggregate([
+            {"$match": {"source": {"$in": all_usernames}}},
+            {"$group": {"_id": "$source", "count": {"$sum": 1}}},
+        ]):
+            post_count_map[doc["_id"]] = doc["count"]
+
     for ch in channels:
-        ch["post_count"] = db["posts"].count_documents({"source": ch["username"]})
+        ch["post_count"] = post_count_map.get(ch["username"], 0)
 
     # Sort by actual post count desc
     channels.sort(key=lambda c: c["post_count"], reverse=True)
@@ -415,35 +458,88 @@ async def list_subscribed_channels(
     if not subs:
         return []
 
+    # Batch-fetch all channels and summaries at once (avoid N+1)
+    ch_usernames = [sub["channel_username"] for sub in subs]
+
+    channels_map = {
+        c["username"]: c
+        for c in channels_col.find({"username": {"$in": ch_usernames}})
+    }
+
+    # Latest summary per channel (sort by date desc, take first per channel)
+    summaries_map = {}
+    for s in summaries_col.find(
+        {"channel_username": {"$in": ch_usernames}}
+    ).sort("date", -1):
+        summaries_map.setdefault(s["channel_username"], s)
+
+    # Batch count posts per source using aggregation
+    normal_usernames = [u for u in ch_usernames if not u.startswith("xkw:")]
+    xkw_usernames = [u for u in ch_usernames if u.startswith("xkw:")]
+
+    post_counts = {}
+    if normal_usernames:
+        for doc in db["posts"].aggregate([
+            {"$match": {"source": {"$in": normal_usernames}}},
+            {"$group": {"_id": "$source", "count": {"$sum": 1}}},
+        ]):
+            post_counts[doc["_id"]] = doc["count"]
+
+    # Batch xkw: counts using $text search (single pipeline for all keywords)
+    xkw_post_counts = {}
+    xkw_unread_counts = {}
+    if xkw_usernames:
+        # Use $text search for each keyword batch
+        xkw_or_filters = []
+        for u in xkw_usernames:
+            kw = u[4:]
+            xkw_or_filters.append({"text": {"$regex": re.escape(kw), "$options": "i"}})
+        
+        # Get counts per keyword via aggregation
+        for u in xkw_usernames:
+            kw = u[4:]
+            # Use a single estimated count from the channel doc if available
+            ch_doc = channels_map.get(u, {})
+            xkw_post_counts[u] = ch_doc.get("post_count", 0)
+
+    # Batch unread counts using aggregation
+    unread_counts = {}
+    # Build per-channel filters for unread
+    seen_map = {sub["channel_username"]: sub.get("last_seen_at") for sub in subs}
+
+    # For normal channels with last_seen_at, batch count unread
+    unread_filters = []
+    for u in normal_usernames:
+        last_seen = seen_map.get(u)
+        if last_seen:
+            unread_filters.append(u)
+    if unread_filters:
+        # Get unread posts per channel in one pipeline
+        for doc in db["posts"].aggregate([
+            {"$match": {"$or": [
+                {"source": u, "created_at": {"$gt": seen_map[u]}}
+                for u in unread_filters
+            ]}},
+            {"$group": {"_id": "$source", "count": {"$sum": 1}}},
+        ]):
+            unread_counts[doc["_id"]] = doc["count"]
+
     result = []
     for sub in subs:
         ch_username = sub["channel_username"]
-        channel = channels_col.find_one({"username": ch_username}) or {}
-
-        # Latest summary (sort by date desc)
-        latest_summary = summaries_col.find_one(
-            {"channel_username": ch_username},
-            sort=[("date", -1)],
-        )
-
-        # Unread count: posts since user last viewed this channel
+        channel = channels_map.get(ch_username, {})
+        latest_summary = summaries_map.get(ch_username)
         last_seen_at = sub.get("last_seen_at")
-        # xkw: channels match by keyword in text (posts have source = "x:authorname")
+
+        # xkw: channels — use cached count from channels doc
         if ch_username.startswith("xkw:"):
-            kw = ch_username[4:]
-            kw_query: dict = {"platform": "twitter", "text": {"$regex": re.escape(kw), "$options": "i"}}
-            total_post_count = db["posts"].count_documents(kw_query)
-            if last_seen_at:
-                unread_count = db["posts"].count_documents({**kw_query, "created_at": {"$gt": last_seen_at}})
-            else:
-                unread_count = total_post_count
+            total_post_count = xkw_post_counts.get(ch_username, 0)
+            # Estimate unread as total if never seen, else 0 (avoid expensive regex count)
+            unread_count = total_post_count if not last_seen_at else 0
         else:
-            total_post_count = db["posts"].count_documents({"source": ch_username})
+            total_post_count = post_counts.get(ch_username, 0)
             if last_seen_at:
-                unread_count = db["posts"].count_documents({
-                    "source": ch_username,
-                    "created_at": {"$gt": last_seen_at},
-                })
+                unread_count = unread_counts.get(ch_username, 0)
             else:
                 unread_count = total_post_count
 
@@ -497,6 +593,27 @@ async def unsubscribe_channel(
     })
     if deleted.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Subscription not found")
+
+    # Nếu không còn user nào subscribe → dọn channel khỏi DB
+    remaining = user_channels_col.count_documents({"channel_username": raw})
+    if remaining == 0:
+        db["channels"].delete_one({"username": raw})
+        db["channel_summaries"].delete_many({"channel_username": raw})
+        db["pending_channels"].delete_many({"channel_username": raw})
+
+        # x:username → xóa posts (posts có source = "x:username" rõ ràng)
+        if raw.startswith("x:"):
+            result = db["posts"].delete_many({"source": raw})
+            logger.info(f"[Unsubscribe] x: {raw} — xóa {result.deleted_count} posts")
+        # xkw:keyword → KHÔNG xóa posts vì posts thuộc nhiều author khác nhau
+        elif raw.startswith("xkw:"):
+            logger.info(f"[Unsubscribe] xkw: {raw} — channel đã xóa, posts giữ nguyên")
+        else:
+            # Telegram: xóa posts theo source
+            result = db["posts"].delete_many({"source": raw})
+            logger.info(f"[Unsubscribe] @{raw} — xóa {result.deleted_count} posts")
+
+        logger.info(f"[Unsubscribe] '{raw}' không còn subscriber — đã xóa khỏi DB")
 
     return {"message": "Đã hủy đăng ký kênh thành công."}
 
@@ -556,15 +673,12 @@ async def _run_summarize(channel_username: str) -> None:
 
     try:
         if channel_username.startswith("xkw:"):
-            import re as _re
             kw = channel_username[4:]
             from src.ingestion.x_worker import ingest_once
             logger.info(f"[Summarize] Re-fetching X keyword: #{kw}")
-            await ingest_once(mode="keyword", keywords=[kw], max_items=100)
-            total = db["posts"].count_documents({
-                "platform": "twitter",
-                "text": {"$regex": _re.escape(kw), "$options": "i"},
-            })
+            await ingest_once(mode="keyword", keywords=[kw], max_items=50)
+            db["channels"].update_one({"username": channel_username}, {"$set": {"last_apify_fetch": datetime.utcnow()}})
+            total = db["posts"].count_documents({"platform": "twitter", "$text": {"$search": kw}})
             summary = await _generate_summary(channel_username, db)
             if summary:
                 _save_summary(channel_username, summary, total, db)
@@ -578,7 +692,8 @@ async def _run_summarize(channel_username: str) -> None:
             real_username = channel_username[2:]
             from src.ingestion.x_worker import ingest_once
             logger.info(f"[Summarize] Re-fetching X account: @{real_username}")
-            await ingest_once(mode="user", usernames=[real_username], max_items=100)
+            await ingest_once(mode="user", usernames=[real_username], max_items=50)
+            db["channels"].update_one({"username": channel_username}, {"$set": {"last_apify_fetch": datetime.utcnow()}})
             total = db["posts"].count_documents({"source": channel_username})
             summary = await _generate_summary(channel_username, db)
             if summary:
