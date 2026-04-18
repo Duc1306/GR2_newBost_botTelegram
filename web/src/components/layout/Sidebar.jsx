@@ -28,7 +28,7 @@ const menuItems = [
   { text: 'Analytics',  icon: <AnalyticsIcon />,   path: '/admin/analytics' },
   { text: 'Posts',      icon: <ArticleIcon />,     path: '/admin/posts' },
   { text: 'Trending',   icon: <TrendingUpIcon />,  path: '/admin/trending' },
-  { text: 'Người dùng', icon: <PeopleAltIcon />,   path: '/admin/users' },
+  { text: 'Users',      icon: <PeopleAltIcon />,   path: '/admin/users' },
 ];
 
 const bottomItems = [

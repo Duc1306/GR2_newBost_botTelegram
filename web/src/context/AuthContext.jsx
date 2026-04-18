@@ -41,10 +41,27 @@ export const AuthProvider = ({ children }) => {
         if (!parsedUser.role) {
           localStorage.removeItem('auth_token');
           localStorage.removeItem('auth_user');
-        } else {
-          setToken(storedToken);
-          setUser(parsedUser);
-          api.setAuthToken(storedToken);
+          setLoading(false);
+          return;
+        }
+        setToken(storedToken);
+        setUser(parsedUser);
+        api.setAuthToken(storedToken);
+
+        // Nếu chưa có full_name trong localStorage → gọi /auth/me để lấy
+        if (!parsedUser.full_name || parsedUser.full_name === parsedUser.username) {
+          fetch(`${API_BASE_URL}/auth/me`, {
+            headers: { Authorization: `Bearer ${storedToken}` },
+          })
+            .then((r) => r.ok ? r.json() : null)
+            .then((data) => {
+              if (data?.full_name) {
+                const updated = { ...parsedUser, full_name: data.full_name };
+                localStorage.setItem('auth_user', JSON.stringify(updated));
+                setUser(updated);
+              }
+            })
+            .catch(() => {});
         }
       } catch {
         localStorage.removeItem('auth_token');
@@ -77,6 +94,7 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('auth_user', JSON.stringify({
         username: data.username,
         role: data.role || 'user',
+        full_name: data.full_name || data.username,
         expires_at: Date.now() + (data.expires_in * 1000)
       }));
       
@@ -84,6 +102,7 @@ export const AuthProvider = ({ children }) => {
       setUser({ 
         username: data.username,
         role: data.role || 'user',
+        full_name: data.full_name || data.username,
         expires_at: Date.now() + (data.expires_in * 1000)
       });
       
@@ -113,14 +132,40 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('auth_user', JSON.stringify({
         username: data.username,
         role: data.role || 'user',
+        full_name: data.full_name || full_name || data.username,
         expires_at: Date.now() + (data.expires_in * 1000),
       }));
       setToken(data.access_token);
-      setUser({ username: data.username, role: data.role || 'user', expires_at: Date.now() + (data.expires_in * 1000) });
+      setUser({ username: data.username, role: data.role || 'user', full_name: data.full_name || full_name || data.username, expires_at: Date.now() + (data.expires_in * 1000) });
       api.setAuthToken(data.access_token);
       return { success: true, role: data.role };
     } catch (error) {
       console.error('Register error:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const loginWithTelegram = async (telegramAuthData) => {
+    try {
+      const { access_token, username, role, expires_in, full_name } = telegramAuthData;
+      localStorage.setItem('auth_token', access_token);
+      localStorage.setItem('auth_user', JSON.stringify({
+        username,
+        role: role || 'user',
+        full_name: full_name || username,
+        expires_at: Date.now() + (expires_in * 1000),
+      }));
+      setToken(access_token);
+      setUser({
+        username,
+        role: role || 'user',
+        full_name: full_name || username,
+        expires_at: Date.now() + (expires_in * 1000),
+      });
+      api.setAuthToken(access_token);
+      return { success: true, role };
+    } catch (error) {
+      console.error('Telegram login error:', error);
       return { success: false, error: error.message };
     }
   };
@@ -141,10 +186,11 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('auth_user', JSON.stringify({
         username: data.username,
         role: data.role || 'user',
+        full_name: data.full_name || data.username,
         expires_at: Date.now() + (data.expires_in * 1000),
       }));
       setToken(data.access_token);
-      setUser({ username: data.username, role: data.role || 'user', expires_at: Date.now() + (data.expires_in * 1000) });
+      setUser({ username: data.username, role: data.role || 'user', full_name: data.full_name || data.username, expires_at: Date.now() + (data.expires_in * 1000) });
       api.setAuthToken(data.access_token);
       return { success: true, role: data.role };
     } catch (error) {
@@ -201,6 +247,7 @@ export const AuthProvider = ({ children }) => {
     isAdmin: jwtRole === 'admin',
     login,
     loginWithGoogle,
+    loginWithTelegram,
     register,
     logout,
   };

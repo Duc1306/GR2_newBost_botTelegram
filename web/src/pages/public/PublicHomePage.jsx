@@ -3,7 +3,7 @@
  * Hiển thị bảng tin tổng hợp từ các kênh hệ thống (dùng /public/* endpoints).
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link, Link as RouterLink } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import {
@@ -51,6 +51,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import LinkIcon from '@mui/icons-material/Link';
 import LoginIcon from '@mui/icons-material/Login';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import TelegramIcon from '@mui/icons-material/Telegram';
 import {
   searchPublicPosts,
   fetchArticlePosts,
@@ -1152,15 +1153,23 @@ export default function PublicHomePage() {
           icon={false}
           sx={{ mb: 3, borderRadius: 2, bgcolor: '#eff6ff', border: '1px solid #bfdbfe' }}
           action={
-            <Button
-              component={RouterLink}
-              to="/register"
-              color="primary"
-              size="small"
-              variant="contained"
-              sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none', whiteSpace: 'nowrap' }}
+             <Button
+              fullWidth
+              variant="outlined"
+              size="large"
+              component={Link}
+              to="/login/telegram"
+              startIcon={<TelegramIcon />}
+              sx={{
+                py: 1.4,
+                textTransform: 'none',
+                fontSize: '0.95rem',
+                borderColor: '#0088cc',
+                color: '#0088cc',
+                '&:hover': { borderColor: '#006699', bgcolor: '#f0f8ff' },
+              }}
             >
-              Đăng ký ngay
+              Đăng nhập bằng Số điện thoại Telegram
             </Button>
           }
         >

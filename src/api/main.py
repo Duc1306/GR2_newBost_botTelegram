@@ -27,6 +27,7 @@ from src.api.middleware import (
 )
 from src.config import get_allowed_origins, GOOGLE_CLIENT_ID
 from src.api.channels import router as channels_router
+from src.api.telegram_auth import router as telegram_auth_router
 from loguru import logger
 
 # Initialize logging first
@@ -72,6 +73,7 @@ app.add_middleware(
 
 # Register routers
 app.include_router(channels_router)
+app.include_router(telegram_auth_router)
 
 
 # =============================================================================
@@ -129,10 +131,26 @@ async def logout_endpoint(current_user: str = Depends(get_current_user)):
 @app.get("/auth/me", tags=["Authentication"])
 async def get_current_user_info(token_data=Depends(get_current_user_token_data)):
     """
-    Get current authenticated user info including role.
+    Get current authenticated user info including role and profile.
     Useful for frontend to verify token validity and determine role.
     """
-    return {"username": token_data.username, "role": token_data.role, "authenticated": True}
+    users_col = get_users_collection()
+    user_doc = users_col.find_one({"username": token_data.username})
+    profile = {}
+    if user_doc:
+        profile = {
+            "full_name": user_doc.get("full_name"),
+            "email": user_doc.get("email"),
+            "phone_number": user_doc.get("phone_number"),
+            "telegram_username": user_doc.get("telegram_username"),
+            "telegram_linked": bool(user_doc.get("telegram_session")),
+        }
+    return {
+        "username": token_data.username,
+        "role": token_data.role,
+        "authenticated": True,
+        **profile,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2235,13 +2253,27 @@ async def admin_delete_user(
     username: str,
     current_user: str = Depends(get_current_admin_user),
 ):
-    """Admin: Xóa tài khoản user."""
+    """Admin: Xóa tài khoản user và toàn bộ dữ liệu liên quan."""
     if username == current_user:
         raise HTTPException(status_code=400, detail="Không thể tự xóa tài khoản của mình.")
     users_col = get_users_collection()
-    result = users_col.delete_one({"username": username})
-    if result.deleted_count == 0:
+
+    # Lấy _id trước để xoá user_channels (keyed by user_id)
+    user_doc = users_col.find_one({"username": username}, {"_id": 1})
+    if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
-    logger.info(f"Admin {current_user} deleted user {username}")
+
+    user_id_str = str(user_doc["_id"])
+    db = get_db()
+
+    # Xóa user khỏi users collection
+    users_col.delete_one({"_id": user_doc["_id"]})
+
+    # Dọn dẹp toàn bộ dữ liệu liên quan để re-test sạch
+    db["user_channels"].delete_many({"user_id": user_id_str})
+    db["notifications"].delete_many({"user": username})
+    db["user_settings"].delete_many({"username": username})
+
+    logger.info(f"Admin {current_user} deleted user {username} (id={user_id_str}) + related data")
     return {"success": True}
 

@@ -66,6 +66,7 @@ class LoginResponse(BaseModel):
     expires_in: int
     username: str
     role: str
+    full_name: Optional[str] = None
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
@@ -205,7 +206,7 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
     """
     # 1. Check hardcoded admin (env var) – allows login even before DB is seeded
     if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-        return {"username": username, "role": "admin", "status": "active"}
+        return {"username": username, "role": "admin", "status": "active", "full_name": None}
 
     # 2. Check DB users
     try:
@@ -222,7 +223,7 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Tài khoản đang chờ kích hoạt. Vui lòng liên hệ admin.",
                 )
-            return {"username": doc["username"], "role": doc.get("role", "user"), "status": doc.get("status", "active")}
+            return {"username": doc["username"], "role": doc.get("role", "user"), "status": doc.get("status", "active"), "full_name": doc.get("full_name")}
     except HTTPException:
         raise
     except Exception:
@@ -304,5 +305,6 @@ def login(username: str, password: str) -> LoginResponse:
         token_type="bearer",
         expires_in=JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         username=user_info["username"],
-        role=user_info["role"]
+        role=user_info["role"],
+        full_name=user_info.get("full_name"),
     )

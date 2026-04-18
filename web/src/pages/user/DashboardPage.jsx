@@ -58,6 +58,8 @@ import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import CheckIcon from '@mui/icons-material/Check';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import OpenWithIcon from '@mui/icons-material/OpenWith';
+import PublicIcon from '@mui/icons-material/Public';
+import GroupsIcon from '@mui/icons-material/Groups';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 
@@ -703,6 +705,12 @@ export default function DashboardPage() {
   // Per-channel quick-subscribe (suggestions)
   const [quickSubscribing, setQuickSubscribing] = useState(new Set()); // Set of usernames in flight
 
+  // My Telegram channels (from Telegram account)
+  const [tgChannels, setTgChannels] = useState([]);          // channels fetched from Telegram
+  const [tgChannelsLoading, setTgChannelsLoading] = useState(false);
+  const [tgChannelsError, setTgChannelsError] = useState('');
+  const [tgSubscribing, setTgSubscribing] = useState(new Set()); // channel IDs in flight
+
   // Channel catalog (106 curated channels from channel.json, grouped by category)
   const [catalog, setCatalog] = useState([]);       // [{category, channels[]}]
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -732,6 +740,38 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => { loadChannels(); }, [loadChannels]);
+
+  // ── Fetch my Telegram channels (from user's Telegram account) ───────────────
+  const loadTelegramChannels = useCallback(async () => {
+    setTgChannelsLoading(true);
+    setTgChannelsError('');
+    try {
+      const data = await apiGet('/auth/telegram/channels');
+      setTgChannels(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setTgChannelsError(e.message || 'Không thể lấy danh sách kênh Telegram');
+    } finally {
+      setTgChannelsLoading(false);
+    }
+  }, []);
+
+  // Subscribe one Telegram channel by its ID
+  const handleTgSubscribe = async (channel) => {
+    setTgSubscribing((prev) => new Set([...prev, channel.id]));
+    try {
+      await apiPost('/auth/telegram/select-channels', { channel_ids: [channel.id] });
+      setSnack({ open: true, msg: `Đã theo dõi "${channel.name}"!`, severity: 'success' });
+      loadChannels();
+    } catch (err) {
+      if (err.message?.includes('đã đăng ký')) {
+        setSnack({ open: true, msg: 'Bạn đã theo dõi kênh này rồi.', severity: 'info' });
+      } else {
+        setSnack({ open: true, msg: err.message || 'Không thể thêm kênh', severity: 'error' });
+      }
+    } finally {
+      setTgSubscribing((prev) => { const s = new Set(prev); s.delete(channel.id); return s; });
+    }
+  };
 
   // ── Bulk import ─────────────────────────────────────────────────────────────
   const handleBulkAdd = async () => {
@@ -821,7 +861,7 @@ export default function DashboardPage() {
               Trang công khai
             </Button>
             <Typography variant="body2" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
-              Xin chào, <strong>{user?.username}</strong>
+              Xin chào, <strong>{user?.full_name || user?.username}</strong>
             </Typography>
             <Tooltip title="Đăng xuất">
               <IconButton size="small" onClick={handleLogout}>
@@ -916,6 +956,131 @@ export default function DashboardPage() {
               &nbsp;&nbsp;|&nbsp;&nbsp;
               🔍 <strong>X hashtag:</strong> <code>#bitcoin</code> · <code>#AI</code>
             </Typography>
+          </Box>
+        </Paper>
+
+        {/* ══════════════════════════════════════════════════════════
+            KÊNH TELEGRAM CỦA TÔI (quét từ tài khoản Telegram)
+            ══════════════════════════════════════════════════════════ */}
+        <Paper elevation={0} sx={{ mb: 4, borderRadius: 3, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+          <Box sx={{ p: 3 }}>
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+              <Typography variant="subtitle1" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <TelegramIcon fontSize="small" color="primary" />
+                Kênh Telegram của tôi
+              </Typography>
+              <Stack direction="row" gap={0.5}>
+                {tgChannels.length > 0 && (
+                  <Button size="small" onClick={loadTelegramChannels} disabled={tgChannelsLoading}>
+                    <RefreshIcon fontSize="small" />
+                  </Button>
+                )}
+              </Stack>
+            </Box>
+            <Typography variant="caption" color="text.secondary" display="block" mb={2}>
+              Quét tài khoản Telegram để tìm các kênh công khai bạn đang theo dõi.
+              Chọn kênh nào muốn AI tóm tắt — bạn có thể thay đổi bất cứ lúc nào.
+            </Typography>
+
+            {tgChannels.length === 0 && !tgChannelsLoading && !tgChannelsError && (
+              <Button
+                variant="outlined"
+                onClick={loadTelegramChannels}
+                startIcon={<TelegramIcon />}
+                sx={{ textTransform: 'none', borderRadius: 2 }}
+              >
+                Quét kênh từ Telegram
+              </Button>
+            )}
+
+            {tgChannelsLoading && (
+              <Box sx={{ textAlign: 'center', py: 3 }}>
+                <CircularProgress size={28} />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Đang quét kênh Telegram...
+                </Typography>
+              </Box>
+            )}
+
+            {tgChannelsError && (
+              <Alert severity="error" sx={{ borderRadius: 2, mb: 1 }}>
+                {tgChannelsError}
+                {tgChannelsError.includes('Chưa liên kết') && (
+                  <Typography variant="caption" display="block" mt={0.5}>
+                    Bạn cần đăng nhập bằng Telegram trước để sử dụng tính năng này.
+                  </Typography>
+                )}
+              </Alert>
+            )}
+
+            {tgChannels.length > 0 && !tgChannelsLoading && (
+              <>
+                <Typography variant="body2" color="text.secondary" mb={1}>
+                  Tìm thấy <strong>{tgChannels.length}</strong> kênh công khai. Nhấp vào kênh để theo dõi.
+                </Typography>
+                <Grid container spacing={1.5}>
+                  {tgChannels.map((ch) => {
+                    const alreadySubscribed = channels.some(
+                      (sub) => sub.username === (ch.username || '').toLowerCase() || sub.username === `tg_id_${ch.id}`
+                    );
+                    const inFlight = tgSubscribing.has(ch.id);
+                    return (
+                      <Grid item xs={12} sm={6} md={4} key={ch.id}>
+                        <Paper elevation={0} sx={{
+                          p: 1.5, borderRadius: 2, border: '1px solid',
+                          borderColor: alreadySubscribed ? 'success.main' : '#e5e7eb',
+                          bgcolor: alreadySubscribed ? '#f0fdf4' : 'white',
+                          display: 'flex', alignItems: 'center', gap: 1.5,
+                          transition: 'all 0.15s',
+                          cursor: alreadySubscribed ? 'default' : 'pointer',
+                          '&:hover': !alreadySubscribed ? { borderColor: 'primary.main', bgcolor: '#f0f7ff', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' } : {},
+                        }}
+                          onClick={() => !alreadySubscribed && !inFlight && handleTgSubscribe(ch)}
+                        >
+                          <Avatar sx={{
+                            bgcolor: alreadySubscribed ? '#dcfce7' : '#e8f4fd',
+                            color: alreadySubscribed ? '#16a34a' : '#0088cc',
+                            width: 38, height: 38, flexShrink: 0,
+                          }}>
+                            {ch.is_megagroup ? <GroupsIcon sx={{ fontSize: 20 }} /> : <PublicIcon sx={{ fontSize: 20 }} />}
+                          </Avatar>
+                          <Box flex={1} minWidth={0}>
+                            <Typography variant="body2" fontWeight={700} noWrap
+                              color={alreadySubscribed ? 'success.main' : 'text.primary'}>
+                              {ch.name}
+                            </Typography>
+                            <Stack direction="row" gap={0.5} flexWrap="wrap" mt={0.25}>
+                              {ch.username && (
+                                <Chip label={`@${ch.username}`} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />
+                              )}
+                              <Chip
+                                label={ch.is_megagroup ? 'Nhóm' : 'Kênh'}
+                                size="small"
+                                color={ch.is_megagroup ? 'success' : 'primary'}
+                                sx={{ height: 18, fontSize: '0.65rem' }}
+                              />
+                            </Stack>
+                          </Box>
+                          <Box flexShrink={0}>
+                            {inFlight ? (
+                              <CircularProgress size={20} />
+                            ) : alreadySubscribed ? (
+                              <Tooltip title="Đang theo dõi">
+                                <CheckIcon sx={{ color: 'success.main', fontSize: 22 }} />
+                              </Tooltip>
+                            ) : (
+                              <Tooltip title={`Theo dõi "${ch.name}"`}>
+                                <AddIcon sx={{ color: '#9ca3af', fontSize: 22 }} />
+                              </Tooltip>
+                            )}
+                          </Box>
+                        </Paper>
+                      </Grid>
+                    );
+                  })}
+                </Grid>
+              </>
+            )}
           </Box>
         </Paper>
 

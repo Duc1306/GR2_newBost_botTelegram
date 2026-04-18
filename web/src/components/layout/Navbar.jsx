@@ -114,7 +114,7 @@ export default function Navbar({ onMenuClick }) {
 
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
           <Typography variant="body2" sx={{ mr: 1, display: { xs: 'none', sm: 'block' } }}>
-            {user?.username}
+            {user?.full_name || user?.username}
           </Typography>
           
           <NotificationDropdown />
@@ -144,9 +144,10 @@ export default function Navbar({ onMenuClick }) {
               <ListItemIcon>
                 <PersonIcon fontSize="small" />
               </ListItemIcon>
-              <ListItemText>
-                {user?.username}
-              </ListItemText>
+              <ListItemText
+                primary={user?.full_name || user?.username}
+                secondary={user?.full_name ? user?.username : null}
+              />
             </MenuItem>
             <Divider />
             <MenuItem onClick={() => { handleMenuClose(); navigate('/settings'); }}>

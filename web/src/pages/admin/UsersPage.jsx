@@ -114,9 +114,12 @@ export default function AdminUsersPage() {
   const roleMut   = useMutation({ mutationFn: updateRole,   onSuccess: () => { invalidate(); qc.invalidateQueries({ queryKey: ['admin-users-stats'] }); } });
   const deleteMut = useMutation({ mutationFn: deleteUser,   onSuccess: () => { invalidate(); qc.invalidateQueries({ queryKey: ['admin-users-stats'] }); } });
 
-  const mutError = statusMut.error?.response?.data?.detail
-    || roleMut.error?.response?.data?.detail
-    || deleteMut.error?.response?.data?.detail;
+  // api.jsx throws new Error(responseText) — need to parse JSON detail if possible
+  const extractErr = (e) => {
+    if (!e) return null;
+    try { return JSON.parse(e.message)?.detail || e.message; } catch { return e.message; }
+  };
+  const mutError = extractErr(statusMut.error) || extractErr(roleMut.error) || extractErr(deleteMut.error);
 
   // ── confirm handlers ──
   const openConfirm = useCallback((type, username, payload) =>

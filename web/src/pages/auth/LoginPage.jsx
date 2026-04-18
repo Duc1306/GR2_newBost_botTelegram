@@ -21,6 +21,7 @@ import { Visibility, VisibilityOff, Lock, Person } from '@mui/icons-material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import GoogleIcon from '@mui/icons-material/Google';
+import TelegramIcon from '@mui/icons-material/Telegram';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -241,6 +242,26 @@ export default function LoginPage() {
                 </Button>
               </>
             )}
+
+            <Divider sx={{ my: 2 }}>hoặc</Divider>
+            <Button
+              fullWidth
+              variant="outlined"
+              size="large"
+              component={Link}
+              to="/login/telegram"
+              startIcon={<TelegramIcon />}
+              sx={{
+                py: 1.4,
+                textTransform: 'none',
+                fontSize: '0.95rem',
+                borderColor: '#0088cc',
+                color: '#0088cc',
+                '&:hover': { borderColor: '#006699', bgcolor: '#f0f8ff' },
+              }}
+            >
+              Đăng nhập bằng Số điện thoại Telegram
+            </Button>
 
             <Divider sx={{ my: 2 }} />
             <Typography variant="body2" align="center" color="text.secondary">

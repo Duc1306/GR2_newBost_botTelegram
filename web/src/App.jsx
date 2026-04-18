@@ -22,6 +22,7 @@ import PublicHomePage from './pages/public/PublicHomePage.jsx';
 // Auth pages
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
+import TelegramLoginPage from './pages/auth/TelegramLoginPage.jsx';
 
 // Error boundary to show crash details instead of blank page
 class ErrorBoundary extends React.Component {
@@ -107,6 +108,7 @@ function AppRoutes() {
       {/* ── Auth ────────────────────────────────────────────── */}
       <Route path="/login"    element={<GuestOnly><LoginPage /></GuestOnly>} />
       <Route path="/register" element={<GuestOnly><RegisterPage /></GuestOnly>} />
+      <Route path="/login/telegram" element={<GuestOnly><TelegramLoginPage /></GuestOnly>} />
 
       {/* ── User routes (role: user or admin) ───────────────── */}
       <Route path="/dashboard" element={<UserRoute page={<DashboardPage />} />} />
