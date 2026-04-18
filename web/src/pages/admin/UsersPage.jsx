@@ -5,7 +5,7 @@ import {
   TableHead, TableRow, TablePagination, TextField, InputAdornment, Chip,
   IconButton, Tooltip, Avatar, Stack, Select, MenuItem, FormControl,
   InputLabel, Button, Dialog, DialogTitle, DialogContent, DialogActions,
-  Alert, CircularProgress, Grid, Card, CardContent,
+  Alert, CircularProgress, Grid, Card, CardContent, LinearProgress,
 } from '@mui/material';
 import {
   Search, Refresh, CheckCircle, Block, HourglassEmpty,
@@ -13,8 +13,18 @@ import {
   PersonAdd, Shield, LockOpen,
 } from '@mui/icons-material';
 import { api } from '../../lib/api';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
+
+// MongoDB stores naive UTC datetimes — FastAPI serialises them WITHOUT 'Z'.
+// JS would then parse as local time (off by +7h in Vietnam).
+// We force UTC interpretation by appending 'Z' when no tz info is present.
+function parseUTC(str) {
+  if (!str) return null;
+  const s = /[Zz+-]\d*$/.test(str.trim()) ? str : str + 'Z';
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -106,16 +116,19 @@ export default function AdminUsersPage() {
 
   // ── queries ──
   const usersKey = ['admin-users', debouncedQ, statusFilter, roleFilter, page, rowsPerPage];
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: usersKey,
     queryFn: () => fetchUsers({ q: debouncedQ, status: statusFilter, role: roleFilter, page, rowsPerPage }),
     keepPreviousData: true,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 
   const { data: stats } = useQuery({
     queryKey: ['admin-users-stats'],
     queryFn: fetchStats,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 
   // ── mutations ──
@@ -136,16 +149,33 @@ export default function AdminUsersPage() {
   const openConfirm = useCallback((type, username, payload) =>
     setConfirm({ type, username, payload }), []);
 
-  const handleConfirm = () => {
+  const handleConfirm = useCallback(() => {
     if (!confirm) return;
     if (confirm.type === 'status') statusMut.mutate({ username: confirm.username, status: confirm.payload });
     if (confirm.type === 'role')   roleMut.mutate({ username: confirm.username, role: confirm.payload });
     if (confirm.type === 'delete') deleteMut.mutate(confirm.username);
     setConfirm(null);
-  };
+  }, [confirm, statusMut, roleMut, deleteMut]);
 
   const users = data?.users ?? [];
   const total = data?.total ?? 0;
+
+  const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
+  const lastUpdatedLabel = lastUpdated
+    ? `Cập nhật lúc ${lastUpdated.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+    : null;
+
+  const handleRefresh = useCallback(() => {
+    refetch();
+    qc.invalidateQueries({ queryKey: ['admin-users-stats'] });
+  }, [refetch, qc]);
+
+  const handleQChange = useCallback((e) => setQ(e.target.value), []);
+  const handleStatusFilterChange = useCallback((e) => { setStatusFilter(e.target.value); setPage(0); }, []);
+  const handleRoleFilterChange = useCallback((e) => { setRoleFilter(e.target.value); setPage(0); }, []);
+  const handleClearFilters = useCallback(() => { setQ(''); setDebouncedQ(''); setStatusFilter(''); setRoleFilter(''); setPage(0); }, []);
+  const handlePageChange = useCallback((_, p) => setPage(p), []);
+  const handleRowsPerPageChange = useCallback((e) => { setRowsPerPage(+e.target.value); setPage(0); }, []);
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 } }}>
@@ -158,11 +188,32 @@ export default function AdminUsersPage() {
             <Typography variant="caption" color="text.secondary">Xem, duyệt và quản lý tài khoản</Typography>
           </Box>
         </Stack>
-        <Tooltip title="Làm mới">
-          <IconButton onClick={() => { refetch(); qc.invalidateQueries({ queryKey: ['admin-users-stats'] }); }}>
-            <Refresh />
-          </IconButton>
-        </Tooltip>
+        <Stack direction="row" alignItems="center" gap={1.5}>
+          {/* Live indicator */}
+          <Stack direction="row" alignItems="center" gap={0.75}>
+            <Box
+              sx={{
+                width: 8, height: 8, borderRadius: '50%',
+                bgcolor: isFetching ? 'warning.main' : 'success.main',
+                animation: 'pulse 2s ease-in-out infinite',
+                '@keyframes pulse': {
+                  '0%, 100%': { opacity: 1, transform: 'scale(1)' },
+                  '50%': { opacity: 0.5, transform: 'scale(1.4)' },
+                },
+              }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+              {isFetching ? 'Đang cập nhật…' : lastUpdatedLabel ?? 'Live'}
+            </Typography>
+          </Stack>
+          <Tooltip title="Làm mới ngay">
+            <span>
+              <IconButton onClick={handleRefresh} disabled={isFetching}>
+                <Refresh sx={{ transition: 'transform 0.6s', ...(isFetching && { animation: 'spin 1s linear infinite', '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } } }) }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
       </Stack>
 
       {/* ── Stats cards ── */}
@@ -186,13 +237,13 @@ export default function AdminUsersPage() {
       <Paper sx={{ p: 2, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
         <TextField
           size="small" placeholder="Tìm username / email…"
-          value={q} onChange={(e) => setQ(e.target.value)}
+          value={q} onChange={handleQChange}
           sx={{ minWidth: 220 }}
           InputProps={{ startAdornment: <InputAdornment position="start"><Search /></InputAdornment> }}
         />
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <InputLabel>Trạng thái</InputLabel>
-          <Select value={statusFilter} label="Trạng thái" onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}>
+          <Select value={statusFilter} label="Trạng thái" onChange={handleStatusFilterChange}>
             <MenuItem value="">Tất cả</MenuItem>
             <MenuItem value="active">Hoạt động</MenuItem>
             <MenuItem value="banned">Bị khóa</MenuItem>
@@ -201,21 +252,24 @@ export default function AdminUsersPage() {
         </FormControl>
         <FormControl size="small" sx={{ minWidth: 130 }}>
           <InputLabel>Vai trò</InputLabel>
-          <Select value={roleFilter} label="Vai trò" onChange={(e) => { setRoleFilter(e.target.value); setPage(0); }}>
+          <Select value={roleFilter} label="Vai trò" onChange={handleRoleFilterChange}>
             <MenuItem value="">Tất cả</MenuItem>
             <MenuItem value="user">User</MenuItem>
             <MenuItem value="admin">Admin</MenuItem>
           </Select>
         </FormControl>
         {(q || statusFilter || roleFilter) && (
-          <Button size="small" onClick={() => { setQ(''); setDebouncedQ(''); setStatusFilter(''); setRoleFilter(''); setPage(0); }}>
+          <Button size="small" onClick={handleClearFilters}>
             Xóa bộ lọc
           </Button>
         )}
       </Paper>
 
       {/* ── Table ── */}
-      <Paper>
+      <Paper sx={{ position: 'relative' }}>
+        {isFetching && !isLoading && (
+          <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, borderRadius: '4px 4px 0 0', zIndex: 1 }} />
+        )}
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -294,14 +348,22 @@ export default function AdminUsersPage() {
 
                     <TableCell>
                       <Typography variant="caption">
-                        {user.created_at ? format(new Date(user.created_at), 'dd/MM/yyyy', { locale: vi }) : '—'}
+                        {parseUTC(user.created_at) ? format(parseUTC(user.created_at), 'dd/MM/yyyy', { locale: vi }) : '—'}
                       </Typography>
                     </TableCell>
 
                     <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        {user.last_login ? format(new Date(user.last_login), 'dd/MM HH:mm', { locale: vi }) : 'Chưa đăng nhập'}
-                      </Typography>
+                      {(() => {
+                        const d = parseUTC(user.last_login);
+                        if (!d) return <Typography variant="caption" color="text.disabled">Chưa đăng nhập</Typography>;
+                        return (
+                          <Tooltip title={format(d, 'dd/MM/yyyy HH:mm:ss', { locale: vi })}>
+                            <Typography variant="caption" color="text.secondary">
+                              {formatDistanceToNow(d, { addSuffix: true, locale: vi })}
+                            </Typography>
+                          </Tooltip>
+                        );
+                      })()}
                     </TableCell>
 
                     {/* Actions */}
@@ -348,8 +410,8 @@ export default function AdminUsersPage() {
 
         <TablePagination
           component="div" count={total} page={page} rowsPerPage={rowsPerPage}
-          onPageChange={(_, p) => setPage(p)}
-          onRowsPerPageChange={(e) => { setRowsPerPage(+e.target.value); setPage(0); }}
+          onPageChange={handlePageChange}
+          onRowsPerPageChange={handleRowsPerPageChange}
           rowsPerPageOptions={[10, 20, 50, 100]}
           labelRowsPerPage="Hiển thị:"
           labelDisplayedRows={({ from, to, count }) => `${from}–${to} / ${count}`}

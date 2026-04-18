@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Container,
@@ -29,13 +29,12 @@ import {
   LightMode as LightModeIcon,
   DarkMode as DarkModeIcon
 } from '@mui/icons-material';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { api } from '../../lib/api.jsx';
 
 function TabPanel({ children, value, index }) {
   return (
-    <div hidden={value !== index}>
-      {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
+    <div style={{ display: value === index ? 'block' : 'none' }}>
+      <Box sx={{ p: 3 }}>{children}</Box>
     </div>
   );
 }
@@ -53,94 +52,88 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  const fetchSettings = async () => {
+  const fetchSettings = useCallback(async (signal) => {
     try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE_URL}/settings`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setSettings(data);
-      }
+      const { data } = await api.get('/settings', { signal });
+      setSettings(data);
     } catch (err) {
-      console.error('Failed to load settings:', err);
-      setError(err?.message || 'Failed to load settings');
+      if (err.name !== 'AbortError') {
+        setError(err?.message || 'Failed to load settings');
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const updateSettings = async (updates) => {
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchSettings(controller.signal);
+    return () => controller.abort();
+  }, [fetchSettings]);
+
+  const updateSettings = useCallback(async (updates) => {
     try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE_URL}/settings`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updates)
-      });
-      
-      if (response.ok) {
-        setSuccess('Settings updated successfully!');
-        setTimeout(() => setSuccess(''), 3000);
-        fetchSettings();
-      }
+      await api.put('/settings', updates);
+      setSuccess('Settings updated successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+      fetchSettings();
     } catch (err) {
-      console.error('Failed to update settings:', err);
       setError(err?.message || 'Failed to update settings');
     }
-  };
+  }, [fetchSettings]);
 
-  const handlePasswordChange = async () => {
+  const handlePasswordChange = useCallback(async () => {
     if (newPassword !== confirmPassword) {
       setError('New passwords do not match');
       return;
     }
-    
     if (newPassword.length < 8) {
       setError('Password must be at least 8 characters');
       return;
     }
-
     try {
-      const token = localStorage.getItem('auth_token');
-      const response = await fetch(`${API_BASE_URL}/settings/change-password`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword
-        })
+      await api.post('/settings/change-password', {
+        current_password: currentPassword,
+        new_password: newPassword,
       });
-      
-      if (response.ok) {
-        setSuccess('Password changed successfully!');
-        setCurrentPassword('');
-        setNewPassword('');
-        setConfirmPassword('');
-      } else {
-        const data = await response.json();
-        const errorMsg = typeof data.detail === 'string' ? data.detail : 'Failed to change password';
-        setError(errorMsg);
-      }
+      setSuccess('Password changed successfully!');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
     } catch (err) {
-      console.error('Failed to change password:', err);
-      setError(err?.message || 'Failed to change password');
+      try {
+        const detail = JSON.parse(err.message)?.detail;
+        setError(detail || 'Failed to change password');
+      } catch {
+        setError(err?.message || 'Failed to change password');
+      }
     }
-  };
+  }, [currentPassword, newPassword, confirmPassword]);
+
+  const handleTabChange = useCallback((_, newValue) => setTabValue(newValue), []);
+  const handleThemeChange = useCallback((e) => {
+    if (e.target.value !== mode) { toggleTheme(); updateSettings({ theme: e.target.value }); }
+  }, [mode, toggleTheme, updateSettings]);
+  const handleNotificationsChange = useCallback((e) => {
+    const enabled = e.target.checked;
+    setSettings(prev => ({ ...prev, notifications_enabled: enabled }));
+    updateSettings({ notifications_enabled: enabled });
+  }, [updateSettings]);
+  const handleEmailNotifChange = useCallback((e) => {
+    const enabled = e.target.checked;
+    setSettings(prev => ({ ...prev, email_notifications: enabled }));
+    updateSettings({ email_notifications: enabled });
+  }, [updateSettings]);
+  const handleTelegramChange = useCallback((e) => {
+    const enabled = e.target.checked;
+    setSettings(prev => ({ ...prev, telegram_enabled: enabled }));
+    updateSettings({ telegram_enabled: enabled });
+  }, [updateSettings]);
+  const handleMLChange = useCallback((e) => {
+    const enabled = e.target.checked;
+    setSettings(prev => ({ ...prev, ml_auto_classify: enabled }));
+    updateSettings({ ml_auto_classify: enabled });
+  }, [updateSettings]);
 
   if (loading) return <Box>Loading...</Box>;
   if (!settings) return <Box>Error loading settings</Box>;
@@ -162,7 +155,7 @@ export default function SettingsPage() {
       <Paper sx={{ width: '100%' }}>
         <Tabs
           value={tabValue}
-          onChange={(e, newValue) => setTabValue(newValue)}
+          onChange={handleTabChange}
           variant="scrollable"
           scrollButtons="auto"
         >
@@ -232,12 +225,7 @@ export default function SettingsPage() {
             <InputLabel>Theme</InputLabel>
             <Select
               value={mode}
-              onChange={(e) => {
-                if (e.target.value !== mode) {
-                  toggleTheme();
-                  updateSettings({ theme: e.target.value });
-                }
-              }}
+              onChange={handleThemeChange}
             >
               <MenuItem value="light">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -263,11 +251,7 @@ export default function SettingsPage() {
             control={
               <Switch
                 checked={settings.notifications_enabled}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setSettings({ ...settings, notifications_enabled: enabled });
-                  updateSettings({ notifications_enabled: enabled });
-                }}
+                onChange={handleNotificationsChange}
               />
             }
             label="Enable notifications"
@@ -277,11 +261,7 @@ export default function SettingsPage() {
             control={
               <Switch
                 checked={settings.email_notifications}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setSettings({ ...settings, email_notifications: enabled });
-                  updateSettings({ email_notifications: enabled });
-                }}
+                onChange={handleEmailNotifChange}
               />
             }
             label="Email notifications (not implemented)"
@@ -296,11 +276,7 @@ export default function SettingsPage() {
             control={
               <Switch
                 checked={settings.telegram_enabled}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setSettings({ ...settings, telegram_enabled: enabled });
-                  updateSettings({ telegram_enabled: enabled });
-                }}
+                onChange={handleTelegramChange}
               />
             }
             label="Enable Telegram data collection"
@@ -340,11 +316,7 @@ export default function SettingsPage() {
             control={
               <Switch
                 checked={settings.ml_auto_classify}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setSettings({ ...settings, ml_auto_classify: enabled });
-                  updateSettings({ ml_auto_classify: enabled });
-                }}
+                onChange={handleMLChange}
               />
             }
             label="Enable automatic topic classification"

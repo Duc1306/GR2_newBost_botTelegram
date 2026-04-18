@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Box,
   Typography,
@@ -67,19 +67,23 @@ export default function PostsPage() {
   const totalCount = countData?.count || 0;
   const totalPages = Math.ceil(totalCount / postsPerPage);
 
-  const handleTopicChange = (value) => {
+  const handleTopicChange = useCallback((value) => {
     setSelectedTopic(value);
     setPage(1);
-  };
+  }, []);
 
-  const handleLangChange = (value) => {
+  const handleLangChange = useCallback((value) => {
     setSelectedLang(value);
     setPage(1);
-  };
+  }, []);
 
-  const handlePageChange = (event, value) => {
+  const handlePageChange = useCallback((event, value) => {
     setPage(value);
-  };
+  }, []);
+
+  const handleSearchChange = useCallback((e) => {
+    setSearchQuery(e.target.value);
+  }, []);
 
   return (
     <Box>
@@ -111,7 +115,7 @@ export default function PostsPage() {
               size="small"
               placeholder="Search posts..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={handleSearchChange}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">

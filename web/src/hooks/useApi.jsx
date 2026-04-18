@@ -10,6 +10,7 @@ import {
   fetchPostsCount,
   fetchTopics,
   fetchHeatmap,
+  fetchHotNews,
 } from '../lib/api.jsx';
 
 // Stats hook
@@ -99,5 +100,15 @@ export function useHeatmap(params = {}) {
     queryKey: ['heatmap', params],
     queryFn: () => fetchHeatmap(params),
     staleTime: 10 * 60 * 1000, // 10 minutes
+  });
+}
+
+// Hot News clusters hook (uses /public/hotnews — keyword-frequency + GPT clustering)
+export function useHotNews(params = {}) {
+  return useQuery({
+    queryKey: ['hotnews', params],
+    queryFn: () => fetchHotNews(params),
+    staleTime: 10 * 60 * 1000, // server caches 2h anyway, 10min local is fine
+    retry: 2,
   });
 }

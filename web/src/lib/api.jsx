@@ -280,6 +280,18 @@ export async function fetchComparison(params = {}) {
   }
 }
 
+export async function fetchHotNews(params = {}) {
+  const queryParams = new URLSearchParams();
+  if (params.hours) queryParams.set('hours', params.hours.toString());
+  try {
+    const response = await fetch(`${API_BASE_URL}/public/hotnews?${queryParams}`);
+    if (!response.ok) throw new Error(`Failed to fetch hot news: ${response.status}`);
+    return response.json();
+  } catch (error) {
+    throw error;
+  }
+}
+
 export async function fetchHeatmap(params = {}) {
   const queryParams = new URLSearchParams();
   if (params.date_from) queryParams.set('date_from', params.date_from);

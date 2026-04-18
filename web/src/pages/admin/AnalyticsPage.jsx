@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -24,12 +24,14 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import TelegramIcon from '@mui/icons-material/Telegram';
 
 export default function AnalyticsPage() {
-  const [startDate, setStartDate] = useState(subDays(new Date(), 30));
-  const [endDate, setEndDate] = useState(new Date());
+  const [startDate, setStartDate] = useState(() => subDays(new Date(), 30));
+  const [endDate, setEndDate] = useState(() => new Date());
+  const [committedStart, setCommittedStart] = useState(() => subDays(new Date(), 30));
+  const [committedEnd, setCommittedEnd] = useState(() => new Date());
   
-  // Format dates for API
-  const date_from = startDate.toISOString().split('T')[0];
-  const date_to = endDate.toISOString().split('T')[0];
+  // Format dates for API — only update on Apply
+  const date_from = committedStart.toISOString().split('T')[0];
+  const date_to = committedEnd.toISOString().split('T')[0];
 
   const { data: timeline, isLoading: timelineLoading } = useTimeline({ 
     date_from, 
@@ -50,11 +52,10 @@ export default function AnalyticsPage() {
     date_to 
   });
 
-  const handleApplyFilter = () => {
-    // Dates are already reactive, component will re-render
-    setStartDate(new Date(startDate));
-    setEndDate(new Date(endDate));
-  };
+  const handleApplyFilter = useCallback(() => {
+    setCommittedStart(startDate);
+    setCommittedEnd(endDate);
+  }, [startDate, endDate]);
 
   // Prepare multi-topic timeline data
   const timelineData = timeline?.timeline?.map(item => ({
@@ -91,13 +92,13 @@ export default function AnalyticsPage() {
             <DatePicker
               label="Start Date"
               value={startDate}
-              onChange={(newValue) => setStartDate(newValue)}
+              onChange={setStartDate}
               renderInput={(params) => <TextField {...params} />}
             />
             <DatePicker
               label="End Date"
               value={endDate}
-              onChange={(newValue) => setEndDate(newValue)}
+              onChange={setEndDate}
               renderInput={(params) => <TextField {...params} />}
             />
             <Button variant="contained" onClick={handleApplyFilter}>
