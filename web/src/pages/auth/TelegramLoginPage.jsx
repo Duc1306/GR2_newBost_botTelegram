@@ -26,7 +26,6 @@ export default function TelegramLoginPage() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [isReturningUser, setIsReturningUser] = useState(false);
-  const [checkingPhone, setCheckingPhone] = useState(false);
 
   // Step 2
   const [sessionId, setSessionId] = useState('');
@@ -34,27 +33,6 @@ export default function TelegramLoginPage() {
   const [otpCode, setOtpCode] = useState('');
   const [needs2FA, setNeeds2FA] = useState(false);
   const [password2FA, setPassword2FA] = useState('');
-
-  // ─── Check if phone already registered (called on blur) ───
-  const handlePhoneBlur = async () => {
-    const phone = phoneNumber.trim();
-    if (phone.length < 8) return;
-    setCheckingPhone(true);
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/auth/telegram/check-phone?phone=${encodeURIComponent(phone)}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setIsReturningUser(data.exists);
-        if (data.exists && data.display_name) setDisplayName(data.display_name);
-      }
-    } catch {
-      // silently ignore — non-critical
-    } finally {
-      setCheckingPhone(false);
-    }
-  };
 
   // ─── Step 1: Send OTP ─────────────────────────────────────
   const handleSendCode = async (e) => {
@@ -74,6 +52,10 @@ export default function TelegramLoginPage() {
       if (!res.ok) throw new Error(data.detail || 'Gửi mã OTP thất bại');
       setSessionId(data.session_id);
       setPhoneCodeHash(data.phone_code_hash);
+      if (data.user_exists) {
+        setIsReturningUser(true);
+        if (data.display_name) setDisplayName(data.display_name);
+      }
       setActiveStep(1);
     } catch (err) {
       setError(err.message);
@@ -182,12 +164,11 @@ export default function TelegramLoginPage() {
                   label="Số điện thoại *"
                   value={phoneNumber}
                   onChange={(e) => setPhoneNumber(e.target.value)}
-                  onBlur={handlePhoneBlur}
                   margin="normal"
                   required
                   autoFocus
                   placeholder="+84912345678"
-                  helperText={checkingPhone ? 'Đang kiểm tra...' : 'Định dạng quốc tế, VD: +84912345678'}
+                  helperText="Định dạng quốc tế, VD: +84912345678"
                   InputProps={{
                     startAdornment: (
                       <InputAdornment position="start"><Phone /></InputAdornment>
@@ -219,7 +200,7 @@ export default function TelegramLoginPage() {
                   fullWidth
                   variant="contained"
                   size="large"
-                  disabled={loading || !phoneNumber.trim() || checkingPhone}
+                  disabled={loading || !phoneNumber.trim()}
                   sx={{
                     mt: 3, py: 1.5,
                     background: 'linear-gradient(135deg, #0088cc 0%, #005b8c 100%)',

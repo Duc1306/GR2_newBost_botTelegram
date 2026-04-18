@@ -78,6 +78,8 @@ class SendCodeResponse(BaseModel):
     session_id: str
     phone_code_hash: str
     message: str
+    user_exists: bool = False
+    display_name: Optional[str] = None
 
 
 class VerifyCodeRequest(BaseModel):
@@ -168,8 +170,21 @@ async def send_code(body: SendCodeRequest):
         StringSession(), int(TELEGRAM_API_ID), TELEGRAM_API_HASH
     )
 
+    # Run MTProto connect() and DB lookup in parallel — saves ~200-500ms
+    users_col = get_users_collection()
+    def _db_check():
+        return users_col.find_one({"phone_number": phone}, {"full_name": 1})
+
+    loop = asyncio.get_event_loop()
+    connect_task = asyncio.ensure_future(client.connect())
+    db_task = loop.run_in_executor(None, _db_check)
     try:
-        await client.connect()
+        await asyncio.gather(connect_task, db_task)
+        user_doc = await db_task
+    except Exception:
+        user_doc = None
+
+    try:
         result = await client.send_code_request(phone)
     except PhoneNumberInvalidError:
         await client.disconnect()
@@ -205,6 +220,8 @@ async def send_code(body: SendCodeRequest):
         session_id=session_id,
         phone_code_hash=result.phone_code_hash,
         message="Mã OTP đã được gửi qua Telegram. Hãy kiểm tra ứng dụng Telegram.",
+        user_exists=user_doc is not None,
+        display_name=user_doc.get("full_name") if user_doc else None,
     )
 
 
