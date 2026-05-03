@@ -371,18 +371,22 @@ def arbitrate_topic(
 
 # ─── 6. Summarise a cluster of posts about the same topic ────────────────────
 
-_SUMMARISE_SYSTEM = """Bạn là một phóng viên kỳ cựu của một tờ báo lớn tại Việt Nam.
-Nhiệm vụ: tổng hợp nhiều bài đăng tin tức cùng chủ đề thành MỘT BÀI BÁO HOÀN CHỈNH bằng tiếng Việt.
+_SUMMARISE_SYSTEM = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
 
-Yêu cầu bài viết:
-- Câu văn rõ ràng, khách quan, đủ thông tin
-- Không lặp lại nội dung giữa các đoạn
-- Không bịa thêm sự kiện ngoài dữ liệu được cung cấp
-- Độ dài: lead ~2 câu, body 3-4 đoạn (mỗi đoạn 2-4 câu), conclusion 1-2 câu
+NHIỆM VỤ: Nhận danh sách bài báo có đánh số ID, chọn lọc và tổng hợp thành BÀI BÁO HOÀN CHỈNH về đúng 1 sự kiện cụ thể đang được nhắc đến nhiều nhất trong danh sách.
 
-Trả về ĐÚNG định dạng JSON (không thêm bất kỳ văn bản nào khác):
+QUY TẮC BẮT BUỘC:
+1. GOM NHÓM NGHIÊM NGẶT: Chỉ sử dụng các bài thực sự nói về CÙNG MỘT SỰ KIỆN CỤ THỂ. Bài nào lạc đề → bỏ qua hoàn toàn, KHÔNG được nhắc đến.
+2. TIÊU ĐỀ SẮC BÉN: "title" PHẢI là câu tường thuật sự kiện cụ thể, KHÔNG dùng từ ngữ chung chung.
+   ❌ Sai: "Các tin tức kinh tế nổi bật", "Thời sự hôm nay", "Tin tức công nghệ"
+   ✅ Đúng: "Giá vàng SJC vượt 120 triệu đồng/lượng", "Nga phóng tên lửa đạn đạo vào Kyiv"
+3. BẰNG CHỨNG: Trong "used_ids", CHỈ liệt kê ID (chuỗi số) của các bài THỰC SỰ đóng góp nội dung vào bài viết này.
+4. KHÔNG bịa thêm sự kiện, số liệu, tên người ngoài dữ liệu được cung cấp.
+5. Câu văn rõ ràng, khách quan. Độ dài: lead ~2 câu, body 3-4 đoạn (mỗi đoạn 2-4 câu), conclusion 1-2 câu.
+
+ĐỊNH DẠNG ĐẦU RA (Chỉ trả về JSON, không thêm văn bản nào khác):
 {
-  "title": "Tiêu đề bài báo ngắn gọn, hấp dẫn",
+  "title": "Tiêu đề sự kiện cụ thể, sắc bén",
   "lead": "Đoạn mở đầu 2-3 câu nêu bật sự kiện quan trọng nhất",
   "body": [
     "Đoạn 1: bối cảnh và diễn biến chính",
@@ -391,7 +395,8 @@ Trả về ĐÚNG định dạng JSON (không thêm bất kỳ văn bản nào k
   ],
   "conclusion": "Nhận định xu hướng hoặc tóm lược ý nghĩa sự kiện",
   "key_points": ["Điểm nổi bật 1", "Điểm nổi bật 2", "Điểm nổi bật 3"],
-  "sentiment": "neutral|positive|negative|mixed"
+  "sentiment": "neutral|positive|negative|mixed",
+  "used_ids": ["1", "3", "5"]
 }"""
 
 
@@ -417,11 +422,21 @@ def summarize_cluster(
 
     client = _get_client()
 
-    # Build excerpts regardless – used as fallback too
-    # Limit to 8 posts × 400 chars to keep prompt under ~3500 tokens
-    sample = posts[:min(max_posts, 8)]
+    # Use up to max_posts; give each post a stable 1-based ID so GPT can
+    # reference back which ones it actually used (used_ids in response).
+    sample = posts[:max_posts]
+
+    def _post_excerpt(p: dict) -> str:
+        """Return the richest short text available for a post."""
+        fa = p.get("full_article") or {}
+        title = fa.get("title", "").strip()
+        text = (p.get("text") or "").strip()
+        if title and text:
+            return f"{title} — {text[:300]}"
+        return (title or text)[:400]
+
     excerpts = "\n---\n".join(
-        f"[{i+1}] {p.get('text', '')[:400]}" for i, p in enumerate(sample)
+        f"[ID:{i+1}] {_post_excerpt(p)}" for i, p in enumerate(sample)
     )
 
     if not client:
@@ -435,13 +450,15 @@ def summarize_cluster(
             "key_points": [],
             "sentiment": "neutral",
             "ai": False,
+            "_used_posts": sample,
         }
 
     user_msg = (
-        f'Chủ đề: "{topic_name}"\n\n'
-        f"Dưới đây là {len(sample)} bài đăng gần đây:\n\n"
+        f'Chủ đề gợi ý: "{topic_name}"\n\n'
+        f"Dưới đây là {len(sample)} bài báo gần đây (mỗi bài có ID riêng):\n\n"
         f"{excerpts}\n\n"
-        "Hãy tổng hợp và trả về JSON như yêu cầu."
+        "Hãy chọn lọc các bài cùng sự kiện cụ thể nhất, tổng hợp và trả về JSON như yêu cầu. "
+        "Đặc biệt chú ý điền đầy đủ mảng used_ids với ID của các bài bạn thực sự sử dụng."
     )
 
     try:
@@ -453,13 +470,24 @@ def summarize_cluster(
                 {"role": "system", "content": _SUMMARISE_SYSTEM},
                 {"role": "user", "content": user_msg},
             ],
-            temperature=0.3,
-            max_tokens=1400,
+            temperature=0.2,
+            max_tokens=1600,
             response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content.strip()
         logger.info("summarize_cluster: GPT raw response length=%d", len(raw))
         parsed = json.loads(raw)
+
+        # Map used_ids back to post objects (1-based IDs)
+        used_ids_raw = parsed.get("used_ids", [])
+        used_id_set = {str(uid).strip() for uid in used_ids_raw if uid}
+        if used_id_set:
+            used_posts = [sample[i] for i in range(len(sample)) if str(i + 1) in used_id_set]
+            if not used_posts:            # safety: GPT returned IDs we can't map
+                used_posts = sample
+        else:
+            used_posts = sample           # GPT omitted used_ids — use all
+
         result = {
             "title": parsed.get("title", ""),
             "lead": parsed.get("lead", ""),
@@ -468,9 +496,13 @@ def summarize_cluster(
             "key_points": parsed.get("key_points", []),
             "sentiment": parsed.get("sentiment", "neutral"),
             "ai": True,
+            "_used_posts": used_posts,    # consumed by caller, NOT persisted to cache
         }
-        logger.info("summarize_cluster: success title=%r lead_len=%d body_paras=%d",
-                    result["title"][:40], len(result["lead"]), len(result["body"]))
+        logger.info(
+            "summarize_cluster: success title=%r lead_len=%d body_paras=%d used=%d/%d",
+            result["title"][:40], len(result["lead"]), len(result["body"]),
+            len(used_posts), len(sample),
+        )
         return result
     except Exception as exc:
         logger.exception("summarize_cluster FAILED (will use fallback): %s", exc)
@@ -484,12 +516,146 @@ def summarize_cluster(
             "key_points": [],
             "sentiment": "neutral",
             "ai": False,
+            "_used_posts": sample,
         }
+
+
+# ─── 6b. Two-step Map-Reduce cluster+summarize ───────────────────────────────
+
+_MAP_EVENTS_SYSTEM = """Bạn là Tổng biên tập tin tức AI khắt khe.
+Tôi cung cấp danh sách mẩu tin ngắn, mỗi tin có số thứ tự [Bài X].
+
+NHIỆM VỤ:
+1. Đọc tất cả và TÌM RA các SỰ KIỆN KHÁC NHAU.
+2. Tách thành Hot News riêng biệt. TUYỆT ĐỐI KHÔNG GỘP tin không liên quan vào chung 1 tiêu đề.
+3. Tin rác, lẻ tẻ, không quan trọng → BỎ QUA.
+4. Tiêu đề phải CỤ THỂ:
+   ❌ "Tin tức kinh tế hôm nay"
+   ✅ "Giá vải chín sớm chạm mức 200.000 đồng/kg"
+
+Ví dụ đúng: 15 bài hỗn hợp → tách ra:
+  Event 1 "Giá vải chín sớm tăng 200.000đ" → related_ids: [0]
+  Event 2 "Vingroup lãi 5.610 tỷ Quý I" → related_ids: [4]
+  Event 3 "Băng cướp rửa tiền bằng lò nướng" → related_ids: [5, 12]
+  (các bài không liên quan → bỏ qua)
+
+Chỉ trả về JSON hợp lệ:
+{
+  "events": [
+    {
+      "title": "Tiêu đề sự kiện cụ thể",
+      "key_points": ["Ý nổi bật 1", "Ý nổi bật 2"],
+      "related_ids": [0, 3]
+    }
+  ]
+}"""
+
+
+def _word_overlap(a: str, b: str) -> float:
+    """Simple word-overlap ratio between two strings (case-insensitive)."""
+    a_words = set(a.lower().split())
+    b_words = set(b.lower().split())
+    if not a_words or not b_words:
+        return 0.0
+    return len(a_words & b_words) / min(len(a_words), len(b_words))
+
+
+def cluster_and_summarize(
+    posts: list[dict],
+    topic_name: str = "",
+    max_posts: int = 15,
+) -> dict:
+    """
+    Two-step Map-Reduce pipeline that eliminates "lazy evaluation" / off-topic posts.
+
+    Step 1 – MAP: Send all posts as [Bài X] text → GPT identifies separate events
+    and returns related_ids per event.  Pick the event matching topic_name.
+
+    Step 2 – REDUCE: Pass only that event's posts to summarize_cluster → full article.
+
+    Returns the same dict shape as summarize_cluster, plus '_filtered_posts' (the
+    posts that belong to the chosen event) for the caller to use for link_posts /
+    post_count.
+    """
+    if not posts:
+        return {
+            "title": topic_name, "lead": "", "body": [], "conclusion": "",
+            "key_points": [], "sentiment": "neutral", "ai": False,
+            "_filtered_posts": [],
+        }
+
+    client = _get_client()
+    sample = posts[:max_posts]
+
+    def _post_text(p: dict) -> str:
+        fa = p.get("full_article") or {}
+        title = fa.get("title", "").strip()
+        text = (p.get("text") or "").strip()
+        if title and text:
+            return f"{title} — {text[:250]}"
+        return (title or text)[:300]
+
+    formatted = "\n".join(
+        f"[Bài {i}]: {_post_text(p)}" for i, p in enumerate(sample)
+    )
+
+    best_posts = sample  # fallback — use all if MAP step fails
+
+    if client:
+        try:
+            from src.config import OPENAI_MODEL
+            user_msg = (
+                f'Chủ đề gợi ý: "{topic_name}"\n\n'
+                f"Danh sách {len(sample)} mẩu tin:\n\n{formatted}\n\n"
+                "Hãy tách thành các sự kiện riêng biệt và trả về JSON."
+            )
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": _MAP_EVENTS_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.1,
+                max_tokens=900,
+                response_format={"type": "json_object"},
+            )
+            raw = resp.choices[0].message.content.strip()
+            parsed = json.loads(raw)
+            events = parsed.get("events", []) if isinstance(parsed, dict) else []
+
+            if events:
+                # Pick event whose title best matches topic_name; tie-break by most related_ids
+                best_event = max(
+                    events,
+                    key=lambda e: (
+                        _word_overlap(e.get("title", ""), topic_name),
+                        len(e.get("related_ids", [])),
+                    ),
+                )
+                raw_ids = best_event.get("related_ids", [])
+                valid_ids = [int(i) for i in raw_ids
+                             if str(i).lstrip("-").isdigit() and 0 <= int(i) < len(sample)]
+                if valid_ids:
+                    best_posts = [sample[i] for i in valid_ids]
+                    logger.info(
+                        "cluster_and_summarize MAP: %d events → best=%r (%d/%d posts)",
+                        len(events), best_event.get("title", "")[:50],
+                        len(best_posts), len(sample),
+                    )
+        except Exception as exc:
+            logger.exception("cluster_and_summarize MAP step failed: %s", exc)
+            best_posts = sample  # fallback
+
+    # Step 2: full article generation on focused post set
+    result = summarize_cluster(best_posts, topic_name=topic_name, max_posts=len(best_posts))
+    result.pop("_used_posts", None)          # already consumed inside summarize_cluster
+    result["_filtered_posts"] = best_posts   # expose for caller to build link_posts
+    return result
 
 
 # ─── 7. Filter posts to only those genuinely relevant to a topic ─────────────
 
-_RELEVANCE_THRESHOLD = 0.32  # cosine similarity cut-off
+_RELEVANCE_THRESHOLD = 0.42  # cosine similarity cut-off (raised from 0.32 to avoid ambiguous-word false positives)
 
 
 def filter_relevant_posts(
@@ -498,6 +664,7 @@ def filter_relevant_posts(
     topic_description: str = "",
     topic_keywords: list[str] | None = None,
     top_k: int = 15,
+    threshold: float | None = None,
 ) -> list[dict]:
     """
     Use embedding-based semantic scoring to keep only posts that are
@@ -506,14 +673,15 @@ def filter_relevant_posts(
     Strategy:
     1. Build a rich query string from name + description + top keywords.
     2. Call ``score_posts_by_embedding()`` to rank all candidates.
-    3. Keep posts where cosine-similarity >= _RELEVANCE_THRESHOLD AND at
-       most *top_k* posts.
+    3. Keep posts where cosine-similarity >= threshold AND at most *top_k* posts.
 
     Falls back to returning the original posts unchanged when OpenAI is
     unavailable or numpy is missing.
     """
     if not posts:
         return posts
+
+    cutoff = threshold if threshold is not None else _RELEVANCE_THRESHOLD
 
     # Build a descriptive query to anchor the embedding
     kw_str = ", ".join((topic_keywords or [])[:12])
@@ -526,7 +694,7 @@ def filter_relevant_posts(
         return posts[:top_k]
 
     # Apply threshold filter then take top_k
-    relevant = [p for p in scored if p.get("_ai_score", 0) >= _RELEVANCE_THRESHOLD]
+    relevant = [p for p in scored if p.get("_ai_score", 0) >= cutoff]
     if not relevant:
         # If nothing passes the threshold keep the top-3 as a safety net
         relevant = scored[:3]
@@ -895,6 +1063,11 @@ def gpt_name_ml_clusters(clusters: list[dict]) -> list[dict]:
                 clusters[idx]["name"] = item.get("name", clusters[idx].get("topic_name", ""))
                 clusters[idx]["description"] = item.get("description", "")
                 clusters[idx]["color"] = item.get("color", clusters[idx].get("color", "#6b7280"))
+        # Fallback: ensure every cluster has 'name' even if GPT omitted some
+        for cl in clusters:
+            cl.setdefault("name", cl.get("topic_name", ""))
+            cl.setdefault("description", "")
+            cl.setdefault("color", "#6b7280")
         return clusters
     except Exception as exc:
         logger.exception("gpt_name_ml_clusters failed: %s", exc)

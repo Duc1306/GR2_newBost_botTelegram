@@ -452,6 +452,7 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
 
               if (!rawSources.length) return null;
 
+              const withLink = rawSources.filter(s => s.url);
               const sources = [
                 ...rawSources.filter(s => !s.url || !readUrls.has(s.url)),
                 ...rawSources.filter(s => s.url && readUrls.has(s.url)),
@@ -463,7 +464,7 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
                   <Divider sx={{ my: 2.5 }} />
                   <Box display="flex" alignItems="center" gap={1} mb={1} flexWrap="wrap">
                     <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                      Nguồn tham khảo ({sources.length} bài{data.link_posts?.length > 0 ? ` · ${data.link_posts.length} có link` : ''})
+                      Nguồn tham khảo ({rawSources.length} bài{withLink.length > 0 ? ` · ${withLink.length} có link` : ''})
                     </Typography>
                     {readCount > 0 && (
                       <Chip label={`Đã đọc ${readCount}`} size="small" sx={{ height: 18, fontSize: '0.6rem', bgcolor: '#e5e7eb', color: '#6b7280' }} />

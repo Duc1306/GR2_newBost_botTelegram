@@ -51,14 +51,15 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.0"
 
-  # ── Cron Job: tự động fetch tin 2 lần/ngày ──────────────────────────────
-  # 1:00 UTC = 8:00 sáng VN | 13:00 UTC = 8:00 tối VN
+  # ── Cron Job: tự động fetch tin mỗi 6 giờ ──────────────────────────────
+  # 1:00 UTC  = 8:00 sáng VN  | 7:00 UTC  = 2:00 chiều VN
+  # 13:00 UTC = 8:00 tối VN   | 19:00 UTC = 2:00 sáng VN
   - type: cron
     name: newsbot-refresh
     env: python
     region: singapore
     plan: free
-    schedule: "0 1,13 * * *"
+    schedule: "0 1,7,13,19 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m src.ingestion.run_scheduled_refresh
     envVars:
@@ -75,7 +76,7 @@ services:
       - key: TELEGRAM_FETCH_LIMIT
         value: "200"
       - key: TELEGRAM_FETCH_DAYS
-        value: "7"
+        value: "999"
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

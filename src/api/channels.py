@@ -595,8 +595,10 @@ async def unsubscribe_channel(
         raise HTTPException(status_code=404, detail="Subscription not found")
 
     # Nếu không còn user nào subscribe → dọn channel khỏi DB
+    # Kênh hệ thống (system=True) không bị xóa khi hết subscriber
     remaining = user_channels_col.count_documents({"channel_username": raw})
-    if remaining == 0:
+    is_system = bool((db["channels"].find_one({"username": raw}, {"system": 1}) or {}).get("system"))
+    if remaining == 0 and not is_system:
         db["channels"].delete_one({"username": raw})
         db["channel_summaries"].delete_many({"channel_username": raw})
         db["pending_channels"].delete_many({"channel_username": raw})

@@ -61,6 +61,7 @@ def _build_client():
 
 
 FETCH_DAYS = int(os.getenv("TELEGRAM_FETCH_DAYS", "7"))   # only fetch posts from last N days
+SUMMARY_DAYS = int(os.getenv("SUMMARY_DAYS", "7"))         # window (days) for AI summary generation — independent of FETCH_DAYS
 
 
 async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -> int:
@@ -157,7 +158,7 @@ async def _generate_summary(channel_username: str, db) -> Optional[str]:
 
     import re as _re
     posts_col = db["posts"]
-    cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
+    cutoff = datetime.utcnow() - timedelta(days=SUMMARY_DAYS)
 
     # xkw: channels don't have matching source field — query by keyword text
     if channel_username.startswith("xkw:"):

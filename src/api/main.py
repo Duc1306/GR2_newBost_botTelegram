@@ -1563,9 +1563,24 @@ async def get_public_hotnews(
     # ── L2: MongoDB cache ─────────────────────────────────────────────────────
     cached = cache_coll.find_one({"key": cache_key})
     if cached and cached.get("clusters"):
-        result = {"clusters": cached["clusters"], "since": since.isoformat(), "hours": hours, "cached": True}
-        _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
-        return result
+        # For wider windows, invalidate if the 24h cache is newer (means 24h
+        # was recomputed after the 48h/72h was built, so 48h is stale).
+        if hours > 24:
+            h24_bucket_hour = now.hour  # bucket_size=1 for 24h
+            h24_key = f"hotnews_kw:24:{now.strftime('%Y%m%d')}{h24_bucket_hour:02d}"
+            h24_doc = cache_coll.find_one({"key": h24_key}, {"created_at": 1})
+            if (
+                h24_doc
+                and h24_doc.get("created_at")
+                and cached.get("created_at")
+                and h24_doc["created_at"] > cached["created_at"]
+            ):
+                # 24h is fresher — let this request recompute 48h/72h
+                cached = None
+        if cached:
+            result = {"clusters": cached["clusters"], "since": since.isoformat(), "hours": hours, "cached": True}
+            _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
+            return result
 
     # ── L3: compute (expensive GPT call) — serialized per key via Lock ────────
     async with _get_hotnews_lock(cache_key):
@@ -1586,27 +1601,51 @@ async def get_public_hotnews(
     }
 
     # ── Step 1: fetch posts across the full time window ───────────────────────
-    # Divide window into slices so older posts are always represented.
-    # Each slice = hours/3, fetch up to posts_per_slice posts per slice.
-    # This prevents 500 recent posts from drowning out posts from 2-3 days ago.
-    slice_hours = hours // 3          # e.g. 24h→8h, 48h→16h, 72h→24h per slice
-    posts_per_slice = 150             # 3 slices × 150 = 450 posts total (manageable)
+    # The most recent 24h is always fetched at full density (3 slices × 150 = 450
+    # posts), so trending stories detected in 24h mode are NEVER diluted when
+    # switching to 48h or 72h.  For windows wider than 24h we add extra posts
+    # from the older portion proportionally.
+    RECENT_SPAN   = min(hours, 24)          # always cover the freshest 24h fully
+    RECENT_SLICES = 3
+    RECENT_PPL    = 150                     # posts-per-slice for recent window
 
     all_posts: list[dict] = []
     seen_ids: set = set()
-    for i in range(3):
-        slice_end   = now - timedelta(hours=i * slice_hours)
-        slice_start = now - timedelta(hours=(i + 1) * slice_hours)
-        # Ensure we don't go beyond the overall window boundary
+
+    # Fetch the recent 24h in equal slices
+    recent_slice_h = RECENT_SPAN // RECENT_SLICES   # e.g. 8h each
+    for i in range(RECENT_SLICES):
+        slice_end   = now - timedelta(hours=i * recent_slice_h)
+        slice_start = now - timedelta(hours=(i + 1) * recent_slice_h)
         if slice_start < since:
             slice_start = since
         slice_posts = list(
             posts_coll.find(
                 {"created_at": {"$gte": slice_start, "$lt": slice_end}},
                 projection,
-            ).sort("created_at", -1).limit(posts_per_slice)
+            ).sort("created_at", -1).limit(RECENT_PPL)
         )
         for p in slice_posts:
+            pid = str(p["_id"])
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                p["_id"] = pid
+                all_posts.append(p)
+
+    # For windows wider than 24h, fetch older posts too (up to ~150 posts per
+    # extra 24h span so older events are still surfaced).
+    if hours > 24:
+        older_start = since                         # e.g. now-48h or now-72h
+        older_end   = now - timedelta(hours=24)     # everything before 24h ago
+        extra_spans = (hours - 24) // 24            # 1 for 48h, 2 for 72h
+        older_limit = 150 * max(1, extra_spans)
+        older_posts = list(
+            posts_coll.find(
+                {"created_at": {"$gte": older_start, "$lt": older_end}},
+                projection,
+            ).sort("created_at", -1).limit(older_limit)
+        )
+        for p in older_posts:
             pid = str(p["_id"])
             if pid not in seen_ids:
                 seen_ids.add(pid)
@@ -1616,19 +1655,18 @@ async def get_public_hotnews(
     clusters: list[dict] = []
 
     # ── Step 2: keyword-frequency clustering (PRIMARY) ────────────────────────
-    gpt_events = discover_hot_events(all_posts, max_events=8)
-    for ev in gpt_events:
+    # Strategy: for 48h/72h, REUSE the existing 24h cache as the base so that
+    # 48h always contains exactly the same clusters as 24h.
+    # Only compute NEW events from posts older than 24h.
+
+    def _build_cluster(ev: dict) -> dict | None:
         ev_posts = ev.get("posts", [])
         if len(ev_posts) < 2:
-            continue
-        # AI relevance filter
+            return None
         filtered = filter_relevant_posts(ev_posts, topic_name=ev["name"], top_k=15)
         if not filtered:
             filtered = ev_posts[:10]
-
-        # Sort: link-posts first
         filtered = sorted(filtered, key=lambda p: (not bool(p.get("links")), 0))
-
         latest = max(
             (p.get("created_at") for p in filtered if p.get("created_at")),
             default=None,
@@ -1638,21 +1676,59 @@ async def get_public_hotnews(
             (filtered[0].get("full_article") or {}).get("title")
             or (filtered[0].get("text") or "")[:120]
         )
-        slug = _ml_topic_slug(ev["name"])
-        if any(c["slug"] == slug for c in clusters):
-            continue
-        clusters.append({
-            "slug": slug,
+        return {
+            "slug": _ml_topic_slug(ev["name"]),
             "name": ev["name"],
             "description": ev.get("description", ""),
             "color": ev.get("color", "#be123c"),
             "post_count": len(filtered),
-            "posts_with_links": len([p for p in filtered if p.get("links")]),
+            "posts_with_links": len([p for p in filtered if any(
+                l.startswith("http") and "t.me" not in l
+                for l in (p.get("links") or [])
+            )]),
             "latest_at": latest_str,
             "headline": headline,
             "posts": filtered[:15],
             "source": "keyword_trend",
-        })
+        }
+
+    if hours > 24:
+        # ── Try to reuse 24h cached clusters directly ─────────────────────────
+        h24_bucket_hour = (now.hour // 1) * 1   # bucket_size=1 for 24h
+        h24_cache_key = f"hotnews_kw:24:{now.strftime('%Y%m%d')}{h24_bucket_hour:02d}"
+        h24_cached = (
+            _hotnews_mem.get(h24_cache_key, {}).get("result")
+            or cache_coll.find_one({"key": h24_cache_key})
+        )
+        if h24_cached and h24_cached.get("clusters"):
+            clusters = list(h24_cached["clusters"])  # copy – do NOT mutate cache
+
+        # ── Add events from posts older than 24h ──────────────────────────────
+        older_posts = [
+            p for p in all_posts
+            if (p.get("created_at") or now) < now - timedelta(hours=24)
+        ]
+        if older_posts:
+            existing_slugs = {c["slug"] for c in clusters}
+            extra_events = discover_hot_events(older_posts, max_events=4)
+            for ev in extra_events:
+                cl = _build_cluster(ev)
+                if cl and cl["slug"] not in existing_slugs:
+                    clusters.append(cl)
+                    existing_slugs.add(cl["slug"])
+
+        # ── Fallback: if 24h cache miss, compute normally ─────────────────────
+        if not clusters:
+            for ev in discover_hot_events(all_posts, max_events=8):
+                cl = _build_cluster(ev)
+                if cl and not any(c["slug"] == cl["slug"] for c in clusters):
+                    clusters.append(cl)
+    else:
+        # 24h mode: compute fresh from all posts
+        for ev in discover_hot_events(all_posts, max_events=8):
+            cl = _build_cluster(ev)
+            if cl and not any(c["slug"] == cl["slug"] for c in clusters):
+                clusters.append(cl)
 
     # ── Step 3: ML-topic velocity fallback (fill if < 4 keyword clusters) ─────
     if len(clusters) < 4:
@@ -1716,7 +1792,10 @@ async def get_public_hotnews(
                 "topic_name": topic_name,           # broad ML name (input for GPT)
                 "color": _ML_TOPIC_COLORS.get(topic_name, "#6b7280"),
                 "post_count": len(filtered),
-                "posts_with_links": len([p for p in filtered if p.get("links")]),
+                "posts_with_links": len([p for p in filtered if any(
+                    l.startswith("http") and "t.me" not in l
+                    for l in (p.get("links") or [])
+                )]),
                 "latest_at": latest_str,
                 "headline": headline,
                 "posts": filtered[:15],
@@ -1768,29 +1847,49 @@ async def get_hotnews_summary(
 
     Results are cached for 30 minutes.
     """
-    from src.processing.ai_topic_detector import summarize_cluster
+    from src.processing.ai_topic_detector import cluster_and_summarize
 
     db = get_db()
     cache_coll = db["hotnews_summary_cache"]
     posts_coll = db["posts"]
 
     def _extract_link_posts(posts: list[dict]) -> list[dict]:
-        """Return structured list of posts that have a real external URL."""
+        """Return structured list of all posts, with url=None when no external link."""
         result = []
         for p in posts:
             links = p.get("links") or []
-            url = next((l for l in links if l.startswith("http") and "t.me" not in l), None)
             fa = p.get("full_article") or {}
+            # First: prefer a non-t.me HTTP URL from the links list
+            url = next((l for l in links if l.startswith("http") and "t.me" not in l), None)
+            # Fallback: use full_article.url if available (scraped article URL)
+            if not url:
+                fa_url = fa.get("url", "")
+                if fa_url and fa_url.startswith("http") and "t.me" not in fa_url:
+                    url = fa_url
             title = fa.get("title") or (p.get("text") or "")[:120]
             snippet = (p.get("text") or "")[:200]
             source = p.get("source") or p.get("channel_username") or ""
-            if url:
-                result.append({"title": title, "url": url, "source": source, "snippet": snippet})
+            result.append({"title": title, "url": url, "source": source, "snippet": snippet})
         return result
 
-    # Check cache (30-min TTL)
+    # Check cache (30-min TTL) — exact hours key first, then any hours variant
     cache_key = f"{slug}:{hours}:v2"
     cached = cache_coll.find_one({"key": cache_key})
+    if not (cached and cached.get("expires_at") and cached["expires_at"] > datetime.utcnow()):
+        # Fallback: reuse a fresh summary for this slug from a different hours window
+        # (e.g. a 24h summary is still valid when the user switches to 48h)
+        import re as _re
+        cached = cache_coll.find_one(
+            {
+                "key": _re.compile(f"^{_re.escape(slug)}:\\d+:v2$"),
+                "expires_at": {"$gt": datetime.utcnow()},
+            },
+            sort=[("expires_at", -1)],
+        )
+    if cached and cached.get("expires_at") and cached["expires_at"] > datetime.utcnow():
+        # Guard: if cached post_count is suspiciously low (stale from old buggy code), recompute
+        if cached.get("post_count", 0) <= 1:
+            cached = None
     if cached and cached.get("expires_at") and cached["expires_at"] > datetime.utcnow():
         return {
             "slug": slug,
@@ -1835,26 +1934,34 @@ async def get_hotnews_summary(
 
         # Also check hotnews_v2_cache for keyword-trend or AI-discovered events
         if not topic_doc:
-            bucket_hour = (datetime.utcnow().hour // 2) * 2
-            for ck in [
-                f"hotnews_kw:{hours}:{datetime.utcnow().strftime('%Y%m%d')}{bucket_hour:02d}",
-                f"hotnews:{hours}:{datetime.utcnow().strftime('%Y%m%d')}{bucket_hour:02d}",
-            ]:
-                hn_cached = db["hotnews_v2_cache"].find_one({"key": ck})
-                if hn_cached:
-                    cluster = next((c for c in (hn_cached.get("clusters") or []) if c["slug"] == slug), None)
-                    if cluster:
-                        posts = cluster.get("posts", [])
-                        topic_display_name = cluster["name"]
-                        link_posts = _extract_link_posts(posts)
-                        import asyncio as _asyncio
-                        result = await _asyncio.get_running_loop().run_in_executor(
-                            None, summarize_cluster, posts, topic_display_name
-                        )
-                        expires_at = datetime.utcnow() + timedelta(minutes=30)
-                        cache_coll.update_one({"key": cache_key}, {"$set": {**result, "key": cache_key, "post_count": len(posts), "link_posts": link_posts, "expires_at": expires_at}}, upsert=True)
-                        return {"slug": slug, **result, "cached": False, "post_count": len(posts), "link_posts": link_posts}
-                    break
+            # Search any recent hotnews cache entry containing this slug
+            # (avoids brittle bucket-key reconstruction which can mismatch)
+            cutoff = datetime.utcnow() - timedelta(hours=max(hours, 6))
+            hn_cached = db["hotnews_v2_cache"].find_one(
+                {"clusters.slug": slug, "created_at": {"$gte": cutoff}},
+                sort=[("created_at", -1)],
+            )
+            if hn_cached:
+                cluster = next((c for c in (hn_cached.get("clusters") or []) if c["slug"] == slug), None)
+                if cluster:
+                    raw_posts = cluster.get("posts", [])
+                    topic_display_name = cluster["name"]
+                    # Posts in the cluster are already filtered by filter_relevant_posts
+                    # (top_k=15) during cluster build. Apply a stricter pass here so
+                    # that ambiguous-keyword false positives (e.g. "vải" = fabric vs lychee)
+                    # are removed before sending to GPT and being shown as sources.
+                    from src.processing.ai_topic_detector import filter_relevant_posts as _strict_filter
+                    relevant_posts = _strict_filter(raw_posts, topic_name=topic_display_name, top_k=15, threshold=0.42)
+                    posts = relevant_posts if len(relevant_posts) >= 1 else raw_posts[:5]
+                    import asyncio as _asyncio
+                    result = await _asyncio.get_running_loop().run_in_executor(
+                        None, cluster_and_summarize, posts, topic_display_name
+                    )
+                    filtered_posts = result.pop("_filtered_posts", posts)
+                    link_posts = _extract_link_posts(filtered_posts)
+                    expires_at = datetime.utcnow() + timedelta(minutes=30)
+                    cache_coll.update_one({"key": cache_key}, {"$set": {**result, "key": cache_key, "post_count": len(filtered_posts), "link_posts": link_posts, "expires_at": expires_at}}, upsert=True)
+                    return {"slug": slug, **result, "cached": False, "post_count": len(filtered_posts), "link_posts": link_posts}
 
         if not topic_doc:
             raise HTTPException(status_code=404, detail="Hot topic not found")
@@ -1875,11 +1982,20 @@ async def get_hotnews_summary(
     if not posts:
         return {"slug": slug, "title": "", "lead": "", "body": [], "conclusion": "", "key_points": [], "sentiment": "neutral", "post_count": 0, "link_posts": []}
 
-    link_posts = _extract_link_posts(posts)
+    # Re-filter to keep only posts genuinely relevant to this specific topic/slug
+    # Use stricter threshold=0.42 to avoid ambiguous-keyword false positives
+    from src.processing.ai_topic_detector import filter_relevant_posts as _filter_rel
+    filtered = _filter_rel(posts, topic_name=topic_display_name, top_k=15, threshold=0.42)
+    if filtered:
+        posts = filtered
+
     # Run blocking OpenAI call in thread pool to avoid blocking the async event loop
     import asyncio
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, summarize_cluster, posts, topic_display_name)
+    result = await loop.run_in_executor(None, cluster_and_summarize, posts, topic_display_name)
+    filtered_posts = result.pop("_filtered_posts", posts)
+
+    link_posts = _extract_link_posts(filtered_posts)
 
     # Cache result
     expires_at = datetime.utcnow() + timedelta(minutes=30)
@@ -1894,7 +2010,7 @@ async def get_hotnews_summary(
             "key_points": result.get("key_points", []),
             "sentiment": result.get("sentiment", "neutral"),
             "ai": result.get("ai", False),
-            "post_count": len(posts),
+            "post_count": len(filtered_posts),
             "link_posts": link_posts,
             "expires_at": expires_at,
         }},
@@ -1911,7 +2027,7 @@ async def get_hotnews_summary(
         "sentiment": result.get("sentiment", "neutral"),
         "ai": result.get("ai", False),
         "cached": False,
-        "post_count": len(posts),
+        "post_count": len(filtered_posts),
         "link_posts": link_posts,
     }
 
@@ -1919,6 +2035,17 @@ async def get_hotnews_summary(
 # =============================================================================
 # Admin: Hot Topics Management
 # =============================================================================
+
+@app.delete("/admin/hotnews-cache", tags=["Admin"])
+async def clear_hotnews_cache(current_user: str = Depends(get_current_admin_user)):
+    """Force-clear hotnews_v2_cache + hotnews_summary_cache so all windows recompute fresh."""
+    global _hotnews_mem
+    _hotnews_mem.clear()
+    db = get_db()
+    r1 = db["hotnews_v2_cache"].delete_many({})
+    r2 = db["hotnews_summary_cache"].delete_many({})
+    return {"deleted_clusters": r1.deleted_count, "deleted_summaries": r2.deleted_count, "message": "Both caches cleared. Next request will recompute."}
+
 
 @app.post("/admin/hot-topics/seed", tags=["Admin"])
 async def seed_hot_topics(current_user: str = Depends(get_current_admin_user)):

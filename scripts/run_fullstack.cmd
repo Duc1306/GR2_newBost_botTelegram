@@ -1,5 +1,5 @@
 @echo off
-REM Run both FastAPI backend and Vite frontend
+REM Run FastAPI backend, Vite frontend, và Fetch Daemon tự động
 echo ========================================
 echo  Starting NewsBot Full Stack
 echo ========================================
@@ -10,14 +10,18 @@ start "FastAPI Backend" cmd /k "cd /d c:\Users\84328\botTele && python -m uvicor
 
 timeout /t 3 /nobreak >nul
 
-echo Starting Vite frontend on port 5174...
+echo Starting Fetch Daemon (tu dong fetch moi 2 gio)...
+start "Fetch Daemon" cmd /k "cd /d c:\Users\84328\botTele && scripts\fetch_daemon.cmd 2"
+
+echo Starting Vite frontend on port 5173...
 cd /d c:\Users\84328\botTele\web
 start "Vite Frontend" cmd /k "npm run dev"
 
 echo.
 echo ========================================
-echo  Both servers starting...
-echo  Backend:  http://localhost:8000
-echo  Frontend: http://localhost:5173
+echo  All services starting...
+echo  Backend:      http://localhost:8000
+echo  Frontend:     http://localhost:5173
+echo  Fetch Daemon: tu dong fetch moi 2 gio
 echo ========================================
 pause
