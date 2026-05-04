@@ -155,12 +155,39 @@ def _assign_topic_cascade(post, text: str, lang: str | None) -> None:
 async def process_message(m: Message, channel_name: str = "telegram") -> Post:
     raw_text = m.message or ""
     cleaned_text, links = clean_text(raw_text)
+
+    # Extract links from message entities (e.g. MessageEntityTextUrl — hidden URLs
+    # that don't appear in raw_text, common in news channels like baodantri).
+    try:
+        from telethon.tl.types import MessageEntityTextUrl
+        if m.entities:
+            for entity in m.entities:
+                if isinstance(entity, MessageEntityTextUrl) and entity.url:
+                    if entity.url not in links:
+                        links.append(entity.url)
+    except Exception:
+        pass
+
+    # Extract link from Telegram web-page preview (MessageMediaWebPage).
+    # News channels often attach the article URL only as a preview, not in text.
+    try:
+        from telethon.tl.types import MessageMediaWebPage
+        if m.media and isinstance(m.media, MessageMediaWebPage):
+            wp = m.media.webpage
+            wp_url = getattr(wp, 'url', None)
+            if wp_url and wp_url not in links:
+                links.append(wp_url)
+    except Exception:
+        pass
+
     media_items: List[MediaItem] = []
     if m.media:
         # Phân loại media type
-        from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+        from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage as _MMWP
         if isinstance(m.media, MessageMediaPhoto):
             media_items.append(MediaItem(type="photo", url="(embedded)"))
+        elif isinstance(m.media, _MMWP):
+            pass  # web preview — link already captured above, no media item needed
         elif isinstance(m.media, MessageMediaDocument):
             # Check if video/gif/sticker
             doc = m.media.document

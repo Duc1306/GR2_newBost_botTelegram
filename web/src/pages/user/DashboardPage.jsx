@@ -58,6 +58,8 @@ import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import CheckIcon from '@mui/icons-material/Check';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import OpenWithIcon from '@mui/icons-material/OpenWith';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import GroupsIcon from '@mui/icons-material/Groups';
 import useMediaQuery from '@mui/material/useMediaQuery';
@@ -713,6 +715,7 @@ export default function DashboardPage() {
 
   // My Telegram channels (from Telegram account)
   const [tgChannels, setTgChannels] = useState([]);          // channels fetched from Telegram
+  const [tgChannelsVisible, setTgChannelsVisible] = useState(true); // toggle show/hide without re-fetch
   const [tgChannelsLoading, setTgChannelsLoading] = useState(false);
   const [tgChannelsError, setTgChannelsError] = useState('');
   const [tgSubscribing, setTgSubscribing] = useState(new Set()); // channel IDs in flight
@@ -988,10 +991,21 @@ export default function DashboardPage() {
                 Kênh Telegram của tôi
               </Typography>
               <Stack direction="row" gap={0.5}>
+                {tgChannels.length > 0 && tgChannelsVisible && (
+                  <Tooltip title="Làm mới">
+                    <span>
+                      <IconButton size="small" onClick={loadTelegramChannels} disabled={tgChannelsLoading}>
+                        <RefreshIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
                 {tgChannels.length > 0 && (
-                  <Button size="small" onClick={loadTelegramChannels} disabled={tgChannelsLoading}>
-                    <RefreshIcon fontSize="small" />
-                  </Button>
+                  <Tooltip title={tgChannelsVisible ? 'Ẩn danh sách' : 'Hiện danh sách'}>
+                    <IconButton size="small" onClick={() => setTgChannelsVisible(v => !v)}>
+                      {tgChannelsVisible ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
                 )}
               </Stack>
             </Box>
@@ -1003,12 +1017,22 @@ export default function DashboardPage() {
             {tgChannels.length === 0 && !tgChannelsLoading && !tgChannelsError && (
               <Button
                 variant="outlined"
-                onClick={loadTelegramChannels}
+                onClick={() => { setTgChannelsVisible(true); loadTelegramChannels(); }}
                 startIcon={<TelegramIcon />}
                 sx={{ textTransform: 'none', borderRadius: 2 }}
               >
                 Quét kênh từ Telegram
               </Button>
+            )}
+
+            {tgChannels.length > 0 && !tgChannelsVisible && (
+              <Typography variant="caption" color="text.secondary">
+                {tgChannels.length} kênh đã quét —{' '}
+                <Box component="span" sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }}
+                  onClick={() => setTgChannelsVisible(true)}>
+                  Hiện lại
+                </Box>
+              </Typography>
             )}
 
             {tgChannelsLoading && (
@@ -1031,7 +1055,7 @@ export default function DashboardPage() {
               </Alert>
             )}
 
-            {tgChannels.length > 0 && !tgChannelsLoading && (
+            {tgChannels.length > 0 && !tgChannelsLoading && tgChannelsVisible && (
               <>
                 <Typography variant="body2" color="text.secondary" mb={1}>
                   Tìm thấy <strong>{tgChannels.length}</strong> kênh công khai. Nhấp vào kênh để theo dõi.
@@ -1111,9 +1135,11 @@ export default function DashboardPage() {
               Khám phá kênh theo chủ đề
             </Typography>
             <Tooltip title="Làm mới">
-              <IconButton size="small" onClick={loadDiscover} disabled={catalogLoading}>
-                <RefreshIcon fontSize="small" />
-              </IconButton>
+              <span>
+                <IconButton size="small" onClick={loadDiscover} disabled={catalogLoading}>
+                  <RefreshIcon fontSize="small" />
+                </IconButton>
+              </span>
             </Tooltip>
           </Box>
 
@@ -1201,9 +1227,11 @@ export default function DashboardPage() {
             {loadingChannels ? 'Đang tải…' : `${channels.length} kênh đang theo dõi`}
           </Typography>
           <Tooltip title="Làm mới">
-            <IconButton size="small" onClick={loadChannels} disabled={loadingChannels}>
-              <RefreshIcon fontSize="small" />
-            </IconButton>
+            <span>
+              <IconButton size="small" onClick={loadChannels} disabled={loadingChannels}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
         </Box>
 

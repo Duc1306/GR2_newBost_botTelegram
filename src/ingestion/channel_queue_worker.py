@@ -108,6 +108,27 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
                 continue
 
             links = _links or []
+
+            # Extract hidden links from message entities (MessageEntityTextUrl)
+            try:
+                from telethon.tl.types import MessageEntityTextUrl
+                if msg.entities:
+                    for _ent in msg.entities:
+                        if isinstance(_ent, MessageEntityTextUrl) and _ent.url:
+                            if _ent.url not in links:
+                                links.append(_ent.url)
+            except Exception:
+                pass
+
+            # Extract link from Telegram web-page preview (MessageMediaWebPage)
+            try:
+                from telethon.tl.types import MessageMediaWebPage
+                if msg.media and isinstance(msg.media, MessageMediaWebPage):
+                    _wp_url = getattr(msg.media.webpage, 'url', None)
+                    if _wp_url and _wp_url not in links:
+                        links.append(_wp_url)
+            except Exception:
+                pass
             dedupe_key = Post.make_dedupe_key(text, links)
             source_id = str(msg.id)
             post_id = Post.make_id(channel_username, source_id)  # "telegram:channel:msgid"
