@@ -1985,11 +1985,11 @@ async def get_hotnews_summary(
                     result = await _asyncio.get_running_loop().run_in_executor(
                         None, cluster_and_summarize, posts, topic_display_name
                     )
-                    filtered_posts = result.pop("_filtered_posts", posts)
-                    link_posts = _extract_link_posts(filtered_posts)
+                    result.pop("_filtered_posts", None)  # MAP output used internally for article quality only
+                    link_posts = _extract_link_posts(posts)  # show all input posts as sources
                     expires_at = datetime.utcnow() + timedelta(minutes=30)
-                    cache_coll.update_one({"key": cache_key}, {"$set": {**result, "key": cache_key, "post_count": len(filtered_posts), "link_posts": link_posts, "expires_at": expires_at}}, upsert=True)
-                    return {"slug": slug, **result, "cached": False, "post_count": len(filtered_posts), "link_posts": link_posts}
+                    cache_coll.update_one({"key": cache_key}, {"$set": {**result, "key": cache_key, "post_count": len(posts), "link_posts": link_posts, "expires_at": expires_at}}, upsert=True)
+                    return {"slug": slug, **result, "cached": False, "post_count": len(posts), "link_posts": link_posts}
 
         if not topic_doc:
             raise HTTPException(status_code=404, detail="Hot topic not found")
@@ -2021,9 +2021,9 @@ async def get_hotnews_summary(
     import asyncio
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, cluster_and_summarize, posts, topic_display_name)
-    filtered_posts = result.pop("_filtered_posts", posts)
+    result.pop("_filtered_posts", None)  # MAP output used internally for article quality only
 
-    link_posts = _extract_link_posts(filtered_posts)
+    link_posts = _extract_link_posts(posts)  # show all input posts as sources
 
     # Cache result
     expires_at = datetime.utcnow() + timedelta(minutes=30)
@@ -2038,7 +2038,7 @@ async def get_hotnews_summary(
             "key_points": result.get("key_points", []),
             "sentiment": result.get("sentiment", "neutral"),
             "ai": result.get("ai", False),
-            "post_count": len(filtered_posts),
+            "post_count": len(posts),
             "link_posts": link_posts,
             "expires_at": expires_at,
         }},
@@ -2055,7 +2055,7 @@ async def get_hotnews_summary(
         "sentiment": result.get("sentiment", "neutral"),
         "ai": result.get("ai", False),
         "cached": False,
-        "post_count": len(filtered_posts),
+        "post_count": len(posts),
         "link_posts": link_posts,
     }
 
