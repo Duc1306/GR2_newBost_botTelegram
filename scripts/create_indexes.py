@@ -83,6 +83,8 @@ def create_indexes():
 
     # ── cache collections ──
     _safe_create(db["hotnews_v2_cache"], "key", unique=True)
+    # TTL index: tự xóa cache entries sau 3 ngày
+    _safe_create(db["hotnews_v2_cache"], [("expires_at", 1)], expireAfterSeconds=0, name="hotnews_v2_cache_ttl")
     _safe_create(db["hotnews_summary_cache"], "key", unique=True)
 
     # ── pending_channels collection ──

@@ -1819,14 +1819,42 @@ async def get_public_hotnews(
                 "broad_topic": cl["topic_name"],    # keep original for reference
             })
 
-    # ── Step 4: Cache ─────────────────────────────────────────────────────────
+    # ── Step 4: Inject first_seen_at per slug (track khi nào topic đầu tiên nổi) ──
+    # Tra cứu first_seen_at từ các cache doc cũ trong 3 ngày qua để giữ nguyên
+    # mốc thời gian đầu tiên, dù cache key đổi theo bucket.
+    three_days_ago = now - timedelta(days=3)
+    old_docs = list(cache_coll.find(
+        {"created_at": {"$gte": three_days_ago}},
+        {"clusters.slug": 1, "clusters.first_seen_at": 1, "created_at": 1},
+    ))
+    slug_first_seen: dict[str, datetime] = {}
+    for doc in old_docs:
+        doc_created = doc.get("created_at") or now
+        for cl in (doc.get("clusters") or []):
+            s = cl.get("slug")
+            fsa = cl.get("first_seen_at")
+            if isinstance(fsa, str):
+                try:
+                    fsa = datetime.fromisoformat(fsa)
+                except ValueError:
+                    fsa = None
+            fsa = fsa or doc_created
+            if s and fsa:
+                if s not in slug_first_seen or fsa < slug_first_seen[s]:
+                    slug_first_seen[s] = fsa
+    for cl in clusters:
+        existing_fsa = slug_first_seen.get(cl["slug"])
+        cl["first_seen_at"] = (existing_fsa or now).isoformat()
+
+    # ── Step 5: Cache (expires_at = 3 ngày để TTL index tự xóa) ──────────────
+    expires_at = now + timedelta(days=3)
     cache_coll.update_one(
         {"key": cache_key},
-        {"$set": {"key": cache_key, "clusters": clusters, "created_at": datetime.utcnow()}},
+        {"$set": {"key": cache_key, "clusters": clusters, "created_at": now, "expires_at": expires_at}},
         upsert=True,
     )
     result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": False}
-    _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
+    _hotnews_mem[cache_key] = {"result": result, "ts": now}
     return result
 
 
