@@ -465,7 +465,7 @@ const ArticleCard = React.memo(function ArticleCard({ article, index, onPlayAudi
                 textTransform: 'none', fontSize: '0.7rem', borderRadius: 2,
                 color: audioError ? 'error.main' : '#0369a1',
                 border: '1px solid', borderColor: audioError ? 'error.light' : '#bfdbfe',
-                bgcolor: 'white', px: 1.25, py: 0.3, '&:hover': { bgcolor: '#eff6ff' },
+                bgcolor: 'background.paper', px: 1.25, py: 0.3, '&:hover': { bgcolor: 'action.hover' },
               }}
             >
               {audioLoading ? 'Đang tạo…' : 'Nghe tóm tắt'}
@@ -1178,10 +1178,10 @@ export default function DashboardPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: '#f9fafb' }}>
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       {/* ── Navbar ── */}
       <AppBar position="sticky" elevation={0}
-        sx={{ bgcolor: 'white', borderBottom: '1px solid #e5e7eb', color: 'text.primary' }}>
+        sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', color: 'text.primary' }}>
         <Toolbar gap={2}>
           <NewspaperIcon sx={{ color: 'primary.main', mr: 1 }} />
           <Typography variant="h6" fontWeight={700} color="primary" sx={{ flexGrow: 1 }}>
@@ -1553,7 +1553,7 @@ export default function DashboardPage() {
             ))}
           </Box>
         ) : channels.length === 0 ? (
-          <Box textAlign="center" py={8} sx={{ bgcolor: 'white', borderRadius: 3, border: '1px dashed #d1d5db' }}>
+          <Box textAlign="center" py={8} sx={{ bgcolor: 'background.paper', borderRadius: 3, border: '1px dashed', borderColor: 'divider' }}>
             <TelegramIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
             <Typography color="text.secondary" variant="subtitle2">
               Bạn chưa theo dõi kênh nào.

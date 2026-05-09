@@ -90,7 +90,7 @@ async def fetch_channel_messages(client: TelegramClient, channel: str, limit: in
 _KEYWORD_HIGH_FREQ_THRESHOLD = 5
 
 
-def _assign_topic_cascade(post, text: str, lang: str | None) -> None:
+async def _assign_topic_cascade(post, text: str, lang: str | None) -> None:
     """
     Priority cascade for topic assignment (called when channel category and URL
     pattern are both unavailable).
@@ -136,7 +136,7 @@ def _assign_topic_cascade(post, text: str, lang: str | None) -> None:
         else:
             # Bất đồng → dùng OpenAI phân xử
             from src.processing.ai_topic_detector import arbitrate_topic
-            ai_result = arbitrate_topic(text, svm_topic, kw_topic)
+            ai_result = await arbitrate_topic(text, svm_topic, kw_topic)
             if ai_result:
                 post.topics = [ai_result]
                 post.score = 0.85  # OpenAI arbitration → high confidence
@@ -245,7 +245,7 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
         
         # PRIORITY 3+: Keyword high-freq → SVM/Keyword agreement → OpenAI arbitration
         if not source_topic:
-            _assign_topic_cascade(post, cleaned_text, lang)
+            await _assign_topic_cascade(post, cleaned_text, lang)
     
     return post
 

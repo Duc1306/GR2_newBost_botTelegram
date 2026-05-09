@@ -312,10 +312,9 @@ async def _generate_summary(channel_username: str, db) -> Optional[dict]:
         or channel_username.replace("x:", "@").replace("xkw:", "#")
     )
 
-    # summarize_cluster is sync — run in thread executor to avoid blocking event loop
-    loop = asyncio.get_running_loop()
+    # summarize_cluster is now async — await directly
     try:
-        result = await loop.run_in_executor(None, summarize_cluster, recent[:30], topic_name)
+        result = await summarize_cluster(recent[:30], topic_name)
     except Exception as exc:
         logger.warning(f"summarize_cluster failed for {channel_username}: {exc}")
         return None

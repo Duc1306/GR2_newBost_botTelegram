@@ -28,17 +28,17 @@ _openai_client = None
 
 
 def _get_client():
-    """Lazy-import openai and return a cached OpenAI client with a sensible timeout."""
+    """Lazy-import openai and return a cached AsyncOpenAI client with a sensible timeout."""
     global _openai_client
     if _openai_client is not None:
         return _openai_client
     try:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
         from src.config import OPENAI_API_KEY
         if not OPENAI_API_KEY:
             logger.warning("OPENAI_API_KEY not set — AI features disabled")
             return None
-        _openai_client = OpenAI(api_key=OPENAI_API_KEY, timeout=45.0)
+        _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=45.0)
         return _openai_client
     except ImportError:
         logger.warning("openai package not installed. Run: pip install openai")
@@ -72,7 +72,7 @@ Return ONLY valid JSON array. No extra text. Format:
 ]"""
 
 
-def detect_new_hot_topics(
+async def detect_new_hot_topics(
     posts: list[dict],
     existing_slugs: list[str] | None = None,
     max_new_topics: int = 5,
@@ -114,7 +114,7 @@ def detect_new_hot_topics(
 
     try:
         from src.config import OPENAI_MODEL
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": DETECT_SYSTEM_PROMPT},
@@ -177,7 +177,7 @@ Keep all keywords lowercase. Return ONLY valid JSON:
 Limit to 30 keywords total."""
 
 
-def expand_keywords(topic_name: str, existing_keywords: list[str]) -> list[str]:
+async def expand_keywords(topic_name: str, existing_keywords: list[str]) -> list[str]:
     """
     Use GPT to expand the keyword list for a hot topic.
 
@@ -195,7 +195,7 @@ def expand_keywords(topic_name: str, existing_keywords: list[str]) -> list[str]:
 
     try:
         from src.config import OPENAI_MODEL
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": EXPAND_SYSTEM_PROMPT},
@@ -218,7 +218,7 @@ def expand_keywords(topic_name: str, existing_keywords: list[str]) -> list[str]:
 
 # ─── 3. Semantic post scoring via embeddings ─────────────────────────────────
 
-def score_posts_by_embedding(
+async def score_posts_by_embedding(
     posts: list[dict],
     query_text: str,
     top_k: int | None = None,
@@ -243,7 +243,7 @@ def score_posts_by_embedding(
         texts = [p.get("text", "")[:512] for p in posts]
         all_texts = [query_text] + texts  # query first
 
-        response = client.embeddings.create(
+        response = await client.embeddings.create(
             model=OPENAI_EMBED_MODEL,
             input=all_texts,
         )
@@ -274,7 +274,7 @@ def score_posts_by_embedding(
 
 # ─── 3b. Embedding-based clustering (replaces unigram/bigram greedy) ─────────
 
-def embed_and_cluster_posts(
+async def embed_and_cluster_posts(
     posts: list[dict],
     max_clusters: int = 8,
     min_cluster_size: int = 2,
@@ -314,7 +314,7 @@ def embed_and_cluster_posts(
         texts = [_post_text(p) for p in posts]
 
         # Single batch embedding call
-        response = client.embeddings.create(
+        response = await client.embeddings.create(
             model=OPENAI_EMBED_MODEL,
             input=texts,
         )
@@ -361,7 +361,7 @@ def embed_and_cluster_posts(
 
 # ─── 4. Quick health check ───────────────────────────────────────────────────
 
-def check_openai_status() -> dict[str, Any]:
+async def check_openai_status() -> dict[str, Any]:
     """Returns a status dict indicating whether OpenAI is configured and reachable."""
     from src.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_EMBED_MODEL
     if not OPENAI_API_KEY:
@@ -373,7 +373,7 @@ def check_openai_status() -> dict[str, Any]:
 
     try:
         # Cheapest possible call – list models
-        client.models.retrieve(OPENAI_MODEL)
+        await client.models.retrieve(OPENAI_MODEL)
         return {
             "available": True,
             "model": OPENAI_MODEL,
@@ -391,7 +391,7 @@ You MUST return exactly one topic from the provided valid topics list.
 Return ONLY valid JSON with a single key: {"topic": "TopicName"}"""
 
 
-def arbitrate_topic(
+async def arbitrate_topic(
     text: str,
     svm_topic: str,
     keyword_topic: str,
@@ -426,7 +426,7 @@ def arbitrate_topic(
 
     try:
         from src.config import OPENAI_MODEL
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": _ARBITRATE_SYSTEM},
@@ -497,7 +497,7 @@ QUY TẮC BẮT BUỘC:
 }"""
 
 
-def summarize_cluster(
+async def summarize_cluster(
     posts: list[dict],
     topic_name: str = "",
     max_posts: int = 15,
@@ -564,7 +564,7 @@ def summarize_cluster(
     try:
         from src.config import OPENAI_MODEL
         logger.info("summarize_cluster: calling GPT model=%s posts=%d", OPENAI_MODEL, len(sample))
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": _SUMMARISE_SYSTEM},
@@ -622,7 +622,7 @@ def summarize_cluster(
 
 # ─── 6b. cluster_and_summarize (direct summarize — MAP step removed) ─────────
 
-def cluster_and_summarize(
+async def cluster_and_summarize(
     posts: list[dict],
     topic_name: str = "",
     max_posts: int = 15,
@@ -645,7 +645,7 @@ def cluster_and_summarize(
         }
 
     sample = posts[:max_posts]
-    result = summarize_cluster(sample, topic_name=topic_name, max_posts=len(sample))
+    result = await summarize_cluster(sample, topic_name=topic_name, max_posts=len(sample))
     result.pop("_used_posts", None)
     result["_filtered_posts"] = sample
     return result
@@ -656,7 +656,7 @@ def cluster_and_summarize(
 _RELEVANCE_THRESHOLD = 0.50  # cosine similarity cut-off (raised to 0.50 for stricter relevance filtering)
 
 
-def filter_relevant_posts(
+async def filter_relevant_posts(
     posts: list[dict],
     topic_name: str,
     topic_description: str = "",
@@ -685,7 +685,7 @@ def filter_relevant_posts(
     kw_str = ", ".join((topic_keywords or [])[:12])
     query = f"{topic_name}. {topic_description}. Keywords: {kw_str}".strip(". ")
 
-    scored = score_posts_by_embedding(posts, query_text=query)
+    scored = await score_posts_by_embedding(posts, query_text=query)
 
     # If scoring didn't add _ai_score it returned posts unchanged — keep as-is
     if not scored or "_ai_score" not in scored[0]:
@@ -725,7 +725,7 @@ Trả về ĐÚNG JSON (không thêm văn bản nào khác):
 ]"""
 
 
-def discover_hot_events(
+async def discover_hot_events(
     posts: list[dict],
     max_events: int = 6,
 ) -> list[dict]:
@@ -748,7 +748,7 @@ def discover_hot_events(
         return []
 
     # ── PRIMARY: embedding-based DBSCAN clustering ────────────────────────────
-    embed_clusters = embed_and_cluster_posts(
+    embed_clusters = await embed_and_cluster_posts(
         posts, max_clusters=max_events + 2, min_cluster_size=2, similarity_threshold=0.62
     )
 
@@ -872,7 +872,7 @@ def discover_hot_events(
 
     try:
         from src.config import OPENAI_MODEL
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {
@@ -923,7 +923,7 @@ def discover_hot_events(
 
 # ─── 6. GPT name a list of ML-velocity clusters ──────────────────────────────
 
-def gpt_name_ml_clusters(clusters: list[dict]) -> list[dict]:
+async def gpt_name_ml_clusters(clusters: list[dict]) -> list[dict]:
     """
     Given ML-velocity clusters (each has 'topic_name' and 'posts'),
     use GPT to replace the broad topic name (e.g. "Kinh tế") with a
@@ -974,7 +974,7 @@ def gpt_name_ml_clusters(clusters: list[dict]) -> list[dict]:
 
     try:
         from src.config import OPENAI_MODEL
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {

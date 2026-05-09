@@ -103,27 +103,26 @@ function UserRoute({ page }) {
 
 function AppRoutes() {
   return (
-    <Suspense fallback={<PageLoader />}>
     <Routes>
       {/* ── Public (no auth required) ────────────────────────── */}
-      <Route path="/"     element={<PublicHomePage />} />
+      <Route path="/" element={<Suspense fallback={<PageLoader />}><PublicHomePage /></Suspense>} />
 
       {/* ── Auth ────────────────────────────────────────────── */}
-      <Route path="/login"    element={<GuestOnly><LoginPage /></GuestOnly>} />
-      <Route path="/register" element={<GuestOnly><RegisterPage /></GuestOnly>} />
-      <Route path="/login/telegram" element={<GuestOnly><TelegramLoginPage /></GuestOnly>} />
+      <Route path="/login"    element={<GuestOnly><Suspense fallback={<PageLoader />}><LoginPage /></Suspense></GuestOnly>} />
+      <Route path="/register" element={<GuestOnly><Suspense fallback={<PageLoader />}><RegisterPage /></Suspense></GuestOnly>} />
+      <Route path="/login/telegram" element={<GuestOnly><Suspense fallback={<PageLoader />}><TelegramLoginPage /></Suspense></GuestOnly>} />
 
       {/* ── User routes (role: user or admin) ───────────────── */}
-      <Route path="/dashboard" element={<UserRoute page={<DashboardPage />} />} />
+      <Route path="/dashboard" element={<UserRoute page={<Suspense fallback={<PageLoader />}><DashboardPage /></Suspense>} />} />
       <Route path="/news" element={<Navigate to="/" replace />} />
 
       {/* ── Admin routes (role: admin only) ─────────────────── */}
-      <Route path="/admin"           element={<AdminRoute page={<OverviewPage />} />} />
-      <Route path="/admin/analytics" element={<AdminRoute page={<AnalyticsPage />} />} />
-      <Route path="/admin/posts"     element={<AdminRoute page={<PostsPage />} />} />
-      <Route path="/admin/trending"  element={<AdminRoute page={<TrendingPage />} />} />
-      <Route path="/admin/settings"  element={<AdminRoute page={<SettingsPage />} />} />
-      <Route path="/admin/users"     element={<AdminRoute page={<UsersPage />} />} />
+      <Route path="/admin"           element={<AdminRoute page={<Suspense fallback={<PageLoader />}><OverviewPage /></Suspense>} />} />
+      <Route path="/admin/analytics" element={<AdminRoute page={<Suspense fallback={<PageLoader />}><AnalyticsPage /></Suspense>} />} />
+      <Route path="/admin/posts"     element={<AdminRoute page={<Suspense fallback={<PageLoader />}><PostsPage /></Suspense>} />} />
+      <Route path="/admin/trending"  element={<AdminRoute page={<Suspense fallback={<PageLoader />}><TrendingPage /></Suspense>} />} />
+      <Route path="/admin/settings"  element={<AdminRoute page={<Suspense fallback={<PageLoader />}><SettingsPage /></Suspense>} />} />
+      <Route path="/admin/users"     element={<AdminRoute page={<Suspense fallback={<PageLoader />}><UsersPage /></Suspense>} />} />
 
       {/* Legacy compat */}
       <Route path="/admin/login" element={<Navigate to="/login" replace />} />
@@ -131,7 +130,6 @@ function AppRoutes() {
       {/* 404 → public home */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-    </Suspense>
   );
 }
 

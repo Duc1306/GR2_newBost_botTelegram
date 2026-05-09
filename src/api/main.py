@@ -1650,7 +1650,7 @@ async def get_public_hotnews(
         import re as _re
         from src.processing.ai_topic_detector import cluster_and_summarize as _cas
 
-        def _build_cluster(ev: dict) -> dict | None:
+        async def _build_cluster(ev: dict) -> dict | None:
             ev_posts = ev.get("posts", [])
             if len(ev_posts) < 2:
                 return None
@@ -1694,7 +1694,7 @@ async def get_public_hotnews(
                     {"_id": 0, "title": 1},
                 )
                 if not existing:
-                    result = _cas(filtered, topic_name=ev["name"])
+                    result = await _cas(filtered, topic_name=ev["name"])
                     result.pop("_filtered_posts", None)
                     link_posts = []
                     for p in filtered:
@@ -1737,14 +1737,14 @@ async def get_public_hotnews(
             # ── Always compute from full all_posts (24h + older) ──────────────────
             # discover_hot_events nhận toàn bộ bài trong window (24h gần + cũ hơn),
             # giúp 48h/72h luôn chứa bài 24h và thêm sự kiện cũ hơn.
-            for ev in discover_hot_events(all_posts, max_events=8):
-                cl = _build_cluster(ev)
+            for ev in await discover_hot_events(all_posts, max_events=8):
+                cl = await _build_cluster(ev)
                 if cl and not any(c["slug"] == cl["slug"] for c in clusters):
                     clusters.append(cl)
         else:
             # 24h mode: compute fresh from all posts
-            for ev in discover_hot_events(all_posts, max_events=8):
-                cl = _build_cluster(ev)
+            for ev in await discover_hot_events(all_posts, max_events=8):
+                cl = await _build_cluster(ev)
                 if cl and not any(c["slug"] == cl["slug"] for c in clusters):
                     clusters.append(cl)
 
@@ -1794,7 +1794,7 @@ async def get_public_hotnews(
                                  key=lambda p: p.get("created_at") or datetime.min, reverse=True)
                 sorted_posts = has_link + no_link
 
-                filtered = filter_relevant_posts(sorted_posts, topic_name=topic_name, top_k=15)
+                filtered = await filter_relevant_posts(sorted_posts, topic_name=topic_name, top_k=15)
                 if not filtered:
                     continue
 
@@ -1821,7 +1821,7 @@ async def get_public_hotnews(
                 existing_slugs.add(slug)
 
             # GPT-name all ML clusters in one call (replaces broad "Kinh tế" → specific event)
-            ml_named = gpt_name_ml_clusters(ml_raw_clusters)
+            ml_named = await gpt_name_ml_clusters(ml_raw_clusters)
             for cl in ml_named:
                 clusters.append({
                     "slug": cl["slug"],
@@ -1992,9 +1992,7 @@ async def get_hotnews_summary(
                     posts = cluster.get("posts", [])[:15]
                     topic_display_name = cluster["name"]
                     import asyncio as _asyncio
-                    result = await _asyncio.get_running_loop().run_in_executor(
-                        None, cluster_and_summarize, posts, topic_display_name
-                    )
+                    result = await cluster_and_summarize(posts, topic_display_name)
                     result.pop("_filtered_posts", None)
                     link_posts = _extract_link_posts(posts)
                     expires_at = datetime.utcnow() + timedelta(minutes=30)
@@ -2023,8 +2021,7 @@ async def get_hotnews_summary(
 
     # Run blocking OpenAI call in thread pool to avoid blocking the async event loop
     import asyncio
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, cluster_and_summarize, posts, topic_display_name)
+    result = await cluster_and_summarize(posts, topic_display_name)
     result.pop("_filtered_posts", None)  # dùng nội bộ để viết bài, không hiển thị
     link_posts = _extract_link_posts(posts)  # posts đã qua embedding filter → đủ sạch
 
@@ -2343,7 +2340,7 @@ async def admin_delete_hot_topic(
 async def ai_status(current_user: str = Depends(get_current_admin_user)):
     """Check whether OpenAI is configured and reachable."""
     from src.processing.ai_topic_detector import check_openai_status
-    return check_openai_status()
+    return await check_openai_status()
 
 
 @app.post("/admin/ai/detect-hot-topics", tags=["AI"])
@@ -2378,7 +2375,7 @@ async def ai_detect_hot_topics(
     # Get existing slugs to avoid re-suggesting already tracked topics
     existing_slugs = [t["slug"] for t in db["hot_topics"].find({}, {"slug": 1, "_id": 0})]
 
-    suggestions = detect_new_hot_topics(
+    suggestions = await detect_new_hot_topics(
         posts,
         existing_slugs=existing_slugs,
         max_new_topics=max_topics,
@@ -2425,7 +2422,7 @@ async def ai_expand_keywords(
             raise HTTPException(status_code=404, detail="Hot topic not found")
 
     original_keywords = topic.get("keywords", [])
-    expanded = expand_keywords(topic["name"], original_keywords)
+    expanded = await expand_keywords(topic["name"], original_keywords)
 
     new_count = len(expanded) - len(original_keywords)
 
@@ -2496,7 +2493,7 @@ async def get_hot_topic_posts_ai(
         f"Keywords: {', '.join(keywords[:15])}"
     )
 
-    ranked = score_posts_by_embedding(candidates, query_text)
+    ranked = await score_posts_by_embedding(candidates, query_text)
     page = ranked[skip: skip + limit]
     ai_ranked = any("_ai_score" in p for p in page)
 
