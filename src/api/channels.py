@@ -629,7 +629,7 @@ async def get_channel_summary(
     channel_username: str,
     current_username: str = Depends(get_current_user),
 ):
-    """Lấy tóm tắt mới nhất của một kênh."""
+    """Lấy tóm tắt mới nhất của một kênh (trả về structured fields)."""
     db = get_db()
     users_col = db["users"]
     user_channels_col = db["user_channels"]
@@ -654,6 +654,156 @@ async def get_channel_summary(
         s.pop("_id", None)
 
     return {"channel_username": username, "summaries": summaries}
+
+
+# ---------------------------------------------------------------------------
+# Channel audio (TTS) endpoint — requires auth
+# ---------------------------------------------------------------------------
+
+@router.get("/{channel_username}/audio")
+async def get_channel_audio(
+    channel_username: str,
+    current_username: str = Depends(get_current_user),
+):
+    """Tạo (hoặc lấy cache) file MP3 TTS cho tóm tắt kênh chỉ định."""
+    import io, base64, re as _re
+    from datetime import timedelta
+    from fastapi.responses import StreamingResponse
+
+    db = get_db()
+    user_doc = db["users"].find_one({"username": current_username})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    username = _normalize_username(channel_username)
+
+    # Verify subscription
+    sub = db["user_channels"].find_one(
+        {"user_id": str(user_doc["_id"]), "channel_username": username}
+    )
+    if not sub:
+        raise HTTPException(status_code=403, detail="Bạn chưa đăng ký kênh này.")
+
+    now = datetime.utcnow()
+    audio_cache = db["channel_audio_cache"]
+    summaries_col = db["channel_summaries"]
+
+    # Get latest summary for this channel
+    summary_doc = summaries_col.find_one(
+        {"channel_username": username},
+        sort=[("date", -1)],
+    )
+    if not summary_doc:
+        raise HTTPException(status_code=404, detail="Chưa có tóm tắt. Hãy tạo tóm tắt AI trước.")
+
+    # Audio cache key tied to summary generated_at minute-bucket
+    gen_at = summary_doc.get("generated_at") or now
+    bucket = gen_at.strftime("%Y%m%d%H%M")
+    cache_key = f"ch_audio:{username}:{bucket}"
+
+    cached = audio_cache.find_one({"key": cache_key, "expires_at": {"$gt": now}})
+    if cached and cached.get("audio_b64"):
+        audio_bytes = base64.b64decode(cached["audio_b64"])
+        return StreamingResponse(
+            io.BytesIO(audio_bytes),
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "private, max-age=7200", "Content-Length": str(len(audio_bytes))},
+        )
+
+    # Build TTS text from structured summary
+    parts = []
+    if summary_doc.get("title"):
+        parts.append(summary_doc["title"])
+    if summary_doc.get("lead"):
+        parts.append(summary_doc["lead"])
+    for para in (summary_doc.get("body") or []):
+        parts.append(para)
+    if summary_doc.get("conclusion"):
+        parts.append(summary_doc["conclusion"])
+    if summary_doc.get("key_points"):
+        parts.append("Các điểm chính: " + ". ".join(summary_doc["key_points"]))
+    if not parts and summary_doc.get("summary_text"):
+        parts.append(summary_doc["summary_text"])
+
+    tts_text = ". ".join(p.strip().rstrip(".") for p in parts if p and p.strip())
+    if len(tts_text) > 7000:
+        tts_text = tts_text[:7000]
+
+    if not tts_text:
+        raise HTTPException(status_code=422, detail="Không có nội dung để tạo audio.")
+
+    # Generate TTS using edge-tts (same helper as hotnews audio)
+    try:
+        from src.api.main import _generate_tts_bytes
+        audio_bytes = await _generate_tts_bytes(tts_text)
+    except Exception as exc:
+        logger.error(f"TTS failed for channel={username}: {exc}")
+        raise HTTPException(status_code=503, detail=f"Không thể tạo audio: {exc}")
+
+    if not audio_bytes:
+        raise HTTPException(status_code=503, detail="edge-tts trả về dữ liệu trống.")
+
+    # Cache for 2h
+    audio_cache.update_one(
+        {"key": cache_key},
+        {"$set": {
+            "key": cache_key,
+            "channel_username": username,
+            "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
+            "created_at": now,
+            "expires_at": now + timedelta(hours=2),
+        }},
+        upsert=True,
+    )
+
+    return StreamingResponse(
+        io.BytesIO(audio_bytes),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "private, max-age=7200", "Content-Length": str(len(audio_bytes))},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-article TTS: POST /user/channels/tts
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel as _BaseModel
+
+class _TTSRequest(_BaseModel):
+    text: str
+
+@router.post("/tts")
+async def generate_article_tts(
+    body: _TTSRequest,
+    current_username: str = Depends(get_current_user),
+):
+    """Generate TTS audio for an arbitrary text snippet (e.g., per-article summary).
+    Requires authentication. Max 2000 chars.
+    """
+    import io
+    from fastapi.responses import StreamingResponse
+
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Không có nội dung.")
+    if len(text) > 2000:
+        text = text[:2000]
+
+    try:
+        from src.api.main import _generate_tts_bytes
+        audio_bytes = await _generate_tts_bytes(text)
+    except Exception as exc:
+        logger.error(f"TTS failed user={current_username}: {exc}")
+        raise HTTPException(status_code=503, detail=f"Không thể tạo audio: {exc}")
+
+    if not audio_bytes:
+        raise HTTPException(status_code=503, detail="edge-tts trả về dữ liệu trống.")
+
+    return StreamingResponse(
+        io.BytesIO(audio_bytes),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "Content-Length": str(len(audio_bytes))},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +857,8 @@ async def _run_summarize(channel_username: str) -> None:
                 logger.info(f"[Summarize] x:{real_username} summary saved ({total} posts)")
 
         else:
-            # Telegram: clean old posts then push to pending queue
+            # Telegram: clean old posts then generate summary from existing posts immediately,
+            # AND push to pending queue so worker re-fetches fresh posts in the background.
             cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
             deleted = db["posts"].delete_many({
                 "source": channel_username,
@@ -716,7 +867,20 @@ async def _run_summarize(channel_username: str) -> None:
             if deleted.deleted_count:
                 logger.info(f"Cleaned {deleted.deleted_count} old posts for @{channel_username}")
 
-            # Push channel back into the pending queue — worker will re-fetch + re-summarize
+            # Generate summary immediately from posts already in DB
+            total = db["posts"].count_documents({"source": channel_username})
+            if total > 0:
+                logger.info(f"[Summarize] Telegram @{channel_username}: generating from {total} existing posts")
+                summary = await _generate_summary(channel_username, db)
+                if summary:
+                    _save_summary(channel_username, summary, total, db)
+                    db["channels"].update_one(
+                        {"username": channel_username},
+                        {"$set": {"post_count": total, "status": "active"}},
+                    )
+                    logger.info(f"[Summarize] @{channel_username} summary saved ({total} posts)")
+
+            # Also push to pending queue so worker re-fetches latest posts
             db["pending_channels"].update_one(
                 {"channel_username": channel_username},
                 {"$set": {
@@ -727,7 +891,7 @@ async def _run_summarize(channel_username: str) -> None:
                 }},
                 upsert=True,
             )
-            logger.info(f"@{channel_username} re-queued for fresh fetch + summary (worker will process)")
+            logger.info(f"@{channel_username} also queued for fresh fetch (worker will update later)")
 
     except Exception as exc:
         logger.warning(f"Re-summarize failed for @{channel_username}: {exc}")

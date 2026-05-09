@@ -79,6 +79,23 @@ export async function fetchHotNewsSummary(slug, hours = 48, signal) {
 }
 
 /**
+ * Fetch TTS audio (MP3) for a hot-news cluster.
+ * Returns a Blob URL (revoke after use).
+ */
+export async function fetchHotNewsAudio(slug, hours = 48, signal) {
+  const res = await fetch(
+    `${API_BASE}/public/hotnews/${encodeURIComponent(slug)}/audio?hours=${hours}`,
+    { signal },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || 'Không thể tải audio');
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+/**
  * Fetch distinct ML-classified topic categories from posts that have external links.
  * Used to populate the topic filter chips on the articles tab.
  * @returns {{ topics: Array<{ name, slug, count, color }> }}

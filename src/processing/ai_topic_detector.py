@@ -272,6 +272,93 @@ def score_posts_by_embedding(
         return posts
 
 
+# ─── 3b. Embedding-based clustering (replaces unigram/bigram greedy) ─────────
+
+def embed_and_cluster_posts(
+    posts: list[dict],
+    max_clusters: int = 8,
+    min_cluster_size: int = 2,
+    similarity_threshold: float = 0.60,
+) -> list[list[dict]]:
+    """
+    Group posts into semantic clusters using OpenAI embeddings + DBSCAN.
+
+    Replaces the old unigram/bigram greedy approach. Handles cases like:
+      "Giá vàng SJC biến động" ↔ "Kim loại quý trong nước tăng phi mã"
+    which share no keywords but are semantically identical.
+
+    Algorithm:
+    1. Batch-embed all post texts in ONE API call (cheap).
+    2. Build cosine similarity matrix (numpy, O(n²)).
+    3. Run DBSCAN with metric='precomputed' on (1 - cosine) distance matrix.
+    4. Sort clusters by size (largest first), return top max_clusters.
+
+    Falls back to [] when OpenAI or numpy/sklearn unavailable.
+    """
+    client = _get_client()
+    if not client or not posts:
+        return []
+
+    try:
+        import numpy as np
+        from sklearn.cluster import DBSCAN
+        from src.config import OPENAI_EMBED_MODEL
+
+        # Use title+text for richer signal; cap at 512 tokens
+        def _post_text(p: dict) -> str:
+            fa = p.get("full_article") or {}
+            title = fa.get("title", "").strip()
+            text = (p.get("text") or "").strip()
+            return f"{title} {text}"[:512] if title else text[:512]
+
+        texts = [_post_text(p) for p in posts]
+
+        # Single batch embedding call
+        response = client.embeddings.create(
+            model=OPENAI_EMBED_MODEL,
+            input=texts,
+        )
+        embs = np.array([item.embedding for item in response.data], dtype=np.float32)
+
+        # Cosine similarity matrix → distance matrix
+        norms = np.linalg.norm(embs, axis=1, keepdims=True)
+        embs_norm = embs / (norms + 1e-9)
+        cosine_sim = embs_norm @ embs_norm.T
+        dist_matrix = np.clip(1.0 - cosine_sim, 0.0, 2.0).astype(np.float64)
+
+        # DBSCAN: eps = 1 - similarity_threshold (distance space)
+        eps = 1.0 - similarity_threshold
+        db = DBSCAN(eps=eps, min_samples=min_cluster_size, metric="precomputed")
+        labels = db.fit_predict(dist_matrix)
+
+        # Group posts by cluster label (-1 = noise/outlier → skip)
+        from collections import defaultdict
+        cluster_map: dict[int, list[dict]] = defaultdict(list)
+        for idx, label in enumerate(labels):
+            if label >= 0:
+                cluster_map[label].append(posts[idx])
+
+        if not cluster_map:
+            logger.info("embed_and_cluster_posts: DBSCAN found no clusters (eps=%.2f, n=%d)", eps, len(posts))
+            return []
+
+        # Sort by cluster size descending, return top max_clusters
+        sorted_clusters = sorted(cluster_map.values(), key=len, reverse=True)
+        result = sorted_clusters[:max_clusters]
+        logger.info(
+            "embed_and_cluster_posts: %d posts → %d clusters (sizes: %s)",
+            len(posts), len(result), [len(c) for c in result],
+        )
+        return result
+
+    except ImportError as e:
+        logger.warning("embed_and_cluster_posts unavailable (%s) – fallback to keyword clustering", e)
+        return []
+    except Exception as exc:
+        logger.exception("embed_and_cluster_posts failed: %s", exc)
+        return []
+
+
 # ─── 4. Quick health check ───────────────────────────────────────────────────
 
 def check_openai_status() -> dict[str, Any]:
@@ -373,7 +460,7 @@ def arbitrate_topic(
 
 _SUMMARISE_SYSTEM = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
 
-NHIỆM VỤ: Nhận danh sách bài báo có đánh số ID, chọn lọc và tổng hợp thành BÀI BÁO HOÀN CHỈNH về đúng 1 sự kiện cụ thể đang được nhắc đến nhiều nhất trong danh sách.
+NHIỆM VỤ: Nhận danh sách bài báo có đánh số ID, chọn lọc và tổng hợp thành BÀI BÁO HOÀN CHỈNH, ĐẦY ĐỦ CHI TIẾT về đúng 1 sự kiện cụ thể đang được nhắc đến nhiều nhất trong danh sách.
 
 QUY TẮC BẮT BUỘC:
 1. GOM NHÓM NGHIÊM NGẶT: Chỉ sử dụng các bài thực sự nói về CÙNG MỘT SỰ KIỆN CỤ THỂ. Bài nào lạc đề → bỏ qua hoàn toàn, KHÔNG được nhắc đến.
@@ -382,19 +469,29 @@ QUY TẮC BẮT BUỘC:
    ✅ Đúng: "Giá vàng SJC vượt 120 triệu đồng/lượng", "Nga phóng tên lửa đạn đạo vào Kyiv"
 3. BẰNG CHỨNG: Trong "used_ids", CHỈ liệt kê ID (chuỗi số) của các bài THỰC SỰ đóng góp nội dung vào bài viết này.
 4. KHÔNG bịa thêm sự kiện, số liệu, tên người ngoài dữ liệu được cung cấp.
-5. Câu văn rõ ràng, khách quan. Độ dài: lead ~2 câu, body 3-4 đoạn (mỗi đoạn 2-4 câu), conclusion 1-2 câu.
+5. Câu văn rõ ràng, khách quan, súc tích nhưng ĐẦY ĐỦ.
+   Độ dài bắt buộc:
+   - lead: 3-4 câu, nêu rõ WHO/WHAT/WHEN/WHERE
+   - body: 8-9 đoạn (mỗi đoạn 3-5 câu), bao quát toàn bộ diễn biến từ đầu đến cuối
+   - conclusion: 2-3 câu nhận định xu hướng và tác động
+   - key_points: 5-7 điểm nổi bật, ưu tiên số liệu cụ thể
 
 ĐỊNH DẠNG ĐẦU RA (Chỉ trả về JSON, không thêm văn bản nào khác):
 {
   "title": "Tiêu đề sự kiện cụ thể, sắc bén",
-  "lead": "Đoạn mở đầu 2-3 câu nêu bật sự kiện quan trọng nhất",
+  "lead": "3-4 câu mở đầu nêu rõ ai, cái gì, khi nào, ở đâu, và tại sao quan trọng.",
   "body": [
-    "Đoạn 1: bối cảnh và diễn biến chính",
-    "Đoạn 2: chi tiết, số liệu, trích dẫn quan trọng",
-    "Đoạn 3: các phản ứng hoặc diễn biến liên quan"
+    "Bối cảnh và nguyên nhân dẫn đến sự kiện (3-5 câu).",
+    "Diễn biến chính và các mốc thời gian quan trọng (3-5 câu).",
+    "Số liệu, thống kê và bằng chứng cụ thể được đề cập trong các bài (3-5 câu).",
+    "Trích dẫn phát biểu chính thức từ các bên liên quan (3-5 câu).",
+    "Phản ứng dư luận và tác động thực tế (3-5 câu).",
+    "So sánh với bối cảnh trước đây hoặc các diễn biến liên quan (3-5 câu).",
+    "Phân tích chuyên sâu hoặc nhận định từ chuyên gia (3-5 câu).",
+    "Tổng hợp toàn cảnh và những điểm quan trọng nhất của sự kiện (3-5 câu)."
   ],
-  "conclusion": "Nhận định xu hướng hoặc tóm lược ý nghĩa sự kiện",
-  "key_points": ["Điểm nổi bật 1", "Điểm nổi bật 2", "Điểm nổi bật 3"],
+  "conclusion": "2-3 câu nhận định xu hướng tiếp theo và ý nghĩa của sự kiện.",
+  "key_points": ["Điểm 1 (ưu tiên số liệu)", "Điểm 2", "Điểm 3", "Điểm 4", "Điểm 5"],
   "sentiment": "neutral|positive|negative|mixed",
   "used_ids": ["1", "3", "5"]
 }"""
@@ -430,10 +527,13 @@ def summarize_cluster(
         """Return the richest short text available for a post."""
         fa = p.get("full_article") or {}
         title = fa.get("title", "").strip()
+        body = fa.get("body") or fa.get("content", "")
         text = (p.get("text") or "").strip()
-        if title and text:
-            return f"{title} — {text[:300]}"
-        return (title or text)[:400]
+        # Prefer full_article body if available (richer source)
+        rich_text = (body[:600] if body else text[:600]).strip()
+        if title and rich_text:
+            return f"{title} — {rich_text}"
+        return (title or rich_text)[:700]
 
     excerpts = "\n---\n".join(
         f"[ID:{i+1}] {_post_excerpt(p)}" for i, p in enumerate(sample)
@@ -471,7 +571,7 @@ def summarize_cluster(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.2,
-            max_tokens=1600,
+            max_tokens=2500,
             response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content.strip()
@@ -520,45 +620,7 @@ def summarize_cluster(
         }
 
 
-# ─── 6b. Two-step Map-Reduce cluster+summarize ───────────────────────────────
-
-_MAP_EVENTS_SYSTEM = """Bạn là Tổng biên tập tin tức AI khắt khe.
-Tôi cung cấp danh sách mẩu tin ngắn, mỗi tin có số thứ tự [Bài X].
-
-NHIỆM VỤ:
-1. Đọc tất cả và TÌM RA các SỰ KIỆN KHÁC NHAU.
-2. Tách thành Hot News riêng biệt. TUYỆT ĐỐI KHÔNG GỘP tin không liên quan vào chung 1 tiêu đề.
-3. Tin rác, lẻ tẻ, không quan trọng → BỎ QUA.
-4. Tiêu đề phải CỤ THỂ:
-   ❌ "Tin tức kinh tế hôm nay"
-   ✅ "Giá vải chín sớm chạm mức 200.000 đồng/kg"
-
-Ví dụ đúng: 15 bài hỗn hợp → tách ra:
-  Event 1 "Giá vải chín sớm tăng 200.000đ" → related_ids: [0]
-  Event 2 "Vingroup lãi 5.610 tỷ Quý I" → related_ids: [4]
-  Event 3 "Băng cướp rửa tiền bằng lò nướng" → related_ids: [5, 12]
-  (các bài không liên quan → bỏ qua)
-
-Chỉ trả về JSON hợp lệ:
-{
-  "events": [
-    {
-      "title": "Tiêu đề sự kiện cụ thể",
-      "key_points": ["Ý nổi bật 1", "Ý nổi bật 2"],
-      "related_ids": [0, 3]
-    }
-  ]
-}"""
-
-
-def _word_overlap(a: str, b: str) -> float:
-    """Simple word-overlap ratio between two strings (case-insensitive)."""
-    a_words = set(a.lower().split())
-    b_words = set(b.lower().split())
-    if not a_words or not b_words:
-        return 0.0
-    return len(a_words & b_words) / min(len(a_words), len(b_words))
-
+# ─── 6b. cluster_and_summarize (direct summarize — MAP step removed) ─────────
 
 def cluster_and_summarize(
     posts: list[dict],
@@ -566,16 +628,14 @@ def cluster_and_summarize(
     max_posts: int = 15,
 ) -> dict:
     """
-    Two-step Map-Reduce pipeline that eliminates "lazy evaluation" / off-topic posts.
+    Summarise a cluster of posts that are ALREADY semantically grouped
+    (by DBSCAN embedding clustering in discover_hot_events).
 
-    Step 1 – MAP: Send all posts as [Bài X] text → GPT identifies separate events
-    and returns related_ids per event.  Pick the event matching topic_name.
+    The old Map-Reduce MAP step (GPT re-splitting posts into sub-events) has
+    been removed because it was redundant: posts arriving here have already
+    been clustered by cosine similarity, so they belong to the same event.
 
-    Step 2 – REDUCE: Pass only that event's posts to summarize_cluster → full article.
-
-    Returns the same dict shape as summarize_cluster, plus '_filtered_posts' (the
-    posts that belong to the chosen event) for the caller to use for link_posts /
-    post_count.
+    Calls summarize_cluster() directly → one GPT call, faster, cheaper.
     """
     if not posts:
         return {
@@ -584,78 +644,16 @@ def cluster_and_summarize(
             "_filtered_posts": [],
         }
 
-    client = _get_client()
     sample = posts[:max_posts]
-
-    def _post_text(p: dict) -> str:
-        fa = p.get("full_article") or {}
-        title = fa.get("title", "").strip()
-        text = (p.get("text") or "").strip()
-        if title and text:
-            return f"{title} — {text[:250]}"
-        return (title or text)[:300]
-
-    formatted = "\n".join(
-        f"[Bài {i}]: {_post_text(p)}" for i, p in enumerate(sample)
-    )
-
-    best_posts = sample  # fallback — use all if MAP step fails
-
-    if client:
-        try:
-            from src.config import OPENAI_MODEL
-            user_msg = (
-                f'Chủ đề gợi ý: "{topic_name}"\n\n'
-                f"Danh sách {len(sample)} mẩu tin:\n\n{formatted}\n\n"
-                "Hãy tách thành các sự kiện riêng biệt và trả về JSON."
-            )
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": _MAP_EVENTS_SYSTEM},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.1,
-                max_tokens=900,
-                response_format={"type": "json_object"},
-            )
-            raw = resp.choices[0].message.content.strip()
-            parsed = json.loads(raw)
-            events = parsed.get("events", []) if isinstance(parsed, dict) else []
-
-            if events:
-                # Pick event whose title best matches topic_name; tie-break by most related_ids
-                best_event = max(
-                    events,
-                    key=lambda e: (
-                        _word_overlap(e.get("title", ""), topic_name),
-                        len(e.get("related_ids", [])),
-                    ),
-                )
-                raw_ids = best_event.get("related_ids", [])
-                valid_ids = [int(i) for i in raw_ids
-                             if str(i).lstrip("-").isdigit() and 0 <= int(i) < len(sample)]
-                if valid_ids:
-                    best_posts = [sample[i] for i in valid_ids]
-                    logger.info(
-                        "cluster_and_summarize MAP: %d events → best=%r (%d/%d posts)",
-                        len(events), best_event.get("title", "")[:50],
-                        len(best_posts), len(sample),
-                    )
-        except Exception as exc:
-            logger.exception("cluster_and_summarize MAP step failed: %s", exc)
-            best_posts = sample  # fallback
-
-    # Step 2: full article generation on focused post set
-    result = summarize_cluster(best_posts, topic_name=topic_name, max_posts=len(best_posts))
-    result.pop("_used_posts", None)          # already consumed inside summarize_cluster
-    result["_filtered_posts"] = best_posts   # expose for caller to build link_posts
+    result = summarize_cluster(sample, topic_name=topic_name, max_posts=len(sample))
+    result.pop("_used_posts", None)
+    result["_filtered_posts"] = sample
     return result
 
 
 # ─── 7. Filter posts to only those genuinely relevant to a topic ─────────────
 
-_RELEVANCE_THRESHOLD = 0.42  # cosine similarity cut-off (raised from 0.32 to avoid ambiguous-word false positives)
+_RELEVANCE_THRESHOLD = 0.50  # cosine similarity cut-off (raised to 0.50 for stricter relevance filtering)
 
 
 def filter_relevant_posts(
@@ -732,165 +730,105 @@ def discover_hot_events(
     max_events: int = 6,
 ) -> list[dict]:
     """
-    Keyword-frequency clustering → GPT naming.
+    Embedding-based clustering → GPT naming (replaces old unigram/bigram greedy).
 
     Algorithm:
-    1. Extract all significant words/bigrams from recent posts.
-    2. Rank by term frequency → top trending keywords.
-    3. Cluster posts that share top keywords (posts mentioning the same
-       high-freq terms belong together).
-    4. Feed cluster representatives to GPT to get a *specific* event name
-       (e.g. "Giá vàng SJC vượt 120 triệu" instead of just "Kinh tế").
+    1. PRIMARY: embed_and_cluster_posts() — batch embed all posts, run DBSCAN
+       on cosine distance matrix.  Handles semantic equivalents like
+       "Giá vàng SJC" ↔ "Kim loại quý trong nước" which share no keywords.
+    2. FALLBACK: if embedding unavailable → keyword-frequency greedy clustering.
+    3. GPT names each cluster as a specific real-world event in ONE call.
 
     Falls back to empty list when OpenAI is unavailable.
     """
     import re
-    from collections import Counter, defaultdict
+    from collections import Counter
 
     if not posts:
         return []
 
-    # ── Stopwords (Vietnamese + English common words) ─────────────────────────
-    STOPWORDS = {
-        "và", "của", "có", "được", "trong", "cho", "từ", "này", "đã", "là",
-        "với", "các", "một", "những", "về", "để", "đến", "trên", "theo",
-        "như", "khi", "tại", "sau", "vào", "hay", "cũng", "đây", "còn",
-        "rằng", "bởi", "nên", "hơn", "đó", "mà", "thì", "không", "sẽ",
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to",
-        "for", "of", "with", "by", "from", "is", "was", "are", "were",
-        "be", "has", "have", "had", "that", "this", "it", "he", "she",
-        "they", "we", "you", "i", "his", "her", "its", "our", "their",
-        "said", "say", "says", "also", "will", "can", "not", "as", "up",
-    }
-
-    def _tokenize(text: str) -> list[str]:
-        if not text:
-            return []
-        text = text.lower()
-        tokens = re.findall(
-            r"[a-zA-Z0-9"
-            r"àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩị"
-            r"òóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+",
-            text,
-        )
-        return [t for t in tokens if len(t) >= 3 and t not in STOPWORDS]
-
-    # ── Step 1: count unigrams + bigrams across all posts ─────────────────────
-    unigram_counter: Counter = Counter()
-    bigram_counter: Counter = Counter()
-    post_tokens: list[list[str]] = []
-
-    for p in posts:
-        toks = _tokenize(p.get("text", ""))
-        post_tokens.append(toks)
-        unigram_counter.update(toks)
-        bigrams = [f"{toks[i]} {toks[i+1]}" for i in range(len(toks) - 1)]
-        bigram_counter.update(bigrams)
-
-    # Top keywords: prefer bigrams (more specific) then fill with unigrams
-    n = len(posts)
-    # Remove bigrams where either word appears in >70% posts (too generic)
-    freq_bigrams = [
-        (bg, cnt) for bg, cnt in bigram_counter.most_common(60)
-        if cnt >= 3 and cnt / n < 0.7
-    ]
-    freq_unigrams = [
-        (w, cnt) for w, cnt in unigram_counter.most_common(60)
-        if cnt >= 3 and cnt / n < 0.7
-        and not any(w in bg for bg, _ in freq_bigrams[:20])
-    ]
-
-    # Merge into a single ranked keyword list (bigrams weighted x1.5)
-    scored: list[tuple[str, float]] = (
-        [(bg, cnt * 1.5) for bg, cnt in freq_bigrams[:20]]
-        + [(w, float(cnt)) for w, cnt in freq_unigrams[:20]]
+    # ── PRIMARY: embedding-based DBSCAN clustering ────────────────────────────
+    embed_clusters = embed_and_cluster_posts(
+        posts, max_clusters=max_events + 2, min_cluster_size=2, similarity_threshold=0.62
     )
-    scored.sort(key=lambda x: -x[1])
-    top_keywords = [kw for kw, _ in scored[:25]]
 
-    if not top_keywords:
-        return []
+    if embed_clusters:
+        clusters_raw = [{"posts": cl, "keywords": []} for cl in embed_clusters]
+        logger.info("discover_hot_events: using embedding clusters (%d)", len(clusters_raw))
+    else:
+        # ── FALLBACK: keyword-frequency greedy clustering ─────────────────────
+        logger.info("discover_hot_events: embedding unavailable, falling back to keyword clustering")
 
-    # ── Step 1b: GPT filter – keep only newsworthy keywords ──────────────────
-    # Remove generic/meaningless terms that passed the stopword filter but
-    # still have no news value (e.g. "tháng", "năm", "ngày", "1000", "mới").
-    client = _get_client()
-    if client:
-        try:
-            from src.config import OPENAI_MODEL
-            filter_prompt = (
-                "Bạn là biên tập viên tin tức. Từ danh sách từ khóa dưới đây, "
-                "hãy GIỮ LẠI chỉ những từ khóa có GIÁ TRỊ TIN TỨC (tên người, "
-                "địa điểm, tổ chức, sự kiện cụ thể, chỉ số giá cả, tên sản phẩm, v.v.).\n"
-                "LOẠI BỎ những từ quá chung chung hoặc không mang thông tin: "
-                "số tròn, đơn vị thời gian, tính từ mơ hồ, từ mô tả hành động chung.\n"
-                "Trả về JSON: {\"keywords\": [\"...\"]}\n\n"
-                f"Danh sách: {json.dumps(top_keywords, ensure_ascii=False)}"
+        STOPWORDS = {
+            "và", "của", "có", "được", "trong", "cho", "từ", "này", "đã", "là",
+            "với", "các", "một", "những", "về", "để", "đến", "trên", "theo",
+            "như", "khi", "tại", "sau", "vào", "hay", "cũng", "đây", "còn",
+            "rằng", "bởi", "nên", "hơn", "đó", "mà", "thì", "không", "sẽ",
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to",
+            "for", "of", "with", "by", "from", "is", "was", "are", "were",
+            "be", "has", "have", "had", "that", "this", "it", "he", "she",
+            "they", "we", "you", "i", "his", "her", "its", "our", "their",
+            "said", "say", "says", "also", "will", "can", "not", "as", "up",
+        }
+
+        def _tokenize(text: str) -> list[str]:
+            if not text:
+                return []
+            tokens = re.findall(
+                r"[a-zA-Z0-9"
+                r"àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩị"
+                r"òóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+",
+                text.lower(),
             )
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "Chỉ trả về JSON hợp lệ."},
-                    {"role": "user", "content": filter_prompt},
-                ],
-                temperature=0.0,
-                max_tokens=300,
-                response_format={"type": "json_object"},
-            )
-            parsed_kw = json.loads(resp.choices[0].message.content.strip())
-            filtered_kws = parsed_kw.get("keywords", [])
-            if isinstance(filtered_kws, list) and len(filtered_kws) >= 3:
-                top_keywords = [kw for kw in top_keywords if kw in filtered_kws]
-                logger.info("GPT keyword filter: %d → %d keywords", len(scored), len(top_keywords))
-        except Exception as exc:
-            logger.warning("GPT keyword filter skipped: %s", exc)
+            return [t for t in tokens if len(t) >= 3 and t not in STOPWORDS]
 
-    if not top_keywords:
-        return []
+        unigram_counter: Counter = Counter()
+        bigram_counter: Counter = Counter()
+        post_tokens: list[list[str]] = []
 
-    # ── Step 2: assign each post a set of matched top-keywords ───────────────
-    post_keyword_sets: list[set[str]] = []
-    for toks in post_tokens:
-        tok_set = set(toks)
-        # check unigrams
-        matched = {kw for kw in top_keywords if " " not in kw and kw in tok_set}
-        # check bigrams
-        text_joined = " ".join(toks)
-        matched |= {kw for kw in top_keywords if " " in kw and kw in text_joined}
-        post_keyword_sets.append(matched)
+        for p in posts:
+            toks = _tokenize(p.get("text", ""))
+            post_tokens.append(toks)
+            unigram_counter.update(toks)
+            bigrams = [f"{toks[i]} {toks[i+1]}" for i in range(len(toks) - 1)]
+            bigram_counter.update(bigrams)
 
-    # ── Step 3: greedy clustering by shared top-keywords ─────────────────────
-    # Each cluster is seeded by the most frequent keyword; posts sharing ≥1
-    # keyword with the cluster's seed join it.
-    clusters_raw: list[dict] = []
-    used_posts: set[int] = set()
+        n = len(posts)
+        freq_bigrams = [(bg, cnt) for bg, cnt in bigram_counter.most_common(60) if cnt >= 3 and cnt / n < 0.7]
+        freq_unigrams = [(w, cnt) for w, cnt in unigram_counter.most_common(60) if cnt >= 3 and cnt / n < 0.7 and not any(w in bg for bg, _ in freq_bigrams[:20])]
+        kw_scored = sorted([(bg, cnt * 1.5) for bg, cnt in freq_bigrams[:20]] + [(w, float(cnt)) for w, cnt in freq_unigrams[:20]], key=lambda x: -x[1])
+        top_keywords = [kw for kw, _ in kw_scored[:25]]
 
-    for seed_kw in top_keywords[:15]:
-        members = [
-            i for i, kws in enumerate(post_keyword_sets)
-            if seed_kw in kws and i not in used_posts
-        ]
-        if len(members) < 3:
-            continue
-        for i in members:
-            used_posts.add(i)
-        cluster_posts = [posts[i] for i in members]
-        # Top 5 shared keywords for this cluster
-        combined_kws: Counter = Counter()
-        for i in members:
-            combined_kws.update(post_keyword_sets[i])
-        top_cluster_kws = [kw for kw, _ in combined_kws.most_common(5)]
-        clusters_raw.append({
-            "posts": cluster_posts,
-            "keywords": top_cluster_kws,
-        })
-        if len(clusters_raw) >= max_events + 2:
-            break
+        if not top_keywords:
+            return []
 
-    if not clusters_raw:
-        return []
+        post_keyword_sets: list[set[str]] = []
+        for toks in post_tokens:
+            tok_set = set(toks)
+            matched = {kw for kw in top_keywords if " " not in kw and kw in tok_set}
+            text_joined = " ".join(toks)
+            matched |= {kw for kw in top_keywords if " " in kw and kw in text_joined}
+            post_keyword_sets.append(matched)
 
-    # ── Step 4: GPT names each cluster as a specific real-world event ─────────
+        clusters_raw = []
+        used_indices: set[int] = set()
+        for seed_kw in top_keywords[:15]:
+            members = [i for i, kws in enumerate(post_keyword_sets) if seed_kw in kws and i not in used_indices]
+            if len(members) < 2:
+                continue
+            for i in members:
+                used_indices.add(i)
+            combined_kws: Counter = Counter()
+            for i in members:
+                combined_kws.update(post_keyword_sets[i])
+            clusters_raw.append({"posts": [posts[i] for i in members], "keywords": [kw for kw, _ in combined_kws.most_common(5)]})
+            if len(clusters_raw) >= max_events + 2:
+                break
+
+        if not clusters_raw:
+            return []
+
+    # ── GPT names each cluster as a specific real-world event (1 call) ────────
     client = _get_client()
     if not client:
         # Fallback: use top keyword as name

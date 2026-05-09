@@ -1,8 +1,11 @@
 from __future__ import annotations
 import re
+import io
+import base64
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, Depends, Security, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 from datetime import datetime, timedelta
@@ -1533,7 +1536,7 @@ async def get_public_hotnews(
     4. Apply AI embedding filter to keep only genuinely on-topic posts.
     5. Cache full result for 2 hours per (hours, bucket).
     """
-    from src.processing.ai_topic_detector import filter_relevant_posts, discover_hot_events
+    from src.processing.ai_topic_detector import filter_relevant_posts, discover_hot_events, cluster_and_summarize
 
     db = get_db()
     posts_coll = db["posts"]
@@ -1654,19 +1657,22 @@ async def get_public_hotnews(
 
     clusters: list[dict] = []
 
-    # ── Step 2: keyword-frequency clustering (PRIMARY) ────────────────────────
-    # Strategy: for 48h/72h, REUSE the existing 24h cache as the base so that
-    # 48h always contains exactly the same clusters as 24h.
-    # Only compute NEW events from posts older than 24h.
+    # ── Step 2: embedding-based clustering (PRIMARY) ─────────────────────────
+    # DBSCAN on cosine distance. filter_relevant_posts is NOT called here
+    # because embed_and_cluster_posts already groups semantically similar posts.
+    # Summary is pre-computed here so user endpoint returns instantly from cache.
+
+    import re as _re
+    from src.processing.ai_topic_detector import cluster_and_summarize as _cas
 
     def _build_cluster(ev: dict) -> dict | None:
         ev_posts = ev.get("posts", [])
         if len(ev_posts) < 2:
             return None
-        filtered = filter_relevant_posts(ev_posts, topic_name=ev["name"], top_k=15)
-        if not filtered:
-            filtered = ev_posts[:10]
-        filtered = sorted(filtered, key=lambda p: (not bool(p.get("links")), 0))
+        # Posts from embed_and_cluster_posts are already semantically grouped —
+        # no need for a second filter_relevant_posts pass.
+        filtered = sorted(ev_posts, key=lambda p: (not bool(p.get("links")), 0))
+        filtered = filtered[:15]
         latest = max(
             (p.get("created_at") for p in filtered if p.get("created_at")),
             default=None,
@@ -1676,8 +1682,9 @@ async def get_public_hotnews(
             (filtered[0].get("full_article") or {}).get("title")
             or (filtered[0].get("text") or "")[:120]
         )
-        return {
-            "slug": _ml_topic_slug(ev["name"]),
+        cl_slug = _ml_topic_slug(ev["name"])
+        cluster = {
+            "slug": cl_slug,
             "name": ev["name"],
             "description": ev.get("description", ""),
             "color": ev.get("color", "#be123c"),
@@ -1688,9 +1695,58 @@ async def get_public_hotnews(
             )]),
             "latest_at": latest_str,
             "headline": headline,
-            "posts": filtered[:15],
-            "source": "keyword_trend",
+            "posts": filtered,
+            "source": "embedding_cluster",
         }
+
+        # ── Pre-compute summary & store in hotnews_summary_cache ──────────────
+        # User endpoint will find this immediately → 0 wait time.
+        try:
+            summary_coll = db["hotnews_summary_cache"]
+            summary_cache_key = f"{cl_slug}:48:v2"
+            existing = summary_coll.find_one(
+                {"key": summary_cache_key, "expires_at": {"$gt": now}},
+                {"_id": 0, "title": 1},
+            )
+            if not existing:
+                result = _cas(filtered, topic_name=ev["name"])
+                result.pop("_filtered_posts", None)
+                link_posts = []
+                for p in filtered:
+                    links = p.get("links") or []
+                    fa = p.get("full_article") or {}
+                    url = next((l for l in links if l.startswith("http") and "t.me" not in l), None)
+                    if not url:
+                        fa_url = fa.get("url", "")
+                        if fa_url and fa_url.startswith("http") and "t.me" not in fa_url:
+                            url = fa_url
+                    link_posts.append({
+                        "title": fa.get("title") or (p.get("text") or "")[:120],
+                        "url": url,
+                        "source": p.get("source") or p.get("channel_username") or "",
+                        "snippet": (p.get("text") or "")[:200],
+                    })
+                expires_at_summary = now + timedelta(minutes=30)
+                summary_coll.update_one(
+                    {"key": summary_cache_key},
+                    {"$set": {
+                        **result,
+                        "key": summary_cache_key,
+                        "post_count": len(filtered),
+                        "link_posts": link_posts,
+                        "expires_at": expires_at_summary,
+                    }},
+                    upsert=True,
+                )
+                db["hotnews_audio_cache"].delete_many(
+                    {"key": _re.compile(f"^audio:{_re.escape(cl_slug)}")}
+                )
+                logger.info("_build_cluster: pre-computed summary for slug=%s", cl_slug)
+        except Exception as exc:
+            logger.warning("_build_cluster: summary pre-compute failed for %s: %s", cl_slug, exc)
+
+        return cluster
+
 
     if hours > 24:
         # ── Try to reuse 24h cached clusters directly ─────────────────────────
@@ -1875,7 +1931,7 @@ async def get_hotnews_summary(
 
     Results are cached for 30 minutes.
     """
-    from src.processing.ai_topic_detector import cluster_and_summarize
+    from src.processing.ai_topic_detector import cluster_and_summarize  # noqa: F811 (also imported in refresh path)
 
     db = get_db()
     cache_coll = db["hotnews_summary_cache"]
@@ -1937,7 +1993,6 @@ async def get_hotnews_summary(
     proj = {"_id": 0, "text": 1, "full_article": 1, "source": 1, "links": 1, "created_at": 1}
 
     # ── Try ML-velocity slug first: reverse-map slug → ML topic name ──────────
-    # Build slug for every known ML topic name and check for a match
     ml_topic_name = next(
         (name for name in _ML_TOPIC_COLORS if _ml_topic_slug(name) == slug),
         None,
@@ -1960,10 +2015,8 @@ async def get_hotnews_summary(
         if not topic_doc:
             topic_doc = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == slug), None)
 
-        # Also check hotnews_v2_cache for keyword-trend or AI-discovered events
+        # Check hotnews_v2_cache for embedding-clustered or keyword-trend events
         if not topic_doc:
-            # Search any recent hotnews cache entry containing this slug
-            # (avoids brittle bucket-key reconstruction which can mismatch)
             cutoff = datetime.utcnow() - timedelta(hours=max(hours, 6))
             hn_cached = db["hotnews_v2_cache"].find_one(
                 {"clusters.slug": slug, "created_at": {"$gte": cutoff}},
@@ -1972,23 +2025,19 @@ async def get_hotnews_summary(
             if hn_cached:
                 cluster = next((c for c in (hn_cached.get("clusters") or []) if c["slug"] == slug), None)
                 if cluster:
-                    raw_posts = cluster.get("posts", [])
+                    # Summary was pre-computed in _build_cluster → should already be in cache.
+                    # If for some reason it's missing, compute it now (once) and cache it.
+                    posts = cluster.get("posts", [])[:15]
                     topic_display_name = cluster["name"]
-                    # Posts in the cluster are already filtered by filter_relevant_posts
-                    # (top_k=15) during cluster build. Apply a stricter pass here so
-                    # that ambiguous-keyword false positives (e.g. "vải" = fabric vs lychee)
-                    # are removed before sending to GPT and being shown as sources.
-                    from src.processing.ai_topic_detector import filter_relevant_posts as _strict_filter
-                    relevant_posts = _strict_filter(raw_posts, topic_name=topic_display_name, top_k=15, threshold=0.42)
-                    posts = relevant_posts if len(relevant_posts) >= 1 else raw_posts[:5]
                     import asyncio as _asyncio
                     result = await _asyncio.get_running_loop().run_in_executor(
                         None, cluster_and_summarize, posts, topic_display_name
                     )
-                    result.pop("_filtered_posts", None)  # MAP output used internally for article quality only
-                    link_posts = _extract_link_posts(posts)  # show all input posts as sources
+                    result.pop("_filtered_posts", None)
+                    link_posts = _extract_link_posts(posts)
                     expires_at = datetime.utcnow() + timedelta(minutes=30)
                     cache_coll.update_one({"key": cache_key}, {"$set": {**result, "key": cache_key, "post_count": len(posts), "link_posts": link_posts, "expires_at": expires_at}}, upsert=True)
+                    db["hotnews_audio_cache"].delete_many({"key": re.compile(f"^audio:{re.escape(slug)}")})
                     return {"slug": slug, **result, "cached": False, "post_count": len(posts), "link_posts": link_posts}
 
         if not topic_doc:
@@ -2010,20 +2059,12 @@ async def get_hotnews_summary(
     if not posts:
         return {"slug": slug, "title": "", "lead": "", "body": [], "conclusion": "", "key_points": [], "sentiment": "neutral", "post_count": 0, "link_posts": []}
 
-    # Re-filter to keep only posts genuinely relevant to this specific topic/slug
-    # Use stricter threshold=0.42 to avoid ambiguous-keyword false positives
-    from src.processing.ai_topic_detector import filter_relevant_posts as _filter_rel
-    filtered = _filter_rel(posts, topic_name=topic_display_name, top_k=15, threshold=0.42)
-    if filtered:
-        posts = filtered
-
     # Run blocking OpenAI call in thread pool to avoid blocking the async event loop
     import asyncio
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, cluster_and_summarize, posts, topic_display_name)
-    result.pop("_filtered_posts", None)  # MAP output used internally for article quality only
-
-    link_posts = _extract_link_posts(posts)  # show all input posts as sources
+    result.pop("_filtered_posts", None)  # dùng nội bộ để viết bài, không hiển thị
+    link_posts = _extract_link_posts(posts)  # posts đã qua embedding filter → đủ sạch
 
     # Cache result
     expires_at = datetime.utcnow() + timedelta(minutes=30)
@@ -2044,6 +2085,8 @@ async def get_hotnews_summary(
         }},
         upsert=True,
     )
+    # Xóa audio cache cũ khi summary mới được tạo (để audio được re-generate với nội dung mới)
+    db["hotnews_audio_cache"].delete_many({"key": re.compile(f"^audio:{re.escape(slug)}")})  # xóa TẤT CẢ audio cache của slug này
 
     return {
         "slug": slug,
@@ -2061,18 +2104,176 @@ async def get_hotnews_summary(
 
 
 # =============================================================================
+# TTS – Audio endpoint
+# =============================================================================
+
+async def _generate_tts_bytes(text: str) -> bytes:
+    """Dùng edge-tts tạo file MP3 từ văn bản, voice tiếng Việt HoaiMy."""
+    try:
+        import edge_tts
+    except ImportError:
+        raise RuntimeError("edge-tts chưa được cài. Chạy: pip install edge-tts")
+
+    communicate = edge_tts.Communicate(text, voice="vi-VN-HoaiMyNeural")
+    buf = io.BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            buf.write(chunk["data"])
+    buf.seek(0)
+    return buf.read()
+
+
+@app.get("/public/hotnews/{slug}/audio", tags=["Public"])
+@limiter.limit("10/minute")
+async def get_hotnews_audio(
+    request: Request,
+    slug: str,
+    hours: int = Query(48, ge=1, le=168),
+):
+    """
+    Trả về file MP3 (TTS) tóm tắt tin nóng cho slug chỉ định.
+    Dùng Microsoft Edge TTS (edge-tts), voice vi-VN-HoaiMyNeural.
+    Kết quả được cache trong MongoDB collection hotnews_audio_cache (TTL 2h).
+    """
+    db = get_db()
+    audio_cache = db["hotnews_audio_cache"]
+    summary_cache = db["hotnews_summary_cache"]
+
+    now = datetime.utcnow()
+
+    # ── Tìm summary trước để lấy nội dung VÀ làm cache key ───────────────────
+    # cache key gắn theo expires_at của summary → audio tự invalidate khi summary mới
+    summary_doc = summary_cache.find_one(
+        {"key": re.compile(f"^{re.escape(slug)}:\\d+:v2$"), "expires_at": {"$gt": now}},
+        sort=[("expires_at", -1)],
+    )
+
+    if summary_doc and summary_doc.get("title"):
+        # Dùng minute-bucket của expires_at làm phần cache key
+        summary_bucket = (
+            summary_doc["expires_at"].strftime("%Y%m%d%H%M")
+            if summary_doc.get("expires_at")
+            else "x"
+        )
+        cache_key = f"audio:{slug}:{summary_bucket}"
+
+        # ── Check audio cache với key gắn theo summary ────────────────────────
+        cached = audio_cache.find_one({"key": cache_key, "expires_at": {"$gt": now}})
+        if cached and cached.get("audio_b64"):
+            audio_bytes = base64.b64decode(cached["audio_b64"])
+            return StreamingResponse(
+                io.BytesIO(audio_bytes),
+                media_type="audio/mpeg",
+                headers={"Cache-Control": "public, max-age=7200", "Content-Length": str(len(audio_bytes))},
+            )
+
+        title = summary_doc.get("title", "")
+        lead = summary_doc.get("lead", "")
+        body_paras = summary_doc.get("body") or []
+        conclusion = summary_doc.get("conclusion", "")
+        key_points = summary_doc.get("key_points") or []
+
+        parts = []
+        if title:
+            parts.append(title)
+        if lead:
+            parts.append(lead)
+        if body_paras:
+            parts.extend(body_paras)
+        if conclusion:
+            parts.append(conclusion)
+        if key_points:
+            parts.append("Các điểm chính: " + ". ".join(key_points))
+        tts_text = ". ".join(p.strip().rstrip(".") for p in parts if p and p.strip())
+    else:
+        # ── Fallback: lấy headline từ hotnews_v2_cache nếu chưa có summary ──
+        cache_key = f"audio:{slug}:fallback"
+        cached = audio_cache.find_one({"key": cache_key, "expires_at": {"$gt": now}})
+        if cached and cached.get("audio_b64"):
+            audio_bytes = base64.b64decode(cached["audio_b64"])
+            return StreamingResponse(
+                io.BytesIO(audio_bytes),
+                media_type="audio/mpeg",
+                headers={"Cache-Control": "public, max-age=7200", "Content-Length": str(len(audio_bytes))},
+            )
+
+        cutoff = now - timedelta(hours=max(hours, 6))
+        hn_doc = db["hotnews_v2_cache"].find_one(
+            {"clusters.slug": slug, "created_at": {"$gte": cutoff}},
+            sort=[("created_at", -1)],
+        )
+        cluster_doc = None
+        if hn_doc:
+            cluster_doc = next(
+                (c for c in (hn_doc.get("clusters") or []) if c.get("slug") == slug),
+                None,
+            )
+        if not cluster_doc:
+            raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu cho chủ đề này. Hãy xem tóm tắt AI trước.")
+        tts_text = cluster_doc.get("name", slug) + ". " + (cluster_doc.get("headline") or "")
+
+    # Giới hạn độ dài (edge-tts xử lý ổn đến ~7000 chars)
+    if len(tts_text) > 7000:
+        tts_text = tts_text[:7000]
+
+    # ── Generate TTS ──────────────────────────────────────────────────────────
+    try:
+        audio_bytes = await _generate_tts_bytes(tts_text)
+    except Exception as exc:
+        logger.error(f"TTS generation failed for slug={slug}: {exc}")
+        raise HTTPException(status_code=503, detail=f"Không thể tạo audio: {exc}")
+
+    if not audio_bytes:
+        raise HTTPException(status_code=503, detail="edge-tts trả về dữ liệu trống.")
+
+    # ── Lưu cache (TTL 2h) ───────────────────────────────────────────────────
+    expires_at = now + timedelta(hours=2)
+    audio_cache.update_one(
+        {"key": cache_key},
+        {"$set": {
+            "key": cache_key,
+            "slug": slug,
+            "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
+            "created_at": now,
+            "expires_at": expires_at,
+        }},
+        upsert=True,
+    )
+
+    return StreamingResponse(
+        io.BytesIO(audio_bytes),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=7200", "Content-Length": str(len(audio_bytes))},
+    )
+
+
+# =============================================================================
 # Admin: Hot Topics Management
 # =============================================================================
 
 @app.delete("/admin/hotnews-cache", tags=["Admin"])
 async def clear_hotnews_cache(current_user: str = Depends(get_current_admin_user)):
-    """Force-clear hotnews_v2_cache + hotnews_summary_cache so all windows recompute fresh."""
+    """Force-clear hotnews_v2_cache + hotnews_summary_cache + hotnews_audio_cache so all windows recompute fresh."""
     global _hotnews_mem
     _hotnews_mem.clear()
     db = get_db()
     r1 = db["hotnews_v2_cache"].delete_many({})
     r2 = db["hotnews_summary_cache"].delete_many({})
-    return {"deleted_clusters": r1.deleted_count, "deleted_summaries": r2.deleted_count, "message": "Both caches cleared. Next request will recompute."}
+    r3 = db["hotnews_audio_cache"].delete_many({})
+    return {
+        "deleted_clusters": r1.deleted_count,
+        "deleted_summaries": r2.deleted_count,
+        "deleted_audio": r3.deleted_count,
+        "message": "All caches cleared. Next request will recompute.",
+    }
+
+
+@app.delete("/admin/hotnews-audio-cache/{slug}", tags=["Admin"])
+async def clear_audio_cache_for_slug(slug: str, current_user: str = Depends(get_current_admin_user)):
+    """Xóa audio cache của một slug cụ thể (để force re-generate với nội dung mới nhất)."""
+    db = get_db()
+    r = db["hotnews_audio_cache"].delete_many({"key": re.compile(f"^audio:{re.escape(slug)}")})
+    return {"deleted": r.deleted_count, "slug": slug, "message": f"Đã xóa {r.deleted_count} audio cache entries cho '{slug}'."}
 
 
 @app.post("/admin/hot-topics/seed", tags=["Admin"])

@@ -61,7 +61,7 @@ def _build_client():
 
 
 FETCH_DAYS = int(os.getenv("TELEGRAM_FETCH_DAYS", "7"))   # only fetch posts from last N days
-SUMMARY_DAYS = int(os.getenv("SUMMARY_DAYS", "7"))         # window (days) for AI summary generation — independent of FETCH_DAYS
+SUMMARY_DAYS = int(os.getenv("SUMMARY_DAYS", "1"))         # window (days) for AI summary — 24h by default for freshness
 
 
 async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -> int:
@@ -172,101 +172,300 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
 # AI Summary helpers
 # ---------------------------------------------------------------------------
 
-async def _generate_summary(channel_username: str, db) -> Optional[str]:
-    """Generate an AI summary: 1 bullet per post, in Vietnamese."""
+async def _batch_summarize_posts(posts_data: list[dict], loop) -> list[dict]:
+    """Gọi GPT 1 call / bài để tóm tắt — đơn giản, không bao giờ bị cắt token.
+
+    posts_data: list of {"title": str, "text": str}
+    Returns: list[dict] — mỗi phần tử: {"lead": str, "body": list[str], "key_points": list[str], "thin": bool}
+             Empty dict {} nếu lỗi.
+    """
+    import json as _json
+    from src.processing.ai_topic_detector import _get_client
+    from src.config import OPENAI_MODEL
+
+    if not posts_data:
+        return []
+
+    client = _get_client()
+    if not client:
+        return [{}] * len(posts_data)
+
+    SYSTEM_PROMPT = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
+
+NHIỆM VỤ: Viết tóm tắt báo chí chất lượng cao bằng tiếng Việt cho BÀI BÁO được cung cấp.
+
+QUY TẮC BẮT BUỘC:
+1. KHÔNG bịa thêm số liệu, tên người, địa điểm, sự kiện ngoài nội dung được cung cấp.
+2. Nếu nội dung quá ngắn (< 50 từ, chỉ có tiêu đề): đặt "thin": true, viết "lead" 1-2 câu từ tiêu đề, "body" và "key_points" để rỗng [].
+3. Nếu bài có nội dung đầy đủ: "thin": false, viết đủ cả lead + body + key_points.
+4. Câu văn khách quan, súc tích, ưu tiên số liệu và tên cụ thể (người, địa điểm, tổ chức).
+
+Trả về JSON đúng cấu trúc:
+{
+  "thin": true|false,
+  "lead": "2-3 câu nêu rõ AI/CÁI GÌ/KHI NÀO/Ở ĐÂU và tại sao quan trọng.",
+  "body": [
+    "Câu 1: Bối cảnh/nguyên nhân hoặc diễn biến chính (số liệu cụ thể).",
+    "Câu 2: Chi tiết bổ sung (trích dẫn, phản ứng các bên, tác động).",
+    "Câu 3: Ý nghĩa hoặc xu hướng tiếp theo (bỏ qua nếu không có thông tin)."
+  ],
+  "key_points": [
+    "Điểm nổi bật 1 — ưu tiên con số, tên, ngày cụ thể",
+    "Điểm nổi bật 2",
+    "Điểm nổi bật 3"
+  ]
+}
+KHÔNG thêm văn bản nào khác ngoài JSON."""
+
+    def _call_one(p: dict) -> dict:
+        title = (p.get("title") or "").strip()
+        text = (p.get("text") or "").strip()
+        if title and text and title.lower() not in text.lower()[:len(title) + 10]:
+            user_msg = f"Tiêu đề: {title}\nNội dung: {text[:2000]}"
+        elif text:
+            user_msg = f"Nội dung: {text[:2000]}"
+        else:
+            user_msg = f"Tiêu đề: {title}"
+
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=3000,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or ""
+        data = _json.loads(raw)
+        return {
+            "lead": (data.get("lead") or "").strip(),
+            "body": [s.strip() for s in (data.get("body") or []) if s and s.strip()],
+            "key_points": [s.strip() for s in (data.get("key_points") or []) if s and s.strip()],
+            "thin": bool(data.get("thin", False)),
+        }
+
+    # Chạy song song tối đa 10 GPT calls cùng lúc (semaphore tránh rate-limit)
+    sem = asyncio.Semaphore(10)
+
+    async def _call_one_async(i: int, p: dict) -> tuple[int, dict]:
+        async with sem:
+            try:
+                result = await loop.run_in_executor(None, _call_one, p)
+                logger.debug(f"  summarized article {i}: thin={result['thin']}, body={len(result['body'])}s")
+                return i, result
+            except Exception as exc:
+                logger.warning(f"_summarize_post[{i}] failed: {exc}")
+                return i, {}
+
+    tasks = [_call_one_async(i, p) for i, p in enumerate(posts_data)]
+    results = await asyncio.gather(*tasks)
+    out: list[dict] = [{}] * len(posts_data)
+    for i, res in results:
+        out[i] = res
+    return out
+
+
+async def _generate_summary(channel_username: str, db) -> Optional[dict]:
+    """Generate a structured AI summary using summarize_cluster().
+
+    Returns a dict with keys: title, lead, body, conclusion, key_points,
+    sentiment, ai, link_posts — or None if no posts / API unavailable.
+    """
     if not OPENAI_API_KEY:
         return None
 
     import re as _re
+    from src.processing.ai_topic_detector import summarize_cluster
     posts_col = db["posts"]
     cutoff = datetime.utcnow() - timedelta(days=SUMMARY_DAYS)
+    _proj = {"text": 1, "created_at": 1, "links": 1, "full_article": 1, "source": 1, "ai_summary": 1}
 
-    # xkw: channels don't have matching source field — query by keyword text
     if channel_username.startswith("xkw:"):
         kw = channel_username[4:]
         kw_filter = {"platform": "twitter", "text": {"$regex": _re.escape(kw), "$options": "i"}}
         recent = list(
-            posts_col.find({**kw_filter, "created_at": {"$gte": cutoff}}, {"text": 1, "created_at": 1})
-            .sort("created_at", -1)
-            .limit(SUMMARY_POSTS)
+            posts_col.find({**kw_filter, "created_at": {"$gte": cutoff}}, _proj)
+            .sort("created_at", -1).limit(SUMMARY_POSTS)
         )
         if not recent:
-            recent = list(
-                posts_col.find(kw_filter, {"text": 1})
-                .sort("created_at", -1)
-                .limit(SUMMARY_POSTS)
-            )
+            recent = list(posts_col.find(kw_filter, _proj).sort("created_at", -1).limit(SUMMARY_POSTS))
     else:
         recent = list(
-            posts_col.find(
-                {"source": channel_username, "created_at": {"$gte": cutoff}},
-                {"text": 1, "created_at": 1},
-            )
-            .sort("created_at", -1)
-            .limit(SUMMARY_POSTS)
+            posts_col.find({"source": channel_username, "created_at": {"$gte": cutoff}}, _proj)
+            .sort("created_at", -1).limit(SUMMARY_POSTS)
         )
         if not recent:
-            # Fall back to last N posts regardless of date
             recent = list(
-                posts_col.find({"source": channel_username}, {"text": 1})
-                .sort("created_at", -1)
-                .limit(SUMMARY_POSTS)
+                posts_col.find({"source": channel_username}, _proj)
+                .sort("created_at", -1).limit(SUMMARY_POSTS)
             )
 
     if not recent:
         return None
 
-    n_posts = len(recent)
-
-    # Build numbered post list so AI can map 1-to-1
-    numbered = "\n\n".join(
-        f"[{i+1}] {p['text'].strip()}"
-        for i, p in enumerate(recent)
-        if p.get("text")
+    # Get channel display name for topic context
+    channel_doc = db["channels"].find_one({"username": channel_username}, {"display_name": 1})
+    topic_name = (
+        (channel_doc or {}).get("display_name")
+        or channel_username.replace("x:", "@").replace("xkw:", "#")
     )
-    if len(numbered) > 24000:
-        numbered = numbered[:24000]
 
-    # Dynamic token budget: ~80 tokens per bullet, min 600
-    max_tokens = min(max(n_posts * 80, 600), 4000)
-
+    # summarize_cluster is sync — run in thread executor to avoid blocking event loop
+    loop = asyncio.get_running_loop()
     try:
-        import openai
-        client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
-        response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"Bạn là trợ lý tóm tắt tin tức từ kênh Telegram @{channel_username}. "
-                        f"Dưới đây là {n_posts} bài viết được đánh số [1] đến [{n_posts}]. "
-                        f"Hãy viết ĐÚNG {n_posts} dòng tóm tắt bằng tiếng Việt, "
-                        "mỗi dòng là 1 bullet (•) tương ứng với bài cùng số thứ tự. "
-                        "Mỗi bullet phải là 1 câu đầy đủ, súc tích, bao hàm trọn vẹn nội dung bài đó "
-                        "(gồm: sự kiện chính, số liệu, kết quả nếu có). "
-                        "KHÔNG gộp, KHÔNG bỏ bài nào, KHÔNG thêm tiêu đề hay giải thích."
-                    ),
-                },
-                {"role": "user", "content": numbered},
-            ],
-            max_tokens=max_tokens,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
+        result = await loop.run_in_executor(None, summarize_cluster, recent[:30], topic_name)
     except Exception as exc:
-        logger.warning(f"OpenAI summary failed for {channel_username}: {exc}")
+        logger.warning(f"summarize_cluster failed for {channel_username}: {exc}")
         return None
 
+    result.pop("_filtered_posts", None)
+    result.pop("_used_posts", None)
 
-def _save_summary(channel_username: str, summary_text: str, post_count: int, db):
+    # ── Step 1: Build link_posts list (100 bài hiển thị) ───────────────────
+    AI_SUMMARY_LIMIT = 100  # gọi GPT cho tất cả 100 bài
+    DISPLAY_LIMIT    = 100  # tổng bài lưu vào dialog (paginated 20/trang)
+    link_posts = []
+    for i, p in enumerate(recent[:DISPLAY_LIMIT]):
+        links = p.get("links") or []
+        fa = p.get("full_article") or {}
+        url = next((l for l in links if l.startswith("http") and "t.me" not in l), None)
+        if not url:
+            fa_url = fa.get("url", "")
+            if fa_url and fa_url.startswith("http") and "t.me" not in fa_url:
+                url = fa_url
+        article_content = (fa.get("content") or fa.get("body") or "").strip()
+        post_text = (p.get("text") or "").strip()
+        snippet_text = article_content if len(article_content) > len(post_text) else post_text
+        created = p.get("created_at")
+        title = fa.get("title") or post_text[:120]
+        # Reuse cached ai_summary from post doc if it has real content
+        cached_ai = p.get("ai_summary") if isinstance(p.get("ai_summary"), dict) else None
+        cached_valid = bool(cached_ai and (cached_ai.get("lead") or cached_ai.get("body")))
+        link_posts.append({
+            "_post_id": p.get("_id"),          # for cache write-back (removed before save)
+            "title": title,
+            "url": url,
+            "source": p.get("source") or channel_username,
+            "snippet": snippet_text[:1500],
+            "date": created.isoformat() if created else None,
+            "ai_summary": cached_ai if cached_valid else {},
+            "_cached": cached_valid,            # flag to skip GPT
+        })
+
+    # ── Step 2: Scrape URLs để lấy body cho những bài chỉ có headline ───────
+    # Chạy song song để không mất quá nhiều thời gian
+    from src.processing.web_scraper import ArticleScraper
+
+    def _scrape_one(lp: dict) -> dict:
+        """Trả về lp đã được enrich content, hoặc nguyên gốc nếu thất bại."""
+        url = lp.get("url")
+        # Chỉ scrape khi snippet ≤ 200 ký tự (nghĩa là chỉ có headline)
+        if not url or len((lp.get("snippet") or "")) > 200:
+            return lp
+        try:
+            scraped = ArticleScraper.scrape_article(url)
+            if scraped and scraped.get("content") and len(scraped["content"]) > 100:
+                lp = dict(lp)
+                lp["snippet"] = scraped["content"][:1500]
+                if scraped.get("title"):
+                    lp["title"] = scraped["title"]
+        except Exception:
+            pass
+        return lp
+
+    # Scrape song song tất cả 100 bài (concurrent, timeout per-request = 10s)
+    # Chỉ scrape bài chưa có cache và snippet ngắn
+    scrape_idx = [
+        i for i, lp in enumerate(link_posts[:AI_SUMMARY_LIMIT])
+        if not lp.get("_cached") and len((lp.get("snippet") or "")) <= 200
+    ]
+    try:
+        scrape_results = await asyncio.gather(
+            *[loop.run_in_executor(None, _scrape_one, link_posts[i]) for i in scrape_idx],
+            return_exceptions=True,
+        )
+        for i, res in zip(scrape_idx, scrape_results):
+            if isinstance(res, dict):
+                link_posts[i] = res
+    except Exception as exc:
+        logger.warning(f"scraping gather failed: {exc}")
+
+    # ── Step 3: GPT summarize 100 bài (đã có content từ scraping) ───────────
+    # Chỉ gọi GPT cho bài chưa có cache; bài đã có cache → skip
+    need_gpt_idx = [
+        i for i, lp in enumerate(link_posts[:AI_SUMMARY_LIMIT])
+        if not lp.get("_cached")
+    ]
+    link_posts_raw = [
+        {"title": link_posts[i]["title"], "text": link_posts[i].get("snippet", "")[:2000]}
+        for i in need_gpt_idx
+    ]
+    cached_count = AI_SUMMARY_LIMIT - len(need_gpt_idx)
+    logger.info(f"[Summary] {channel_username}: {cached_count} cached, {len(need_gpt_idx)} need GPT")
+
+    if link_posts_raw and OPENAI_API_KEY:
+        ai_summaries = await _batch_summarize_posts(link_posts_raw, loop)
+        # Write results back to link_posts and persist to posts collection
+        for j, idx in enumerate(need_gpt_idx):
+            s = ai_summaries[j] if j < len(ai_summaries) else {}
+            link_posts[idx]["ai_summary"] = s if isinstance(s, dict) else {}
+            # Cache in MongoDB post document for future calls
+            post_id = link_posts[idx].get("_post_id")
+            if post_id and isinstance(s, dict) and s:
+                try:
+                    posts_col.update_one(
+                        {"_id": post_id},
+                        {"$set": {"ai_summary": s}},
+                    )
+                except Exception:
+                    pass
+
+    # Remove internal helper fields before saving
+    for lp in link_posts:
+        lp.pop("_post_id", None)
+        lp.pop("_cached", None)
+
+    result["link_posts"] = link_posts
+
+    return result
+
+
+def _save_summary(channel_username: str, summary_data: dict, post_count: int, db):
+    """Persist structured summary to channel_summaries collection.
+
+    Also writes `summary_text` (plain concatenation) for backward-compat
+    with older code paths that read only that field.
+    """
     today = datetime.utcnow().strftime("%Y-%m-%d")
     summaries_col = db["channel_summaries"]
+
+    # Build summary_text preview from per-article leads (first 3 articles)
+    # This replaces the old cluster-style text shown on the outer channel card
+    preview_parts: list[str] = []
+    for lp in (summary_data.get("link_posts") or [])[:3]:
+        ai = lp.get("ai_summary") or {}
+        lead = ai.get("lead") if isinstance(ai, dict) else ""
+        if lead:
+            preview_parts.append(lead)
+        elif lp.get("title"):
+            preview_parts.append(lp["title"])
+    summary_text = "\n".join(f"• {p}" for p in preview_parts) if preview_parts else ""
+
     summaries_col.update_one(
         {"channel_username": channel_username, "date": today},
         {
             "$set": {
                 "summary_text": summary_text,
+                "title": summary_data.get("title", ""),
+                "lead": summary_data.get("lead", ""),
+                "body": summary_data.get("body", []),
+                "conclusion": summary_data.get("conclusion", ""),
+                "key_points": summary_data.get("key_points", []),
+                "sentiment": summary_data.get("sentiment", "neutral"),
+                "ai": summary_data.get("ai", False),
+                "link_posts": summary_data.get("link_posts", []),
                 "post_count": post_count,
                 "generated_at": datetime.utcnow(),
             }

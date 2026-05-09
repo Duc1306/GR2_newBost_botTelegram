@@ -87,6 +87,10 @@ def create_indexes():
     _safe_create(db["hotnews_v2_cache"], [("expires_at", 1)], expireAfterSeconds=0, name="hotnews_v2_cache_ttl")
     _safe_create(db["hotnews_summary_cache"], "key", unique=True)
 
+    # hotnews_audio_cache: TTL 2h tự xóa bằng expires_at index
+    _safe_create(db["hotnews_audio_cache"], "key", unique=True)
+    _safe_create(db["hotnews_audio_cache"], [("expires_at", 1)], expireAfterSeconds=0, name="hotnews_audio_cache_ttl")
+
     # ── pending_channels collection ──
     _safe_create(db["pending_channels"], "channel_username", unique=True)
 

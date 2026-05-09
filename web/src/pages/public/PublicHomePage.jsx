@@ -52,13 +52,16 @@ import LinkIcon from '@mui/icons-material/Link';
 import LoginIcon from '@mui/icons-material/Login';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import TelegramIcon from '@mui/icons-material/Telegram';
+import HeadphonesIcon from '@mui/icons-material/Headphones';
 import {
   searchPublicPosts,
   fetchArticlePosts,
   fetchHotNewsClusters,
   fetchHotNewsSummary,
+  fetchHotNewsAudio,
   fetchPostTopics,
 } from '../../lib/publicApi.js';
+import AudioPlayer from '../../components/AudioPlayer.jsx';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -299,16 +302,32 @@ const HotClusterCard = React.memo(function HotClusterCard({ cluster, onReadSumma
 
 const SENTIMENT_LABEL = { positive: 'Tích cực', negative: 'Tiêu cực', mixed: 'Hỗn hợp', neutral: 'Trung lập' };
 
-function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
+function SummaryDialog({ cluster, open, onClose, hours = 48, onPlayAudio }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [audioLoading, setAudioLoading] = useState(false);
+  const [audioError, setAudioError] = useState(null);
   const [readUrls, setReadUrls] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('hn_read_urls') || '[]')); }
     catch { return new Set(); }
   });
+
+  const handleListenClick = async () => {
+    if (!cluster) return;
+    setAudioLoading(true);
+    setAudioError(null);
+    try {
+      const url = await fetchHotNewsAudio(cluster.slug, hours);
+      onPlayAudio({ url, title: data?.title || cluster.name });
+    } catch (e) {
+      setAudioError(e.message);
+    } finally {
+      setAudioLoading(false);
+    }
+  };
 
   const markRead = (url) => {
     if (!url) return;
@@ -512,23 +531,21 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
                             )}
                           </Box>
                           {s.url && (
-                            isRead ? (
-                              <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#9ca3af', flexShrink: 0, alignSelf: 'center' }}>
-                                Đã đọc
-                              </Typography>
-                            ) : (
-                              <Button
-                                size="small"
-                                endIcon={<OpenInNewIcon sx={{ fontSize: '11px !important' }} />}
-                                href={s.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={() => markRead(s.url)}
-                                sx={{ textTransform: 'none', fontSize: '0.68rem', p: '1px 8px', minWidth: 0, flexShrink: 0, color: '#16a34a' }}
-                              >
-                                Đọc
-                              </Button>
-                            )
+                            <Button
+                              size="small"
+                              endIcon={<OpenInNewIcon sx={{ fontSize: '11px !important' }} />}
+                              href={s.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() => markRead(s.url)}
+                              sx={{
+                                textTransform: 'none', fontSize: '0.68rem', p: '1px 8px',
+                                minWidth: 0, flexShrink: 0,
+                                color: isRead ? '#9ca3af' : '#16a34a',
+                              }}
+                            >
+                              {isRead ? 'Đọc lại' : 'Đọc'}
+                            </Button>
                           )}
                         </Box>
                       );
@@ -541,7 +558,33 @@ function SummaryDialog({ cluster, open, onClose, hours = 48 }) {
         )}
       </DialogContent>
 
-      <DialogActions sx={{ px: 3, pb: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+      <DialogActions sx={{ px: 3, pb: 2, borderTop: '1px solid', borderColor: 'divider', gap: 1, flexWrap: 'wrap' }}>
+        {data && !loading && (
+          <>
+            <Button
+              onClick={handleListenClick}
+              variant="contained"
+              size="small"
+              startIcon={audioLoading ? <CircularProgress size={14} color="inherit" /> : <HeadphonesIcon sx={{ fontSize: '15px !important' }} />}
+              disabled={audioLoading}
+              sx={{
+                textTransform: 'none',
+                borderRadius: 2,
+                bgcolor: '#f97316',
+                '&:hover': { bgcolor: '#ea580c' },
+                flexShrink: 0,
+              }}
+            >
+              {audioLoading ? 'Đang tạo audio…' : 'Nghe bản tin'}
+            </Button>
+            {audioError && (
+              <Typography variant="caption" color="error" sx={{ alignSelf: 'center' }}>
+                {audioError}
+              </Typography>
+            )}
+          </>
+        )}
+        <Box sx={{ flex: 1 }} />
         <Button onClick={onClose} variant="outlined" size="small" sx={{ textTransform: 'none', borderRadius: 2 }}>
           Đóng
         </Button>
@@ -612,6 +655,7 @@ function HotNewsTab() {
   const [hours, setHours] = useState(48);
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [audioPlayer, setAudioPlayer] = useState(null); // { url, title }
   const [pendingClusters, setPendingClusters] = useState([]);
   const [freshSlugs, setFreshSlugs] = useState(new Set());
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -778,7 +822,19 @@ function HotNewsTab() {
         open={summaryOpen}
         onClose={() => setSummaryOpen(false)}
         hours={hours}
+        onPlayAudio={(p) => setAudioPlayer(p)}
       />
+
+      {audioPlayer && (
+        <AudioPlayer
+          audioUrl={audioPlayer.url}
+          title={audioPlayer.title}
+          onClose={() => {
+            URL.revokeObjectURL(audioPlayer.url);
+            setAudioPlayer(null);
+          }}
+        />
+      )}
     </Box>
   );
 }
