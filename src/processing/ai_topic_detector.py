@@ -240,6 +240,24 @@ async def score_posts_by_embedding(
         import numpy as np
         from src.config import OPENAI_EMBED_MODEL
 
+        # ── Fast path: posts have pre-computed normalized embeddings ─────────────
+        # embed_and_cluster_posts attaches _emb (unit-normalized row) to each post.
+        # Only embed the query text — saves one API call per cluster filter.
+        if posts and "_emb" in posts[0]:
+            q_resp = await client.embeddings.create(model=OPENAI_EMBED_MODEL, input=[query_text])
+            q_emb = np.array(q_resp.data[0].embedding, dtype=np.float32)
+            q_norm = np.linalg.norm(q_emb) + 1e-9
+            scored = []
+            for post in posts:
+                p_emb = post["_emb"]
+                if not isinstance(p_emb, np.ndarray):
+                    p_emb = np.array(p_emb, dtype=np.float32)
+                sim = float(np.dot(p_emb, q_emb) / (np.linalg.norm(p_emb) * q_norm))
+                scored.append({**post, "_ai_score": round(sim, 4)})
+            scored.sort(key=lambda p: p["_ai_score"], reverse=True)
+            return scored[:top_k] if top_k else scored
+
+        # ── Standard path: embed query + all posts (no pre-computed embeddings) ──
         texts = [p.get("text", "")[:512] for p in posts]
         all_texts = [query_text] + texts  # query first
 
@@ -330,6 +348,12 @@ async def embed_and_cluster_posts(
         eps = 1.0 - similarity_threshold
         db = DBSCAN(eps=eps, min_samples=min_cluster_size, metric="precomputed")
         labels = db.fit_predict(dist_matrix)
+
+        # Attach normalized embedding to each post for reuse in filter_relevant_posts.
+        # This eliminates one embedding API call per cluster (N fewer calls total).
+        # _emb is stripped before caching in _build_cluster.
+        for post, emb_row in zip(posts, embs_norm):
+            post["_emb"] = emb_row  # numpy array row (already unit-normalized)
 
         # Group posts by cluster label (-1 = noise/outlier → skip)
         from collections import defaultdict
@@ -646,8 +670,11 @@ async def cluster_and_summarize(
 
     sample = posts[:max_posts]
     result = await summarize_cluster(sample, topic_name=topic_name, max_posts=len(sample))
-    result.pop("_used_posts", None)
-    result["_filtered_posts"] = sample
+    # Preserve GPT-validated posts (those listed in used_ids by the summarizer).
+    # These are the only posts that actually contributed to the generated summary,
+    # so they are the ground-truth "on-topic" subset of the cluster.
+    used_posts = result.pop("_used_posts", None) or sample
+    result["_filtered_posts"] = used_posts
     return result
 
 

@@ -263,16 +263,7 @@ const HotClusterCard = React.memo(function HotClusterCard({ cluster, onReadSumma
           <Typography variant="caption" color="text.disabled">
             {cluster.latest_at ? `Cập nhật ${timeAgo(cluster.latest_at)}` : ''}
           </Typography>
-          {cluster.first_seen_at && (() => {
-            const fsa = new Date(cluster.first_seen_at);
-            const lat = cluster.latest_at ? new Date(cluster.latest_at) : null;
-            const diffH = lat ? (lat - fsa) / 3600000 : 0;
-            return diffH > 4 ? (
-              <Typography variant="caption" sx={{ color: '#9ca3af', fontStyle: 'italic' }}>
-                · nổi từ {timeAgo(cluster.first_seen_at)}
-              </Typography>
-            ) : null;
-          })()}
+
         </Box>
       </CardContent>
 
