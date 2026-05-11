@@ -3,6 +3,7 @@ import re
 import io
 import base64
 import asyncio
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, Depends, Security, Request
 from fastapi.responses import StreamingResponse
@@ -2383,6 +2384,28 @@ async def get_hotnews_audio(
         media_type="audio/mpeg",
         headers={"Cache-Control": "public, max-age=7200", "Content-Length": str(len(audio_bytes))},
     )
+
+
+# =============================================================================
+# Admin: ML Model Metrics
+# =============================================================================
+
+@app.get("/admin/ml-metrics", tags=["Admin"])
+async def get_ml_metrics(current_user: str = Depends(get_current_admin_user)):
+    """Trả về báo cáo đánh giá mô hình ML từ file evaluation_report.json."""
+    import json as _json
+    report_path = Path("models") / "evaluation_report.json"
+    if not report_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Chưa có báo cáo đánh giá. Hãy chạy scripts/evaluate_model.py trước."
+        )
+    try:
+        with open(report_path, encoding="utf-8") as f:
+            report = _json.load(f)
+        return report
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể đọc file báo cáo: {exc}")
 
 
 # =============================================================================

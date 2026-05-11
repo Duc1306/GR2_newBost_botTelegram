@@ -400,6 +400,32 @@ function SummaryDialog({ cluster, open, onClose, hours = 48, onPlayAudio }) {
                   {SENTIMENT_LABEL[data.sentiment] || data.sentiment}
                 </Typography>
               </Box>
+              {data.risk_score != null && (
+                <>
+                  <Typography variant="caption" color="text.disabled">·</Typography>
+                  <Box
+                    sx={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 0.4,
+                      px: 1,
+                      py: 0.2,
+                      borderRadius: 1,
+                      bgcolor: data.risk_score >= 7 ? '#fde8e8' : data.risk_score >= 4 ? '#fff3cd' : '#e8f5e9',
+                      border: '1px solid',
+                      borderColor: data.risk_score >= 7 ? '#f44336' : data.risk_score >= 4 ? '#ff9800' : '#4caf50',
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      fontWeight={700}
+                      sx={{ color: data.risk_score >= 7 ? '#c62828' : data.risk_score >= 4 ? '#e65100' : '#2e7d32' }}
+                    >
+                      ⚠ Rủi ro: {data.risk_score}/10
+                    </Typography>
+                  </Box>
+                </>
+              )}
               <Typography variant="caption" color="text.disabled">·</Typography>
               <Typography variant="caption" color="text.disabled">{data.post_count} nguồn tổng hợp</Typography>
               <Typography variant="caption" color="text.disabled">·</Typography>

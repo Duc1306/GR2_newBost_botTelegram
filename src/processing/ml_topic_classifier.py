@@ -18,7 +18,7 @@ from processing.cleaning import clean_text
 TOPIC_LABELS = [
     "Crypto",
     "Kinh tế",
-    "Công nghệ", 
+    "Công nghệ",
     "Chính trị",
     "Thế giới",
     "Pháp luật",
@@ -28,8 +28,13 @@ TOPIC_LABELS = [
     "Giải trí",
     "Sức khỏe",
     "Giáo dục",
+    "Việc làm",
     "Du lịch",
-    "Ẩm thực"
+    "Ẩm thực",
+    "Kinh doanh & Khởi nghiệp",
+    "Trò chơi & Ứng dụng",
+    "Tin tức & Truyền thông",
+    "Khác",
 ]
 
 
@@ -419,8 +424,56 @@ def create_sample_training_data() -> Tuple[List[str], List[str]]:
         ("Street food Sài Gòn thu hút du khách quốc tế", "Ẩm thực"),
         ("Lẩu Thái Tom Yum mở chi nhánh tại Việt Nam", "Ẩm thực"),
         ("Món nem rán Việt Nam chinh phục thực khách Hàn Quốc", "Ẩm thực"),
+
+        # Kinh doanh & Khởi nghiệp (10 samples)
+        ("Startup fintech Việt gọi vốn Series A 5 triệu USD từ quỹ Nhật", "Kinh doanh & Khởi nghiệp"),
+        ("CEO 28 tuổi xây dựng công ty triệu đô từ tay trắng", "Kinh doanh & Khởi nghiệp"),
+        ("Doanh nghiệp vừa và nhỏ vượt khó nhờ chuyển đổi số", "Kinh doanh & Khởi nghiệp"),
+        ("VNG ra mắt sản phẩm mới, cạnh tranh thị trường ASEAN", "Kinh doanh & Khởi nghiệp"),
+        ("Grab Việt Nam mở rộng dịch vụ tài chính cho tiểu thương", "Kinh doanh & Khởi nghiệp"),
+        ("Shopee, Tiki, Lazada: Cuộc chiến thương mại điện tử 2024", "Kinh doanh & Khởi nghiệp"),
+        ("Pivot thành công: từ food tech sang logistics, startup 10x doanh thu", "Kinh doanh & Khởi nghiệp"),
+        ("Quỹ đầu tư mạo hiểm rót 20 triệu USD vào edtech Việt Nam", "Kinh doanh & Khởi nghiệp"),
+        ("Mô hình kinh doanh D2C giúp thương hiệu Việt tăng 300% doanh thu", "Kinh doanh & Khởi nghiệp"),
+        ("IPO thành công, startup Việt định giá 1 tỷ USD trên sàn chứng khoán", "Kinh doanh & Khởi nghiệp"),
+
+        # Trò chơi & Ứng dụng (10 samples)
+        ("Liên Quân Mobile ra mắt tướng mới mùa 30, fan hào hứng", "Trò chơi & Ứng dụng"),
+        ("Steam Summer Sale 2024: hàng nghìn game giảm giá đến 90%", "Trò chơi & Ứng dụng"),
+        ("PlayStation 5 Pro ra mắt, giá 700 USD, hiệu năng gấp đôi", "Trò chơi & Ứng dụng"),
+        ("Valorant VCT 2024: Team Flash vô địch khu vực Đông Nam Á", "Trò chơi & Ứng dụng"),
+        ("Minecraft vượt mốc 200 triệu bản bán ra toàn cầu", "Trò chơi & Ứng dụng"),
+        ("App TikTok cập nhật tính năng AI tạo video tự động", "Trò chơi & Ứng dụng"),
+        ("Google Play Store xóa 1 triệu ứng dụng vi phạm chính sách", "Trò chơi & Ứng dụng"),
+        ("Mobile Legends World Championship: Việt Nam vào top 4", "Trò chơi & Ứng dụng"),
+        ("Nintendo Switch 2 lộ diện với màn hình OLED 8 inch", "Trò chơi & Ứng dụng"),
+        ("Roblox ra mắt nền tảng game metaverse cho trẻ em", "Trò chơi & Ứng dụng"),
+
+        # Tin tức & Truyền thông (10 samples)
+        ("VTV tăng cường phát sóng tin tức 24/7 trên kênh VTV1", "Tin tức & Truyền thông"),
+        ("Báo điện tử VnExpress đạt 30 triệu lượt đọc mỗi tháng", "Tin tức & Truyền thông"),
+        ("Reuters công bố báo cáo tình hình truyền thông toàn cầu 2024", "Tin tức & Truyền thông"),
+        ("Mạng xã hội Threads của Meta đạt 100 triệu người dùng", "Tin tức & Truyền thông"),
+        ("Nhà báo điều tra bị đe dọa, Hội Nhà báo lên tiếng bảo vệ", "Tin tức & Truyền thông"),
+        ("Tạp chí Forbes Việt Nam phát hành số đặc biệt kỷ niệm 10 năm", "Tin tức & Truyền thông"),
+        ("Đài BBC mở văn phòng đại diện mới tại Đông Nam Á", "Tin tức & Truyền thông"),
+        ("Podcast tin tức buổi sáng của VTC lọt top 10 châu Á", "Tin tức & Truyền thông"),
+        ("Báo Tuổi Trẻ triển khai nền tảng tin tức AI cá nhân hóa", "Tin tức & Truyền thông"),
+        ("Luật báo chí mới: quy định rõ trách nhiệm của tòa soạn online", "Tin tức & Truyền thông"),
+
+        # Khác (10 samples)
+        ("Thời tiết hôm nay: Hà Nội nắng nóng 40 độ, TP.HCM mưa lớn", "Khác"),
+        ("Lịch nghỉ lễ 30/4 và 1/5 năm 2024: nghỉ 5 ngày liên tiếp", "Khác"),
+        ("Giá xăng hôm nay điều chỉnh tăng 500 đồng/lít", "Khác"),
+        ("Tin nhắn rác, cuộc gọi lừa đảo tăng mạnh dịp cuối năm", "Khác"),
+        ("Cộng đồng mạng xôn xao clip hài hước về mèo", "Khác"),
+        ("Thông báo lịch cúp điện các quận tại TP.HCM tuần này", "Khác"),
+        ("Hướng dẫn gia hạn CCCD gắn chip tại nhà qua VNeID", "Khác"),
+        ("Chương trình khuyến mãi siêu thị tháng 11: giảm đến 50%", "Khác"),
+        ("Hỏi đáp: Thủ tục xin việc cho người nước ngoài tại Việt Nam", "Khác"),
+        ("Những điều thú vị ít biết về thành phố Hội An", "Khác"),
     ]
-    
+
     texts, labels = zip(*samples)
     return list(texts), list(labels)
 

@@ -493,7 +493,9 @@ QUY TẮC BẮT BUỘC:
    ✅ Đúng: "Giá vàng SJC vượt 120 triệu đồng/lượng", "Nga phóng tên lửa đạn đạo vào Kyiv"
 3. BẰNG CHỨNG: Trong "used_ids", CHỈ liệt kê ID (chuỗi số) của các bài THỰC SỰ đóng góp nội dung vào bài viết này.
 4. KHÔNG bịa thêm sự kiện, số liệu, tên người ngoài dữ liệu được cung cấp.
-5. Câu văn rõ ràng, khách quan, súc tích nhưng ĐẦY ĐỦ.
+5. Đánh giá "sentiment": positive/negative/neutral/mixed dựa trên nội dung sự kiện.
+6. Đánh giá "risk_score" từ 1-10: mức độ rủi ro/tác động tiêu cực của sự kiện đối với xã hội/kinh tế/chính trị. 1=không rủi ro, 10=rủi ro cực kỳ cao.
+7. Câu văn rõ ràng, khách quan, súc tích nhưng ĐẦY ĐỦ.
    Độ dài bắt buộc:
    - lead: 3-4 câu, nêu rõ WHO/WHAT/WHEN/WHERE
    - body: 8-9 đoạn (mỗi đoạn 3-5 câu), bao quát toàn bộ diễn biến từ đầu đến cuối
@@ -517,6 +519,7 @@ QUY TẮC BẮT BUỘC:
   "conclusion": "2-3 câu nhận định xu hướng tiếp theo và ý nghĩa của sự kiện.",
   "key_points": ["Điểm 1 (ưu tiên số liệu)", "Điểm 2", "Điểm 3", "Điểm 4", "Điểm 5"],
   "sentiment": "neutral|positive|negative|mixed",
+  "risk_score": 5,
   "used_ids": ["1", "3", "5"]
 }"""
 
@@ -619,6 +622,7 @@ async def summarize_cluster(
             "conclusion": parsed.get("conclusion", ""),
             "key_points": parsed.get("key_points", []),
             "sentiment": parsed.get("sentiment", "neutral"),
+            "risk_score": int(parsed.get("risk_score", 5) or 5),
             "ai": True,
             "_used_posts": used_posts,    # consumed by caller, NOT persisted to cache
         }

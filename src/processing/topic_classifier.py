@@ -194,6 +194,37 @@ class TopicClassifier:
                    'recipe', 'food', 'ngon', 'michelin', 'street food', 'phở', 'bánh mì'],
             'en': ['food', 'cuisine', 'restaurant', 'chef', 'cooking', 'recipe', 'delicious',
                    'michelin', 'street food', 'dish', 'meal', 'dining']
+        },
+        'Kinh doanh & Khởi nghiệp': {
+            'vi': ['khởi nghiệp', 'doanh nhân', 'doanh nghiệp', 'công ty', 'ceo', 'giám đốc',
+                   'quản trị', 'chiến lược', 'thị trường', 'sản phẩm', 'dịch vụ',
+                   'vốn', 'gọi vốn', 'đầu tư mạo hiểm', 'ipo', 'mua bán sáp nhập',
+                   'thương hiệu', 'marketing', 'bán hàng', 'doanh thu', 'lợi nhuận'],
+            'en': ['startup', 'entrepreneur', 'entrepreneurship', 'business', 'company', 'ceo',
+                   'founder', 'co-founder', 'venture capital', 'vc', 'seed round', 'series a',
+                   'ipo', 'merger', 'acquisition', 'brand', 'product launch', 'b2b', 'b2c',
+                   'saas', 'e-commerce', 'marketplace', 'scaling', 'pivot', 'incubator', 'accelerator']
+        },
+        'Trò chơi & Ứng dụng': {
+            'vi': ['game', 'trò chơi', 'gaming', 'esport', 'gamer', 'mobile game', 'pc game',
+                   'steam', 'playstation', 'xbox', 'nintendo', 'app store', 'google play',
+                   'ứng dụng', 'phần mềm', 'tải về', 'update', 'bản cập nhật'],
+            'en': ['game', 'gaming', 'esports', 'gamer', 'mobile game', 'pc game', 'console',
+                   'steam', 'playstation', 'xbox', 'nintendo', 'fortnite', 'minecraft', 'roblox',
+                   'valorant', 'league of legends', 'app', 'application', 'play store', 'app store',
+                   'download', 'update', 'patch', 'dlc', 'in-app purchase']
+        },
+        'Tin tức & Truyền thông': {
+            'vi': ['báo', 'truyền thông', 'phóng viên', 'tòa soạn', 'nhà báo', 'tin tức',
+                   'thông tấn', 'bản tin', 'phát thanh', 'truyền hình', 'đài', 'vtv', 'vnews',
+                   'báo điện tử', 'tạp chí', 'xuất bản'],
+            'en': ['media', 'news', 'journalist', 'reporter', 'press', 'newspaper', 'magazine',
+                   'broadcast', 'tv channel', 'radio', 'newsroom', 'editorial', 'publishing',
+                   'breaking news', 'headline', 'scoop', 'investigative', 'reuters', 'ap news', 'bbc']
+        },
+        'Khác': {
+            'vi': [],
+            'en': []
         }
     }
     

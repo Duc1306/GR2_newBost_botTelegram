@@ -10,12 +10,14 @@ import {
   Typography,
   IconButton,
   Divider,
-  Link
+  Link,
+  Tooltip,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkIcon from '@mui/icons-material/Link';
 import ImageIcon from '@mui/icons-material/Image';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { getTopicColor } from '../theme/colors';
@@ -43,6 +45,37 @@ export default function PostDetailModal({ post, open, onClose }) {
   const fullContent = post.full_article?.content || post.text;
   const hasExternalLink = post.links && post.links.length > 0 && !post.links[0].includes('t.me');
 
+  // Build a lookup map: topic → prediction info for Explainable AI tooltip
+  const predictionMap = {};
+  if (post.topic_predictions && post.topic_predictions.length > 0) {
+    for (const pred of post.topic_predictions) {
+      if (pred.topic) predictionMap[pred.topic] = pred;
+    }
+  }
+
+  const METHOD_LABELS = {
+    ml: 'Mô hình ML (SVM/TF-IDF)',
+    keyword: 'Quy tắc từ khóa',
+    ai: 'OpenAI GPT',
+    openai: 'OpenAI GPT',
+    hybrid: 'Kết hợp ML + Từ khóa',
+  };
+
+  const buildTooltipContent = (topic) => {
+    const pred = predictionMap[topic];
+    const lines = [];
+    if (pred) {
+      const method = METHOD_LABELS[pred.method] || pred.method || 'Tự động';
+      const confidence = pred.confidence != null
+        ? `${(pred.confidence * 100).toFixed(1)}%`
+        : null;
+      lines.push(`Phương pháp: ${method}`);
+      if (confidence) lines.push(`Độ tin cậy: ${confidence}`);
+    }
+    if (post.source) lines.push(`Nguồn kênh: @${post.source}`);
+    return lines.join('\n') || 'Phân loại tự động';
+  };
+
   return (
     <Dialog 
       open={open} 
@@ -64,17 +97,36 @@ export default function PostDetailModal({ post, open, onClose }) {
             {post.topics && post.topics.length > 0 && (
               <Box display="flex" gap={0.5} flexWrap="wrap">
                 {post.topics.slice(0, 3).map((topic, idx) => (
-                  <Chip
+                  <Tooltip
                     key={idx}
-                    label={topic}
-                    size="small"
-                    sx={{
-                      bgcolor: getTopicColor(topic),
-                      color: 'white',
-                      fontWeight: 500,
-                      fontSize: '0.75rem'
-                    }}
-                  />
+                    title={
+                      <Box sx={{ whiteSpace: 'pre-line', fontSize: '0.75rem', lineHeight: 1.6 }}>
+                        <Typography variant="caption" fontWeight="bold" display="block" mb={0.5}>
+                          🤖 Giải thích phân loại
+                        </Typography>
+                        {buildTooltipContent(topic)}
+                      </Box>
+                    }
+                    arrow
+                    placement="bottom-start"
+                  >
+                    <Chip
+                      label={
+                        <Box display="flex" alignItems="center" gap={0.5}>
+                          #{topic}
+                          <InfoOutlinedIcon sx={{ fontSize: '0.7rem', opacity: 0.8 }} />
+                        </Box>
+                      }
+                      size="small"
+                      sx={{
+                        bgcolor: getTopicColor(topic),
+                        color: 'white',
+                        fontWeight: 500,
+                        fontSize: '0.75rem',
+                        cursor: 'help',
+                      }}
+                    />
+                  </Tooltip>
                 ))}
               </Box>
             )}

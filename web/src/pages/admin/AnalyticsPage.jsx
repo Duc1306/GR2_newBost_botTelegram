@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -7,6 +7,8 @@ import {
   CircularProgress,
   TextField,
   Button,
+  Alert,
+  Chip,
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -22,12 +24,39 @@ import AbcIcon from '@mui/icons-material/Abc';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import TelegramIcon from '@mui/icons-material/Telegram';
+import ModelTrainingIcon from '@mui/icons-material/ModelTraining';
+import DownloadIcon from '@mui/icons-material/Download';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, ResponsiveContainer, Cell, Legend } from 'recharts';
+import { getAuthToken } from '../../lib/api.jsx';
 
 export default function AnalyticsPage() {
   const [startDate, setStartDate] = useState(() => subDays(new Date(), 30));
   const [endDate, setEndDate] = useState(() => new Date());
   const [committedStart, setCommittedStart] = useState(() => subDays(new Date(), 30));
   const [committedEnd, setCommittedEnd] = useState(() => new Date());
+
+  // ML Metrics state
+  const [mlMetrics, setMlMetrics] = useState(null);
+  const [mlLoading, setMlLoading] = useState(false);
+  const [mlError, setMlError] = useState(null);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    setMlLoading(true);
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    fetch(`${API_BASE}/admin/ml-metrics`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => {
+        if (r.status === 404) return null; // report not generated yet
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => setMlMetrics(data))
+      .catch((e) => setMlError(e.message))
+      .finally(() => setMlLoading(false));
+  }, []);
   
   // Format dates for API — only update on Apply
   const date_from = committedStart.toISOString().split('T')[0];
@@ -57,11 +86,27 @@ export default function AnalyticsPage() {
     setCommittedEnd(endDate);
   }, [startDate, endDate]);
 
+  // ── Export CSV ──────────────────────────────────────────────────────────────
   // Prepare multi-topic timeline data
   const timelineData = timeline?.timeline?.map(item => ({
     date: item.date,
     count: item.count,
   })) || [];
+
+  const handleExportCSV = useCallback(() => {
+    const rows = [['Date', 'Post Count']];
+    for (const item of timelineData) {
+      rows.push([item.date, item.count]);
+    }
+    const csvContent = rows.map((r) => r.join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `analytics_${date_from}_${date_to}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [timelineData, date_from, date_to]);
 
   // Prepare keywords data for bar chart
   const keywordsData = keywords?.keywords?.slice(0, 10).map(k => ({
@@ -333,6 +378,70 @@ export default function AnalyticsPage() {
         </Box>
         )}
       </Paper>
+      {/* ML Model Metrics */}
+      <Paper sx={{ p: 3, mt: 3 }}>
+        <Box display="flex" alignItems="center" gap={1} mb={2}>
+          <ModelTrainingIcon sx={{ color: 'primary.main' }} />
+          <Typography variant="h6" fontWeight="bold">
+            ML Model Evaluation
+          </Typography>
+          {mlMetrics && (
+            <Chip
+              label={`Best: ${mlMetrics.summary?.best_model || ''}`}
+              size="small"
+              color="primary"
+              sx={{ ml: 1 }}
+            />
+          )}
+        </Box>
+        {mlLoading && <Box display="flex" justifyContent="center" py={4}><CircularProgress /></Box>}
+        {mlError && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {mlError.includes('404') || mlError === 'HTTP 404'
+              ? 'Chưa có báo cáo. Chạy scripts/evaluate_model.py để tạo báo cáo.'
+              : `Lỗi: ${mlError}`}
+          </Alert>
+        )}
+        {!mlLoading && !mlError && !mlMetrics && (
+          <Alert severity="info">Chạy <code>scripts/evaluate_model.py</code> để tạo báo cáo đánh giá mô hình.</Alert>
+        )}
+        {mlMetrics && mlMetrics.models && (
+          <Box>
+            <Typography variant="caption" color="text.secondary" display="block" mb={2}>
+              Đánh giá lúc: {new Date(mlMetrics.evaluation_date).toLocaleString('vi-VN')}
+              {' · '}Best accuracy: <strong>{(mlMetrics.summary?.best_accuracy * 100).toFixed(1)}%</strong>
+              {' · '}Best F1: <strong>{(mlMetrics.summary?.best_macro_f1 * 100).toFixed(1)}%</strong>
+            </Typography>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={mlMetrics.models.map(m => ({
+                name: m.name,
+                accuracy: parseFloat((m.accuracy * 100).toFixed(1)),
+                f1: parseFloat((m.macro_f1 * 100).toFixed(1)),
+              }))} margin={{ top: 5, right: 20, left: 0, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" angle={-20} textAnchor="end" interval={0} tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                <RechartTooltip formatter={(val, name) => [`${val}%`, name === 'accuracy' ? 'Accuracy' : 'Macro F1']} />
+                <Legend />
+                <Bar dataKey="accuracy" name="Accuracy" fill="#1976d2" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="f1" name="Macro F1" fill="#388e3c" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Box>
+        )}
+      </Paper>
+
+      {/* Export Report */}
+      <Box display="flex" justifyContent="flex-end" mt={3} mb={1}>
+        <Button
+          variant="contained"
+          startIcon={<DownloadIcon />}
+          onClick={handleExportCSV}
+          disabled={timelineData.length === 0}
+        >
+          Export CSV
+        </Button>
+      </Box>
     </Box>
     </Box>
   );

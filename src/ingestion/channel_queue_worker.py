@@ -463,6 +463,7 @@ def _save_summary(channel_username: str, summary_data: dict, post_count: int, db
                 "conclusion": summary_data.get("conclusion", ""),
                 "key_points": summary_data.get("key_points", []),
                 "sentiment": summary_data.get("sentiment", "neutral"),
+                "risk_score": summary_data.get("risk_score", None),
                 "ai": summary_data.get("ai", False),
                 "link_posts": summary_data.get("link_posts", []),
                 "post_count": post_count,

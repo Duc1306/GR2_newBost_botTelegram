@@ -8,11 +8,15 @@ import tempfile
 
 def test_topic_labels():
     """Test topic labels are defined correctly."""
-    assert len(TOPIC_LABELS) == 14
+    assert len(TOPIC_LABELS) == 19
     assert "Crypto" in TOPIC_LABELS
     assert "Công nghệ" in TOPIC_LABELS
     assert "Chính trị" in TOPIC_LABELS
     assert "Kinh tế" in TOPIC_LABELS
+    assert "Việc làm" in TOPIC_LABELS
+    assert "Kinh doanh & Khởi nghiệp" in TOPIC_LABELS
+    assert "Trò chơi & Ứng dụng" in TOPIC_LABELS
+    assert "Tin tức & Truyền thông" in TOPIC_LABELS
 
 
 def test_create_sample_data():

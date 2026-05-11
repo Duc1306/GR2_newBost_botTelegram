@@ -235,23 +235,48 @@ def train_from_db(model_path: str = "models/topic_classifier_svm.pkl",
     print("\nLabel distribution:")
     for label, count in sorted(label_counts.items(), key=lambda x: -x[1]):
         print(f"  {label}: {count} ({count/len(labels)*100:.1f}%)")
-    
-    # Check for severe imbalance
+
+    # ── Auto-inject sample data for topics with insufficient samples ──────────
+    MIN_SAMPLES_PER_TOPIC = 10
     if not use_sample_data:
+        sample_texts_all, sample_labels_all = create_sample_training_data()
+        sample_by_topic: dict = {}
+        for st, sl in zip(sample_texts_all, sample_labels_all):
+            sample_by_topic.setdefault(sl, []).append(st)
+
+        injected: dict = {}
+        for topic in TOPIC_LABELS:
+            current_count = label_counts.get(topic, 0)
+            if current_count < MIN_SAMPLES_PER_TOPIC and topic in sample_by_topic:
+                samples_to_add = sample_by_topic[topic]
+                texts.extend(samples_to_add)
+                labels.extend([topic] * len(samples_to_add))
+                injected[topic] = (current_count, current_count + len(samples_to_add))
+
+        if injected:
+            print(f"\n💉 Auto-injected sample data for topics with < {MIN_SAMPLES_PER_TOPIC} samples:")
+            for topic, (before, after) in injected.items():
+                print(f"  {topic}: {before} → {after} samples")
+            label_counts = Counter(labels)  # recompute after injection
+
+    # ── Auto-enable balanced when imbalance is severe ─────────────────────────
+    if not use_sample_data and len(label_counts) > 0:
         max_count = max(label_counts.values())
         min_count = min(label_counts.values()) if min(label_counts.values()) > 0 else 1
         imbalance_ratio = max_count / min_count
-        
+
         if imbalance_ratio > 10:
-            print(f"\n  WARNING: Severe class imbalance detected!")
+            print(f"\n⚠️  Severe class imbalance detected!")
             print(f"   Imbalance ratio: {imbalance_ratio:.1f}:1")
             print(f"   Most common: {max(label_counts, key=label_counts.get)} ({max_count} samples)")
             print(f"   Least common: {min(label_counts, key=label_counts.get)} ({min_count} samples)")
-            
+
             if not balanced:
-                print(f"\n RECOMMENDATION: Use --balanced flag to fix this:")
-                print(f"   python scripts/train_ml_classifier.py --balanced --method undersample")
-                print(f"\n   Or run: python scripts/balance_training_data.py")
+                balanced = True
+                balance_method = 'oversample'
+                print(f"   → Auto-enabling balanced training (oversample) to fix this.")
+    else:
+        imbalance_ratio = 1  # no check needed for sample data
     
     # Balance dataset if requested
     if balanced and not use_sample_data:
