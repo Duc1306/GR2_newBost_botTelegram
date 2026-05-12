@@ -820,8 +820,9 @@ async def _run_summarize(channel_username: str) -> None:
     from datetime import timedelta
     db = get_db()
 
-    # Remove any existing summary so the frontend can detect when a new one arrives
-    db["channel_summaries"].delete_many({"channel_username": channel_username})
+    # NOTE: Do NOT delete old summaries here — if generation fails the channel
+    # would be left with zero summaries and the UI would never recover.
+    # Instead we overwrite via upsert in _save_summary.
 
     try:
         if channel_username.startswith("xkw:"):
@@ -839,6 +840,8 @@ async def _run_summarize(channel_username: str) -> None:
                     {"$set": {"post_count": total, "status": "active"}},
                 )
                 logger.info(f"[Summarize] xkw:{kw} summary saved ({total} posts)")
+            else:
+                logger.warning(f"[Summarize] xkw:{kw} — _generate_summary returned None, keeping old summary")
 
         elif channel_username.startswith("x:"):
             real_username = channel_username[2:]
@@ -855,19 +858,12 @@ async def _run_summarize(channel_username: str) -> None:
                     {"$set": {"post_count": total, "status": "active"}},
                 )
                 logger.info(f"[Summarize] x:{real_username} summary saved ({total} posts)")
+            else:
+                logger.warning(f"[Summarize] x:{real_username} — _generate_summary returned None, keeping old summary")
 
         else:
-            # Telegram: clean old posts then generate summary from existing posts immediately,
-            # AND push to pending queue so worker re-fetches fresh posts in the background.
-            cutoff = datetime.utcnow() - timedelta(days=FETCH_DAYS)
-            deleted = db["posts"].delete_many({
-                "source": channel_username,
-                "created_at": {"$lt": cutoff},
-            })
-            if deleted.deleted_count:
-                logger.info(f"Cleaned {deleted.deleted_count} old posts for @{channel_username}")
-
-            # Generate summary immediately from posts already in DB
+            # Telegram: generate summary from existing posts immediately,
+            # AND push to pending queue so worker re-fetches fresh posts in background.
             total = db["posts"].count_documents({"source": channel_username})
             if total > 0:
                 logger.info(f"[Summarize] Telegram @{channel_username}: generating from {total} existing posts")
@@ -879,8 +875,12 @@ async def _run_summarize(channel_username: str) -> None:
                         {"$set": {"post_count": total, "status": "active"}},
                     )
                     logger.info(f"[Summarize] @{channel_username} summary saved ({total} posts)")
+                else:
+                    logger.warning(f"[Summarize] @{channel_username} — _generate_summary returned None, keeping old summary")
+            else:
+                logger.warning(f"[Summarize] @{channel_username} — no posts found, skipping")
 
-            # Also push to pending queue so worker re-fetches latest posts
+            # Push to pending queue so worker re-fetches latest posts
             db["pending_channels"].update_one(
                 {"channel_username": channel_username},
                 {"$set": {
@@ -1054,3 +1054,144 @@ async def mark_post_read(
             {"$set": {"read_post_ids": sub["read_post_ids"][-500:]}},
         )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Per-post AI summarize (lazy, on-demand — single post, fast ~2-3s)
+# ---------------------------------------------------------------------------
+
+_SINGLE_POST_SYSTEM_PROMPT = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
+
+NHIỆM VỤ: Viết tóm tắt báo chí chất lượng cao bằng tiếng Việt cho BÀI BÁO được cung cấp.
+
+QUY TẮC BẮT BUỘC:
+1. KHÔNG bịa thêm số liệu, tên người, địa điểm, sự kiện ngoài nội dung được cung cấp.
+2. Nếu nội dung quá ngắn (< 50 từ, chỉ có tiêu đề): đặt "thin": true, viết "lead" 1-2 câu từ tiêu đề, "body" và "key_points" để rỗng [].
+3. Nếu bài có nội dung đầy đủ: "thin": false, viết đủ cả lead + body + key_points.
+4. Câu văn khách quan, súc tích, ưu tiên số liệu và tên cụ thể (người, địa điểm, tổ chức).
+
+Trả về JSON đúng cấu trúc:
+{
+  "thin": true|false,
+  "lead": "2-3 câu nêu rõ AI/CÁI GÌ/KHI NÀO/Ở ĐÂU và tại sao quan trọng.",
+  "body": [
+    "Câu 1: Bối cảnh/nguyên nhân hoặc diễn biến chính (số liệu cụ thể).",
+    "Câu 2: Chi tiết bổ sung (trích dẫn, phản ứng các bên, tác động).",
+    "Câu 3: Ý nghĩa hoặc xu hướng tiếp theo (bỏ qua nếu không có thông tin)."
+  ],
+  "key_points": [
+    "Điểm nổi bật 1 — ưu tiên con số, tên, ngày cụ thể",
+    "Điểm nổi bật 2",
+    "Điểm nổi bật 3"
+  ]
+}
+KHÔNG thêm văn bản nào khác ngoài JSON."""
+
+
+@router.post("/{channel_username}/posts/{post_id:path}/summarize")
+async def summarize_single_post(
+    channel_username: str,
+    post_id: str,
+    current_username: str = Depends(get_current_user),
+):
+    """Tóm tắt 1 bài viết cụ thể bằng GPT (lazy, cache kết quả vào posts.ai_summary).
+    Trả về {lead, body, key_points, thin} — hoặc {"error": "..."} nếu lỗi.
+    """
+    from src.config import OPENAI_API_KEY as _OPENAI_API_KEY, OPENAI_MODEL as _OPENAI_MODEL
+    if not _OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail="OpenAI chưa được cấu hình.")
+
+    db = get_db()
+    user_doc = db["users"].find_one({"username": current_username})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    username = _normalize_username(channel_username)
+    sub = db["user_channels"].find_one({"user_id": str(user_doc["_id"]), "channel_username": username})
+    if not sub:
+        raise HTTPException(status_code=403, detail="Bạn chưa đăng ký kênh này.")
+
+    post = db["posts"].find_one({"id": post_id})
+    if not post:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài viết.")
+
+    # Return cached ai_summary if it already has real content
+    cached = post.get("ai_summary")
+    if isinstance(cached, dict) and (cached.get("lead") or cached.get("body")):
+        return cached
+
+    # Build input text for GPT
+    fa = post.get("full_article") or {}
+    article_content = (fa.get("content") or fa.get("body") or "").strip()
+    post_text = (post.get("text") or "").strip()
+
+    # If no real article content, try scraping the external link on-demand
+    if len(article_content) < 200:
+        external_link = next(
+            (l for l in (post.get("links") or [])
+             if l and l.startswith("http") and "t.me" not in l),
+            None,
+        )
+        if external_link:
+            try:
+                from src.processing.web_scraper import ArticleScraper
+                scraped = await asyncio.to_thread(ArticleScraper.scrape_article, external_link)
+                if scraped:
+                    scraped_content = (scraped.get("content") or "").strip()
+                    if len(scraped_content) > len(article_content):
+                        article_content = scraped_content
+                        if not fa.get("title") and scraped.get("title"):
+                            fa = {"title": scraped["title"]}
+                        # Cache into DB so next call is instant
+                        db["posts"].update_one(
+                            {"id": post_id},
+                            {"$set": {"full_article": {
+                                "title": scraped.get("title", ""),
+                                "content": scraped_content,
+                                "url": external_link,
+                            }}},
+                        )
+                        logger.info(f"On-demand scrape OK post={post_id} len={len(scraped_content)}")
+            except Exception as scrape_exc:
+                logger.warning(f"On-demand scrape failed post={post_id}: {scrape_exc}")
+
+    snippet = article_content if len(article_content) > len(post_text) else post_text
+    title = (fa.get("title") or post_text[:120]).strip()
+
+    if title and snippet and title.lower() not in snippet.lower()[:len(title) + 10]:
+        user_msg = f"Tiêu đề: {title}\nNội dung: {snippet[:2000]}"
+    elif snippet:
+        user_msg = f"Nội dung: {snippet[:2000]}"
+    else:
+        user_msg = f"Tiêu đề: {title}"
+
+    # Call AsyncOpenAI directly with await (NOT via run_in_executor)
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=_OPENAI_API_KEY)
+        resp = await client.chat.completions.create(
+            model=_OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _SINGLE_POST_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=800,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or ""
+        data = json.loads(raw)
+        ai_summary = {
+            "lead": (data.get("lead") or "").strip(),
+            "body": [s.strip() for s in (data.get("body") or []) if s and s.strip()],
+            "key_points": [s.strip() for s in (data.get("key_points") or []) if s and s.strip()],
+            "thin": bool(data.get("thin", False)),
+        }
+    except Exception as exc:
+        logger.error(f"summarize_single_post GPT error post={post_id}: {exc}")
+        raise HTTPException(status_code=502, detail=f"GPT lỗi: {exc}")
+
+    if ai_summary.get("lead") or ai_summary.get("body"):
+        db["posts"].update_one({"id": post_id}, {"$set": {"ai_summary": ai_summary}})
+
+    return ai_summary

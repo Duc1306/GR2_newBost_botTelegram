@@ -7,7 +7,7 @@
  *   • Hủy đăng ký kênh
  *   • Nút xem trang tin công khai
  */
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -139,13 +139,60 @@ const StatusBadge = React.memo(StatusBadgeInner);
 // Post card (used inside ChannelCard posts panel)
 // ---------------------------------------------------------------------------
 
-const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead, isRead }) {
+const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead, isRead, onPlayAudio }) {
   const [expanded, setExpanded] = useState(false);
+  const [aiSummary, setAiSummary] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [loadingAudio, setLoadingAudio] = useState(false);
   const tgLink = p.id ? `https://t.me/${channelUsername}/${p.id.split('_').at(-1)}` : null;
   const externalLink = p.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
   const primaryTopic = p.topics?.[0];
 
   const handleRead = () => { if (onRead && p.id) onRead(p.id); };
+
+  const handleSummarize = async () => {
+    if (loadingSummary || !p.id) return;
+    setLoadingSummary(true);
+    try {
+      const result = await apiPost(
+        `/user/channels/${encodeURIComponent(channelUsername)}/posts/${encodeURIComponent(p.id)}/summarize`,
+        {}
+      );
+      setAiSummary(result || {});
+    } catch (_) {
+      setAiSummary({});
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleAudio = async () => {
+    if (loadingAudio || !onPlayAudio) return;
+    setLoadingAudio(true);
+    let text = '';
+    if (aiSummary && (aiSummary.lead || aiSummary.body?.length)) {
+      const parts = [];
+      if (aiSummary.lead) parts.push(aiSummary.lead);
+      if (aiSummary.body?.length) parts.push(...aiSummary.body);
+      text = parts.join('. ');
+    } else {
+      text = (p.text || '').slice(0, 1500);
+    }
+    try {
+      const res = await fetch(`${API_BASE}/user/channels/tts`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ text: text.slice(0, 2000) }),
+      });
+      if (!res.ok) throw new Error('TTS failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      onPlayAudio({ url, title: p.text?.slice(0, 80) || 'Bài viết' });
+    } catch (_) { /* silent */ }
+    setLoadingAudio(false);
+  };
+
+  const hasSummary = aiSummary && (aiSummary.lead || aiSummary.body?.length > 0);
 
   return (
     <Card elevation={0} sx={{
@@ -196,17 +243,59 @@ const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead
             {expanded ? 'Thu gọn' : 'Xem thêm'}
           </Button>
         )}
+
+        {/* Inline AI summary block */}
+        {hasSummary && (
+          <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.25, mt: 1 }}>
+            {aiSummary.lead && (
+              <Typography variant="caption" color="#0369a1"
+                sx={{ display: 'block', fontWeight: 600, mb: 0.5, lineHeight: 1.6 }}>
+                {aiSummary.lead}
+              </Typography>
+            )}
+            {(aiSummary.body || []).map((b, i) => (
+              <Typography key={i} variant="caption" color="text.secondary"
+                sx={{ display: 'block', lineHeight: 1.6, mb: 0.25 }}>
+                {b}
+              </Typography>
+            ))}
+          </Box>
+        )}
       </CardContent>
 
-      <CardActions sx={{ px: 2, pb: 1.25, pt: 0.5, gap: 0.5 }}>
-        {tgLink && (
-          <Button size="small" startIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
-            href={tgLink} target="_blank" rel="noopener noreferrer"
-            onClick={handleRead}
-            sx={{ textTransform: 'none', fontSize: '0.75rem', color: '#0369a1', px: 1, py: 0.25 }}>
-            Telegram
+      <CardActions sx={{ px: 2, pb: 1.25, pt: 0.5, gap: 0.5, flexWrap: 'wrap' }}>
+        {/* Tóm tắt AI */}
+        <Button size="small"
+          startIcon={loadingSummary
+            ? <CircularProgress size={11} color="inherit" />
+            : <AutoAwesomeIcon sx={{ fontSize: '13px !important' }} />}
+          onClick={handleSummarize}
+          disabled={loadingSummary}
+          sx={{
+            textTransform: 'none', fontSize: '0.72rem', borderRadius: 2, px: 1, py: 0.25,
+            border: '1px solid', borderColor: hasSummary ? '#bfdbfe' : '#e5e7eb',
+            color: hasSummary ? '#0369a1' : 'text.secondary',
+          }}>
+          {loadingSummary ? 'Đang tóm…' : hasSummary ? 'Tóm tắt ✓' : 'Tóm tắt AI'}
+        </Button>
+
+        {/* Nghe – dùng nội dung tóm tắt nếu đã có, nếu chưa thì dùng text gốc */}
+        {onPlayAudio && (
+          <Button size="small"
+            startIcon={loadingAudio
+              ? <CircularProgress size={11} color="inherit" />
+              : <HeadphonesIcon sx={{ fontSize: '13px !important' }} />}
+            onClick={handleAudio}
+            disabled={loadingAudio}
+            sx={{
+              textTransform: 'none', fontSize: '0.72rem', borderRadius: 2, px: 1, py: 0.25,
+              border: '1px solid', borderColor: hasSummary ? '#bfdbfe' : '#e5e7eb',
+              color: hasSummary ? '#0369a1' : 'text.secondary',
+            }}>
+            {loadingAudio ? 'Đang tạo…' : hasSummary ? 'Nghe tóm tắt' : 'Nghe'}
           </Button>
         )}
+
         {externalLink && (
           <Button size="small" variant="contained"
             endIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
@@ -214,6 +303,14 @@ const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead
             onClick={handleRead}
             sx={{ textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1.5, py: 0.35, boxShadow: 'none' }}>
             Đọc bài gốc
+          </Button>
+        )}
+        {tgLink && (
+          <Button size="small" startIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
+            href={tgLink} target="_blank" rel="noopener noreferrer"
+            onClick={handleRead}
+            sx={{ textTransform: 'none', fontSize: '0.75rem', color: '#6b7280', px: 1, py: 0.25 }}>
+            Telegram
           </Button>
         )}
       </CardActions>
@@ -623,7 +720,7 @@ const HOURS_OPTIONS = [
   { label: '7 ngày', value: 168 },
 ];
 
-const PostsDialog = React.memo(function PostsDialog({ open, onClose, channelUsername, channelName, initialUnread }) {
+const PostsDialog = React.memo(function PostsDialog({ open, onClose, channelUsername, channelName, initialUnread, onPlayAudio }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [hours, setHours] = useState(24);
@@ -734,6 +831,7 @@ const PostsDialog = React.memo(function PostsDialog({ open, onClose, channelUser
                 channelUsername={channelUsername}
                 isRead={readIds.has(p.id)}
                 onRead={handleRead}
+                onPlayAudio={onPlayAudio}
               />
             ))}
           </Stack>
@@ -754,46 +852,9 @@ const PostsDialog = React.memo(function PostsDialog({ open, onClose, channelUser
 // ---------------------------------------------------------------------------
 
 const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSummarized, onPlayAudio }) {
-  const [summarizing, setSummarizing] = useState(false);
-  const [summaryDone, setSummaryDone] = useState(false);
-  const [localSummaryDate, setLocalSummaryDate] = useState(null);
+  // [CŨ] summaryDialogOpen — dùng bởi SummaryDialog (batch summary, đã dừng nhưng giữ để tránh lỗi)
   const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
   const [postsDialogOpen, setPostsDialogOpen] = useState(false);
-  const mountedRef = useRef(true);
-
-  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
-
-  const displaySummaryDate = localSummaryDate || ch.summary_date;
-
-  const handleSummarize = async () => {
-    setSummarizing(true);
-    setSummaryDone(false);
-    // Clear local summary so card shows "Đang tải…" rather than stale content
-    setLocalSummaryDate(null);
-    try {
-      await apiPost(`/user/channels/${ch.username}/summarize`, {});
-      // Poll until worker finishes re-fetching and generates a NEW summary.
-      // Server deletes old summaries before re-queuing, so any result = fresh.
-      for (let i = 0; i < 40; i++) {          // up to ~180 s (exponential backoff)
-        const delay = i < 5 ? 2000 : i < 15 ? 3000 : i < 30 ? 4000 : 5000;
-        await new Promise((r) => setTimeout(r, delay));
-        if (!mountedRef.current) break;
-        try {
-          const res = await apiGet(`/user/channels/${ch.username}/summary`);
-          if (res.summaries?.length > 0) {
-            setLocalSummaryDate(res.summaries[0].date);
-            break;
-          }
-        } catch (_) { /* ignore poll errors */ }
-      }
-      setSummaryDone(true);
-      if (onSummarized) onSummarized(); // silent refresh to sync post_count / status
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSummarizing(false);
-    }
-  };
 
   const handleOpenPosts = async () => {
     setPostsDialogOpen(true);
@@ -867,40 +928,26 @@ const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSumma
           </Alert>
         )}
 
-        {/* Summary status block */}
-        {summarizing ? (
-          <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.5, mb: 1, textAlign: 'center' }}>
-            <Typography variant="caption" color="#0369a1">
-              ⏳ Đang tải tin mới &amp; tạo tóm tắt AI…
-            </Typography>
-          </Box>
-        ) : displaySummaryDate ? (
+        {/* [CŨ - batch summary] Đã dừng: logic mới tóm tắt từng tin trong PostsDialog,
+             không cần hiển thị block bản tin AI tổng hợp nữa. */}
+        {false && ch.summary_date && (
           <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.5, mb: 1 }}>
-            <Box display="flex" alignItems="center" gap={0.5} mb={0.5}>
+            <Box display="flex" alignItems="center" gap={0.5} mb={0.25}>
               <AutoAwesomeIcon sx={{ fontSize: 14, color: '#0369a1' }} />
               <Typography variant="caption" fontWeight={700} color="#0369a1">
-                Bản tin AI{displaySummaryDate ? ` – ${displaySummaryDate}` : ''}
+                Bản tin AI – {ch.summary_date}
               </Typography>
             </Box>
-            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.6, display: 'block' }}>
-              Nhấn <strong>Xem đầy đủ &amp; nghe</strong> để xem tóm tắt từng bài và nghe audio.
-            </Typography>
-            <Box display="flex" justifyContent="flex-end" mt={0.75}>
+            <Box display="flex" justifyContent="flex-end">
               <Button
                 size="small"
                 startIcon={<OpenWithIcon sx={{ fontSize: '12px !important' }} />}
                 onClick={() => setSummaryDialogOpen(true)}
                 sx={{ textTransform: 'none', fontSize: '0.73rem', color: '#0369a1' }}
               >
-                Xem đầy đủ &amp; nghe
+                Xem bản tin cũ
               </Button>
             </Box>
-          </Box>
-        ) : ch.status === 'active' && (
-          <Box sx={{ bgcolor: '#fafafa', borderRadius: 1.5, p: 1.5, mb: 1, textAlign: 'center' }}>
-            <Typography variant="caption" color="text.disabled">
-              Chưa có tóm tắt — nhấn <strong>Tóm tắt AI</strong> để tạo.
-            </Typography>
           </Box>
         )}
 
@@ -932,31 +979,14 @@ const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSumma
             {(ch.username.startsWith('x:') || ch.username.startsWith('xkw:')) ? 'Xem trên X' : 'Telegram'}
           </Button>
 
-          {(ch.status === 'active') && (
+          {ch.status === 'active' && (
             <Button
               size="small"
-              startIcon={
-                summarizing
-                  ? <CircularProgress size={12} color="inherit" />
-                  : summaryDone
-                  ? <CheckIcon sx={{ fontSize: '14px !important' }} />
-                  : <AutoAwesomeIcon sx={{ fontSize: '14px !important' }} />
-              }
-              onClick={handleSummarize}
-              disabled={summarizing}
+              startIcon={<AutoAwesomeIcon sx={{ fontSize: '14px !important' }} />}
+              onClick={handleOpenPosts}
               sx={{ textTransform: 'none', fontSize: '0.78rem', color: '#0369a1' }}
             >
-              {summarizing ? 'Đang tải tin & tóm tắt…' : summaryDone ? 'Xong!' : 'Tóm tắt AI'}
-            </Button>
-          )}
-
-          {ch.status === 'active' && ch.post_count > 0 && (
-            <Button
-              size="small"
-              onClick={handleOpenPosts}
-              sx={{ textTransform: 'none', fontSize: '0.78rem', color: 'text.secondary' }}
-            >
-              {`Xem tin${unread > 0 ? ` (${unread} mới)` : ''}`}
+              {unread > 0 ? `Xem tin (${unread} mới)` : 'Xem tin & Tóm tắt AI'}
             </Button>
           )}
         </Stack>
@@ -974,15 +1004,19 @@ const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSumma
         channelUsername={ch.username}
         channelName={ch.display_name || `@${ch.username}`}
         initialUnread={unread}
-      />
-
-      <SummaryDialog
-        open={summaryDialogOpen}
-        onClose={() => setSummaryDialogOpen(false)}
-        channelUsername={ch.username}
-        channelName={ch.display_name || `@${ch.username}`}
         onPlayAudio={onPlayAudio}
       />
+
+      {/* [CŨ] SummaryDialog — batch AI summary, nút trigger đã dừng (false &&) */}
+      {false && (
+        <SummaryDialog
+          open={summaryDialogOpen}
+          onClose={() => setSummaryDialogOpen(false)}
+          channelUsername={ch.username}
+          channelName={ch.display_name || `@${ch.username}`}
+          onPlayAudio={onPlayAudio}
+        />
+      )}
     </Card>
   );
 });

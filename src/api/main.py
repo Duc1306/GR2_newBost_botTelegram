@@ -1371,6 +1371,138 @@ async def get_public_posts(
     return {"posts": posts, "total": total}
 
 
+# ---------------------------------------------------------------------------
+# Public per-post AI summarize (no auth required)
+# ---------------------------------------------------------------------------
+
+@app.post("/public/posts/{post_id}/summarize", tags=["Public"])
+@limiter.limit("30/minute")
+async def public_summarize_post(post_id: str, request: Request):
+    """Tóm tắt 1 bài viết công khai bằng GPT (lazy, cache vào posts.ai_summary).
+    Không cần đăng nhập. Rate-limit: 30 req/phút/IP.
+    """
+    import json as _json
+    from src.config import OPENAI_API_KEY as _OPENAI_API_KEY, OPENAI_MODEL as _OPENAI_MODEL
+    if not _OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail="OpenAI chưa được cấu hình.")
+
+    db = get_db()
+    post = db["posts"].find_one({"id": post_id})
+    if not post:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài viết.")
+
+    # Return cached ai_summary if already has real content
+    cached = post.get("ai_summary")
+    if isinstance(cached, dict) and (cached.get("lead") or cached.get("body")):
+        return cached
+
+    # Build content — scrape external link on-demand if no article content
+    fa = post.get("full_article") or {}
+    article_content = (fa.get("content") or fa.get("body") or "").strip()
+    post_text = (post.get("text") or "").strip()
+
+    if len(article_content) < 200:
+        external_link = next(
+            (l for l in (post.get("links") or [])
+             if l and l.startswith("http") and "t.me" not in l),
+            None,
+        )
+        if external_link:
+            try:
+                from src.processing.web_scraper import ArticleScraper
+                scraped = await asyncio.to_thread(ArticleScraper.scrape_article, external_link)
+                if scraped:
+                    scraped_content = (scraped.get("content") or "").strip()
+                    if len(scraped_content) > len(article_content):
+                        article_content = scraped_content
+                        if not fa.get("title") and scraped.get("title"):
+                            fa = {"title": scraped["title"]}
+                        db["posts"].update_one(
+                            {"id": post_id},
+                            {"$set": {"full_article": {
+                                "title": scraped.get("title", ""),
+                                "content": scraped_content,
+                                "url": external_link,
+                            }}},
+                        )
+            except Exception as _e:
+                logger.warning(f"public scrape failed post={post_id}: {_e}")
+
+    snippet = article_content if len(article_content) > len(post_text) else post_text
+    title = (fa.get("title") or post_text[:120]).strip()
+
+    if title and snippet and title.lower() not in snippet.lower()[:len(title) + 10]:
+        user_msg = f"Tiêu đề: {title}\nNội dung: {snippet[:2000]}"
+    elif snippet:
+        user_msg = f"Nội dung: {snippet[:2000]}"
+    else:
+        user_msg = f"Tiêu đề: {title}"
+
+    # Import the same system prompt defined in channels.py
+    from src.api.channels import _SINGLE_POST_SYSTEM_PROMPT
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=_OPENAI_API_KEY)
+        resp = await client.chat.completions.create(
+            model=_OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _SINGLE_POST_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=800,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or ""
+        data = _json.loads(raw)
+        ai_summary = {
+            "lead": (data.get("lead") or "").strip(),
+            "body": [s.strip() for s in (data.get("body") or []) if s and s.strip()],
+            "key_points": [s.strip() for s in (data.get("key_points") or []) if s and s.strip()],
+            "thin": bool(data.get("thin", False)),
+        }
+    except Exception as exc:
+        logger.error(f"public_summarize_post GPT error post={post_id}: {exc}")
+        raise HTTPException(status_code=502, detail=f"GPT lỗi: {exc}")
+
+    if ai_summary.get("lead") or ai_summary.get("body"):
+        db["posts"].update_one({"id": post_id}, {"$set": {"ai_summary": ai_summary}})
+
+    return ai_summary
+
+
+# ---------------------------------------------------------------------------
+# Public TTS (no auth required)
+# ---------------------------------------------------------------------------
+
+@app.post("/public/tts", tags=["Public"])
+@limiter.limit("20/minute")
+async def public_tts(request: Request):
+    """Tạo TTS MP3 cho văn bản công khai (không cần đăng nhập).
+    Rate-limit: 20 req/phút/IP.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Body JSON không hợp lệ.")
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text trống.")
+    if len(text) > 3000:
+        text = text[:3000]
+    try:
+        audio_bytes = await _generate_tts_bytes(text)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if not audio_bytes:
+        raise HTTPException(status_code=503, detail="edge-tts trả về dữ liệu trống.")
+    return StreamingResponse(
+        io.BytesIO(audio_bytes),
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": "inline; filename=tts.mp3"},
+    )
+
+
 @app.get("/public/hot-topics", tags=["Public"])
 async def get_public_hot_topics():
     """Return active hot topics list – no authentication required."""

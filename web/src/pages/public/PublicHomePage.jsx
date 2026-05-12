@@ -98,13 +98,63 @@ const SENTIMENT_COLOR = {
 
 // ─── Article Card (link-only) ────────────────────────────────────────────────
 
-const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic }) {
+const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic, onPlayAudio }) {
   const externalLink = post.links?.find((l) => !l.includes('t.me') && l.startsWith('http'));
   const title = post.full_article?.title || null;
-  // Show the actively-filtered topic as the primary chip so it always matches the selected filter
   const primaryTopic = (selectedTopic && post.topics?.includes(selectedTopic))
     ? selectedTopic
     : post.topics?.[0];
+
+  const [aiSummary, setAiSummary] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+  const handleSummarize = async () => {
+    if (loadingSummary || !post.id) return;
+    setLoadingSummary(true);
+    try {
+      const res = await fetch(`${API_BASE}/public/posts/${encodeURIComponent(post.id)}/summarize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      setAiSummary(res.ok ? data : {});
+    } catch (_) {
+      setAiSummary({});
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleAudio = async () => {
+    if (loadingAudio || !onPlayAudio) return;
+    setLoadingAudio(true);
+    let text = '';
+    if (aiSummary && (aiSummary.lead || aiSummary.body?.length)) {
+      const parts = [];
+      if (aiSummary.lead) parts.push(aiSummary.lead);
+      if (aiSummary.body?.length) parts.push(...aiSummary.body);
+      text = parts.join('. ');
+    } else {
+      text = (post.text || '').slice(0, 1500);
+    }
+    try {
+      const res = await fetch(`${API_BASE}/public/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.slice(0, 2000) }),
+      });
+      if (!res.ok) throw new Error('TTS failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      onPlayAudio({ url, title: (title || post.text?.slice(0, 80) || 'Bài viết') });
+    } catch (_) { /* silent */ }
+    setLoadingAudio(false);
+  };
+
+  const hasSummary = aiSummary && (aiSummary.lead || aiSummary.body?.length > 0);
 
   return (
     <Card
@@ -167,10 +217,60 @@ const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic }) {
         >
           {post.text}
         </Typography>
+
+        {/* Inline AI summary block */}
+        {hasSummary && (
+          <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.25, mt: 1 }}>
+            {aiSummary.lead && (
+              <Typography variant="caption" color="#0369a1"
+                sx={{ display: 'block', fontWeight: 600, mb: 0.5, lineHeight: 1.6 }}>
+                {aiSummary.lead}
+              </Typography>
+            )}
+            {(aiSummary.body || []).map((b, i) => (
+              <Typography key={i} variant="caption" color="text.secondary"
+                sx={{ display: 'block', lineHeight: 1.6, mb: 0.25 }}>
+                {b}
+              </Typography>
+            ))}
+          </Box>
+        )}
       </CardContent>
 
-      {externalLink && (
-        <CardActions sx={{ px: 2, pt: 0.5, pb: 1.5 }}>
+      <CardActions sx={{ px: 2, pt: 0.5, pb: 1.5, gap: 0.5, flexWrap: 'wrap' }}>
+        {/* Tóm tắt AI */}
+        <Button size="small"
+          startIcon={loadingSummary
+            ? <CircularProgress size={11} color="inherit" />
+            : <AutoAwesomeIcon sx={{ fontSize: '13px !important' }} />}
+          onClick={handleSummarize}
+          disabled={loadingSummary}
+          sx={{
+            textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1, py: 0.3,
+            border: '1px solid', borderColor: hasSummary ? '#bfdbfe' : '#e5e7eb',
+            color: hasSummary ? '#0369a1' : 'text.secondary',
+          }}>
+          {loadingSummary ? 'Đang tóm…' : hasSummary ? 'Tóm tắt ✓' : 'Tóm tắt AI'}
+        </Button>
+
+        {/* Nghe */}
+        {onPlayAudio && (
+          <Button size="small"
+            startIcon={loadingAudio
+              ? <CircularProgress size={11} color="inherit" />
+              : <HeadphonesIcon sx={{ fontSize: '13px !important' }} />}
+            onClick={handleAudio}
+            disabled={loadingAudio}
+            sx={{
+              textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1, py: 0.3,
+              border: '1px solid', borderColor: hasSummary ? '#bfdbfe' : '#e5e7eb',
+              color: hasSummary ? '#0369a1' : 'text.secondary',
+            }}>
+            {loadingAudio ? 'Đang tạo…' : hasSummary ? 'Nghe tóm tắt' : 'Nghe'}
+          </Button>
+        )}
+
+        {externalLink && (
           <Button
             size="small"
             variant="contained"
@@ -179,12 +279,12 @@ const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic }) {
             href={externalLink}
             target="_blank"
             rel="noopener noreferrer"
-            sx={{ textTransform: 'none', fontSize: '0.8rem', borderRadius: 2, px: 2, py: 0.5, boxShadow: 'none' }}
+            sx={{ textTransform: 'none', fontSize: '0.8rem', borderRadius: 2, px: 2, py: 0.4, boxShadow: 'none' }}
           >
             Đọc bài gốc
           </Button>
-        </CardActions>
-      )}
+        )}
+      </CardActions>
     </Card>
   );
 });
@@ -1080,7 +1180,7 @@ function ArticlesTab() {
         <Fade in>
           <Box>
             {displayPosts.map((post, idx) => (
-              <ArticleCard key={post._id || idx} post={post} selectedTopic={selectedTopic} />
+              <ArticleCard key={post._id || idx} post={post} selectedTopic={selectedTopic} onPlayAudio={(p) => setAudioPlayer(p)} />
             ))}
             {searchResults === null && totalPages > 1 && (
               <Box display="flex" flexDirection="column" alignItems="center" gap={1} mt={2} mb={4}>
