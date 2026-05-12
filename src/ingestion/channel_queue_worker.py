@@ -37,7 +37,7 @@ from src.processing.topic_classifier import classify_post_topics
 
 POLL_INTERVAL    = int(os.getenv("QUEUE_POLL_INTERVAL", "30"))    # seconds — pending queue poll
 MAX_ATTEMPTS     = int(os.getenv("QUEUE_MAX_ATTEMPTS", "3"))
-SUMMARY_POSTS    = int(os.getenv("SUMMARY_MAX_POSTS", "100"))  # posts fed to AI
+SUMMARY_POSTS    = int(os.getenv("SUMMARY_MAX_POSTS", "15"))   # posts fed to AI
 REFRESH_INTERVAL = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "43200"))  # 12 hours = 2× per day
 
 
@@ -322,9 +322,9 @@ async def _generate_summary(channel_username: str, db) -> Optional[dict]:
     result.pop("_filtered_posts", None)
     result.pop("_used_posts", None)
 
-    # ── Step 1: Build link_posts list (100 bài hiển thị) ───────────────────
-    AI_SUMMARY_LIMIT = 100  # gọi GPT cho tất cả 100 bài
-    DISPLAY_LIMIT    = 100  # tổng bài lưu vào dialog (paginated 20/trang)
+    # ── Step 1: Build link_posts list (15 bài hiển thị) ────────────────────
+    AI_SUMMARY_LIMIT = 15   # gọi GPT cho 15 bài mới nhất
+    DISPLAY_LIMIT    = 15   # tổng bài lưu vào dialog
     link_posts = []
     for i, p in enumerate(recent[:DISPLAY_LIMIT]):
         links = p.get("links") or []
