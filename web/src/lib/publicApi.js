@@ -35,10 +35,13 @@ export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false
  * Fetch only posts that have external links, optionally filtered by topic.
  * Returns { posts: Array, total: number }
  */
-export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = '', signal) {
+export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = '', signal, platform = '', dateFrom = '', dateTo = '') {
   const params = new URLSearchParams({ limit, skip, link_only: 'true' });
   if (topic) params.set('topic', topic);
   if (q) params.set('q', q);
+  if (platform && platform !== 'all') params.set('platform', platform);
+  if (dateFrom) params.set('date_from', dateFrom);
+  if (dateTo) params.set('date_to', dateTo);
   const res = await fetch(`${API_BASE}/public/posts?${params}`, { signal });
   if (!res.ok) throw new Error('Failed to fetch article posts');
   return res.json();
@@ -47,11 +50,35 @@ export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = ''
 /**
  * Search posts (public endpoint).
  */
-export async function searchPublicPosts(q, limit = 20, skip = 0, signal) {
+export async function searchPublicPosts(q, limit = 20, skip = 0, signal, platform = '', dateFrom = '', dateTo = '') {
   const params = new URLSearchParams({ q, limit, skip });
+  if (platform && platform !== 'all') params.set('platform', platform);
+  if (dateFrom) params.set('date_from', dateFrom);
+  if (dateTo) params.set('date_to', dateTo);
   const res = await fetch(`${API_BASE}/public/posts?${params}`, { signal });
   if (!res.ok) throw new Error('Search failed');
   return res.json();
+}
+
+/**
+ * Search X (Twitter) posts.
+ * - With query: triggers a live Apify fetch via /public/x/search, then returns results.
+ *   Results are cached 5 min server-side so subsequent calls don't re-hit Apify.
+ * - Without query: returns latest X posts from DB via /public/posts.
+ */
+export async function searchXPosts(q = '', skip = 0, limit = 20, signal) {
+  if (q && q.trim()) {
+    // Live fetch from Apify
+    const params = new URLSearchParams({ q: q.trim(), limit, skip });
+    const res = await fetch(`${API_BASE}/public/x/search?${params}`, { signal });
+    if (!res.ok) throw new Error('Failed to fetch X posts');
+    return res.json(); // { posts, total, live, q }
+  }
+  // No query — just show latest X posts from DB
+  const params = new URLSearchParams({ platform: 'twitter', limit, skip });
+  const res = await fetch(`${API_BASE}/public/posts?${params}`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch X posts');
+  return res.json(); // { posts, total }
 }
 
 /**
@@ -104,4 +131,110 @@ export async function fetchPostTopics(signal) {
   const res = await fetch(`${API_BASE}/public/post-topics`, { signal });
   if (!res.ok) throw new Error('Failed to fetch post topics');
   return res.json();
+}
+
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+export function isLoggedIn() {
+  return !!localStorage.getItem('auth_token');
+}
+
+function authHeaders() {
+  const token = localStorage.getItem('auth_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// ─── Bookmark API (DB-based, requires login) ──────────────────────────────────
+
+// In-memory cache of bookmarked post IDs so we don't call the API per card
+let _bookmarkIdsCache = null;    // null = not loaded yet; [] = loaded (possibly empty)
+let _bookmarkIdsPromise = null;  // in-flight promise — prevents stampede from simultaneous card mounts
+
+export function invalidateBookmarkCache() {
+  _bookmarkIdsCache = null;
+  _bookmarkIdsPromise = null;
+}
+
+export async function fetchBookmarkIds(signal) {
+  if (!isLoggedIn()) return new Set();
+  if (_bookmarkIdsCache !== null) return new Set(_bookmarkIdsCache);
+  // All concurrent callers share the same in-flight request instead of firing their own
+  if (_bookmarkIdsPromise) return _bookmarkIdsPromise;
+
+  _bookmarkIdsPromise = fetch(`${API_BASE}/user/bookmarks/ids`, { headers: authHeaders(), signal })
+    .then(async (res) => {
+      if (!res.ok) { _bookmarkIdsCache = []; return new Set(); }
+      const data = await res.json();
+      _bookmarkIdsCache = data.post_ids || [];
+      return new Set(_bookmarkIdsCache);
+    })
+    .catch(() => {
+      _bookmarkIdsCache = []; // stop retrying on any error
+      return new Set();
+    })
+    .finally(() => {
+      _bookmarkIdsPromise = null;
+    });
+
+  return _bookmarkIdsPromise;
+}
+
+export async function fetchBookmarks(signal) {
+  if (!isLoggedIn()) return [];
+  try {
+    const res = await fetch(`${API_BASE}/user/bookmarks`, { headers: authHeaders(), signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.posts || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addBookmark(postId) {
+  if (!isLoggedIn()) return false;
+  try {
+    const res = await fetch(`${API_BASE}/user/bookmarks`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ post_id: postId }),
+    });
+    if (res.ok) {
+      if (_bookmarkIdsCache !== null) _bookmarkIdsCache = [..._bookmarkIdsCache, postId];
+    }
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function removeBookmark(postId) {
+  if (!isLoggedIn()) return false;
+  try {
+    const res = await fetch(`${API_BASE}/user/bookmarks/${encodeURIComponent(postId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (res.ok && _bookmarkIdsCache !== null) {
+      _bookmarkIdsCache = _bookmarkIdsCache.filter((id) => id !== postId);
+    }
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchReadHistory(limit = 50, signal) {
+  if (!isLoggedIn()) return [];
+  try {
+    const res = await fetch(`${API_BASE}/user/channels/read-history?limit=${limit}`, {
+      headers: authHeaders(),
+      signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
 }

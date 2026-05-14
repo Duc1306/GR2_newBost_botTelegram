@@ -192,28 +192,44 @@ async def _batch_summarize_posts(posts_data: list[dict], loop) -> list[dict]:
 
     SYSTEM_PROMPT = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
 
-NHIỆM VỤ: Viết tóm tắt báo chí chất lượng cao bằng tiếng Việt cho BÀI BÁO được cung cấp.
+NHIỆM VỤ: Đọc BÀI BÁO được cung cấp, viết tóm tắt báo chí HOÀN CHỈNH, ĐẦY ĐỦ CHI TIẾT bằng tiếng Việt.
 
 QUY TẮC BẮT BUỘC:
 1. KHÔNG bịa thêm số liệu, tên người, địa điểm, sự kiện ngoài nội dung được cung cấp.
-2. Nếu nội dung quá ngắn (< 50 từ, chỉ có tiêu đề): đặt "thin": true, viết "lead" 1-2 câu từ tiêu đề, "body" và "key_points" để rỗng [].
-3. Nếu bài có nội dung đầy đủ: "thin": false, viết đủ cả lead + body + key_points.
-4. Câu văn khách quan, súc tích, ưu tiên số liệu và tên cụ thể (người, địa điểm, tổ chức).
+2. Nếu nội dung quá ngắn (< 50 từ): đặt "thin": true, chỉ viết "lead" 1-2 câu, còn lại để rỗng [] — nhưng vẫn có "conclusion", "sentiment", "risk_score".
+3. Nếu bài có nội dung đầy đủ: "thin": false, viết đủ tất cả các trường theo định dạng.
+4. Câu văn rõ ràng, khách quan, súc tích nhưng ĐẦY ĐỦ.
+   Độ dài bắt buộc (khi thin=false):
+   - lead: 3-4 câu, nêu rõ WHO/WHAT/WHEN/WHERE và tại sao quan trọng
+   - body: 5-7 đoạn (mỗi đoạn 2-4 câu), bao quát toàn bộ nội dung bài báo
+   - conclusion: 2-3 câu nhận định xu hướng tiếp theo và tác động
+   - key_points: 5-7 điểm nổi bật, ưu tiên số liệu cụ thể
+5. Đánh giá "sentiment": positive/negative/neutral/mixed dựa trên nội dung sự kiện.
+6. Đánh giá "risk_score" từ 1-10: mức độ rủi ro/tác động tiêu cực của sự kiện đối với xã hội/kinh tế/chính trị. 1=không rủi ro, 10=rủi ro cực kỳ cao.
 
-Trả về JSON đúng cấu trúc:
+ĐỊNH DẠNG ĐẦU RA (Chỉ trả về JSON, không thêm văn bản nào khác):
 {
   "thin": true|false,
-  "lead": "2-3 câu nêu rõ AI/CÁI GÌ/KHI NÀO/Ở ĐÂU và tại sao quan trọng.",
+  "lead": "3-4 câu mở đầu nêu rõ ai, cái gì, khi nào, ở đâu, và tại sao quan trọng.",
   "body": [
-    "Câu 1: Bối cảnh/nguyên nhân hoặc diễn biến chính (số liệu cụ thể).",
-    "Câu 2: Chi tiết bổ sung (trích dẫn, phản ứng các bên, tác động).",
-    "Câu 3: Ý nghĩa hoặc xu hướng tiếp theo (bỏ qua nếu không có thông tin)."
+    "Bối cảnh và nguyên nhân dẫn đến sự kiện (số liệu cụ thể).",
+    "Diễn biến chính và các mốc thời gian quan trọng.",
+    "Số liệu, thống kê và bằng chứng cụ thể được đề cập trong bài.",
+    "Trích dẫn phát biểu chính thức từ các bên liên quan.",
+    "Phản ứng dư luận và tác động thực tế.",
+    "Phân tích chuyên sâu hoặc nhận định từ chuyên gia (bỏ qua nếu không có).",
+    "Tổng hợp toàn cảnh và những điểm quan trọng nhất của sự kiện."
   ],
+  "conclusion": "2-3 câu nhận định xu hướng tiếp theo và ý nghĩa của sự kiện.",
   "key_points": [
     "Điểm nổi bật 1 — ưu tiên con số, tên, ngày cụ thể",
     "Điểm nổi bật 2",
-    "Điểm nổi bật 3"
-  ]
+    "Điểm nổi bật 3",
+    "Điểm nổi bật 4",
+    "Điểm nổi bật 5"
+  ],
+  "sentiment": "neutral|positive|negative|mixed",
+  "risk_score": 5
 }
 KHÔNG thêm văn bản nào khác ngoài JSON."""
 
@@ -242,7 +258,10 @@ KHÔNG thêm văn bản nào khác ngoài JSON."""
         return {
             "lead": (data.get("lead") or "").strip(),
             "body": [s.strip() for s in (data.get("body") or []) if s and s.strip()],
+            "conclusion": (data.get("conclusion") or "").strip(),
             "key_points": [s.strip() for s in (data.get("key_points") or []) if s and s.strip()],
+            "sentiment": (data.get("sentiment") or "neutral").strip(),
+            "risk_score": int(data.get("risk_score") or 5),
             "thin": bool(data.get("thin", False)),
         }
 

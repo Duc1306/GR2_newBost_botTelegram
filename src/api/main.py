@@ -1224,6 +1224,83 @@ async def update_settings(
     
     return {"success": True, "updated_fields": list(updates.keys())}
 
+
+# =============================================================================
+# Bookmark / Save Endpoints (Authenticated Users)
+# =============================================================================
+
+class BookmarkRequest(_BM):
+    post_id: str
+
+@app.post("/user/bookmarks", tags=["User"])
+async def add_bookmark(
+    body: BookmarkRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Lưu bài viết vào danh sách bookmark của user."""
+    db = get_db()
+    db["bookmarks"].update_one(
+        {"username": current_user, "post_id": body.post_id},
+        {"$set": {"username": current_user, "post_id": body.post_id, "created_at": datetime.utcnow()}},
+        upsert=True,
+    )
+    return {"success": True, "post_id": body.post_id}
+
+
+@app.get("/user/bookmarks", tags=["User"])
+async def get_bookmarks(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: str = Depends(get_current_user),
+):
+    """Lấy danh sách bài viết đã lưu của user."""
+    db = get_db()
+    bookmarks_coll = db["bookmarks"]
+    posts_coll = db["posts"]
+
+    bookmark_docs = list(
+        bookmarks_coll.find({"username": current_user})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
+    )
+    total = bookmarks_coll.count_documents({"username": current_user})
+    post_ids = [b["post_id"] for b in bookmark_docs]
+
+    projection = {
+        "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
+        "created_at": 1, "links": 1, "topics": 1, "lang": 1,
+        "full_article": 1, "platform": 1, "media": 1,
+    }
+    posts = []
+    for pid in post_ids:
+        p = posts_coll.find_one({"id": pid}, projection)
+        if p:
+            p["_id"] = str(p["_id"])
+            posts.append(p)
+
+    return {"posts": posts, "total": total, "post_ids": post_ids}
+
+
+@app.delete("/user/bookmarks/{post_id}", tags=["User"])
+async def remove_bookmark(
+    post_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Xoá bookmark."""
+    db = get_db()
+    db["bookmarks"].delete_one({"username": current_user, "post_id": post_id})
+    return {"success": True, "post_id": post_id}
+
+
+@app.get("/user/bookmarks/ids", tags=["User"])
+async def get_bookmark_ids(current_user: str = Depends(get_current_user)):
+    """Trả về danh sách post_id đã bookmark (dùng để sync trạng thái ⭐ trên UI)."""
+    db = get_db()
+    ids = [b["post_id"] for b in db["bookmarks"].find({"username": current_user}, {"post_id": 1})]
+    return {"post_ids": ids}
+
+
 # =============================================================================
 # Hot Topics - Default seed data
 # =============================================================================
@@ -1333,6 +1410,9 @@ async def get_public_posts(
     topic: Optional[str] = Query(None, description="Lọc theo topic"),
     lang: Optional[str] = Query(None, description="Ngôn ngữ (vi, en)"),
     link_only: bool = Query(False, description="Chỉ bài có link bên ngoài"),
+    platform: Optional[str] = Query(None, description="Lọc theo platform: telegram | twitter | x | all"),
+    date_from: Optional[str] = Query(None, description="Từ ngày (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Đến ngày (YYYY-MM-DD)"),
     limit: int = Query(20, ge=1, le=100),
     skip: int = Query(0, ge=0),
 ):
@@ -1348,6 +1428,29 @@ async def get_public_posts(
     if link_only:
         # Only posts that have at least one external (non-t.me) link
         query["links"] = {"$elemMatch": {"$regex": "^https?://", "$not": {"$regex": "t\\.me"}}}
+
+    # Platform filter: x/twitter → match both stored values
+    if platform and platform not in ("all", ""):
+        if platform in ("x", "twitter"):
+            query["platform"] = {"$in": ["x", "twitter"]}
+        else:
+            query["platform"] = platform
+
+    # Date range filter
+    if date_from or date_to:
+        date_filter: dict = {}
+        if date_from:
+            try:
+                date_filter["$gte"] = datetime.fromisoformat(date_from)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                date_filter["$lte"] = datetime.fromisoformat(date_to + "T23:59:59")
+            except ValueError:
+                pass
+        if date_filter:
+            query["created_at"] = date_filter
 
     if q:
         query["$text"] = {"$search": q}
@@ -1369,6 +1472,76 @@ async def get_public_posts(
         posts.append(p)
 
     return {"posts": posts, "total": total}
+
+
+# ---------------------------------------------------------------------------
+# Public X live search — triggers Apify fetch then returns results from DB
+# ---------------------------------------------------------------------------
+
+# In-memory cache: { normalized_keyword: fetch_timestamp }
+_x_search_cache: dict = {}
+_X_SEARCH_CACHE_TTL = 300  # seconds — same keyword won't re-fetch within 5 min
+
+@app.get("/public/x/search", tags=["Public"])
+@limiter.limit("5/minute")
+async def public_x_live_search(
+    request: Request,
+    q: str = Query(..., min_length=2, max_length=100, description="Hashtag hoặc từ khóa X"),
+    limit: int = Query(20, ge=1, le=50),
+    skip: int = Query(0, ge=0),
+):
+    """
+    Tìm kiếm live trên X (Twitter) qua Apify.
+    - Lần đầu hoặc sau 5 phút: kích hoạt Apify fetch (~20-60s), lưu vào DB, trả về kết quả.
+    - Trong 5 phút kể từ lần fetch cuối: chỉ trả về từ DB (tránh lạm dụng Apify).
+    - Rate-limit: 5 req/phút/IP.
+    """
+    from src.config import APIFY_API_TOKEN as _APIFY_TOKEN
+
+    norm_q = q.strip().lower()
+    now = datetime.utcnow().timestamp()
+    cached_at = _x_search_cache.get(norm_q)
+    cache_hit = cached_at is not None and (now - cached_at) < _X_SEARCH_CACHE_TTL
+
+    if not cache_hit and _APIFY_TOKEN:
+        try:
+            from src.ingestion.x_worker import ingest_once
+            await ingest_once(
+                mode="keyword",
+                keywords=[q.strip()],
+                max_items=30,
+                language="",          # no language filter — hashtag search is global
+            )
+            _x_search_cache[norm_q] = now
+        except Exception as exc:
+            logger.error(f"[public/x/search] Apify error for '{q}': {exc}")
+            # Fall through to DB query even on error (show stale/empty results)
+
+    # Query DB for matching posts
+    db = get_db()
+    coll = db["posts"]
+    query_filter: dict = {"platform": {"$in": ["x", "twitter"]}}
+    if q:
+        query_filter["$text"] = {"$search": q.strip()}
+
+    projection = {
+        "_id": 1, "id": 1, "text": 1, "source": 1, "author": 1,
+        "created_at": 1, "links": 1, "topics": 1, "lang": 1,
+        "full_article": 1, "platform": 1, "media": 1,
+    }
+    total = coll.count_documents(query_filter)
+    cursor = coll.find(query_filter, projection).sort("created_at", -1).skip(skip).limit(limit)
+    posts = []
+    for p in cursor:
+        p["_id"] = str(p["_id"])
+        posts.append(p)
+
+    return {
+        "posts": posts,
+        "total": total,
+        "live": not cache_hit,      # true = results just fetched from Apify
+        "q": q.strip(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1438,18 +1611,20 @@ async def public_summarize_post(post_id: str, request: Request):
     else:
         user_msg = f"Tiêu đề: {title}"
 
-    # Import the same system prompt defined in channels.py
-    from src.api.channels import _SINGLE_POST_SYSTEM_PROMPT
+    # Use X-specific prompt for tweets, standard prompt for articles
+    platform = (post.get("platform") or "").lower()
+    from src.api.channels import _SINGLE_POST_SYSTEM_PROMPT, _X_POST_SYSTEM_PROMPT
+    system_prompt = _X_POST_SYSTEM_PROMPT if platform in ("x", "twitter") else _SINGLE_POST_SYSTEM_PROMPT
     try:
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=_OPENAI_API_KEY)
         resp = await client.chat.completions.create(
             model=_OPENAI_MODEL,
             messages=[
-                {"role": "system", "content": _SINGLE_POST_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=800,
+            max_tokens=1500,
             temperature=0.2,
             response_format={"type": "json_object"},
         )
@@ -1458,7 +1633,10 @@ async def public_summarize_post(post_id: str, request: Request):
         ai_summary = {
             "lead": (data.get("lead") or "").strip(),
             "body": [s.strip() for s in (data.get("body") or []) if s and s.strip()],
+            "conclusion": (data.get("conclusion") or "").strip(),
             "key_points": [s.strip() for s in (data.get("key_points") or []) if s and s.strip()],
+            "sentiment": (data.get("sentiment") or "neutral").strip(),
+            "risk_score": int(data.get("risk_score") or 5),
             "thin": bool(data.get("thin", False)),
         }
     except Exception as exc:
@@ -2538,6 +2716,44 @@ async def get_ml_metrics(current_user: str = Depends(get_current_admin_user)):
         return report
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Không thể đọc file báo cáo: {exc}")
+
+
+# =============================================================================
+# Admin: X (Twitter) Scrape on-demand
+# =============================================================================
+
+class XFetchRequest(_BM):
+    keywords: List[str]
+    max_items: int = 50
+    language: str = "vi"
+
+@app.post("/admin/x/fetch", tags=["Admin"])
+async def admin_fetch_x(
+    body: XFetchRequest,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """
+    Kích hoạt cào tweet theo từ khóa ngay lập tức (Apify Actor A).
+    Trả về số bài đã lưu vào MongoDB.
+    """
+    from src.config import APIFY_API_TOKEN as _APIFY_TOKEN
+    if not _APIFY_TOKEN:
+        raise HTTPException(status_code=503, detail="APIFY_API_TOKEN chưa được cấu hình trong .env")
+    if not body.keywords:
+        raise HTTPException(status_code=400, detail="Cần ít nhất 1 từ khóa")
+
+    try:
+        from src.ingestion.x_worker import ingest_once
+        saved = await ingest_once(
+            mode="keyword",
+            keywords=body.keywords,
+            max_items=body.max_items,
+            language=body.language,
+        )
+        return {"saved": saved, "keywords": body.keywords}
+    except Exception as exc:
+        logger.error(f"[admin/x/fetch] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # =============================================================================

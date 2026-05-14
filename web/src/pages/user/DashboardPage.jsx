@@ -42,6 +42,8 @@ import {
   Grid,
   Collapse,
   Pagination,
+  Tab,
+  Tabs,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -64,9 +66,20 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PublicIcon from '@mui/icons-material/Public';
 import GroupsIcon from '@mui/icons-material/Groups';
 import HeadphonesIcon from '@mui/icons-material/Headphones';
+import BookmarkBorderIcon from '@mui/icons-material/BookmarkBorder';
+import BookmarkIcon from '@mui/icons-material/Bookmark';
+import HistoryIcon from '@mui/icons-material/History';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import AudioPlayer from '../../components/AudioPlayer.jsx';
+import {
+  fetchBookmarks,
+  fetchBookmarkIds,
+  addBookmark,
+  removeBookmark,
+  invalidateBookmarkCache,
+  fetchReadHistory,
+} from '../../lib/publicApi.js';
 
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -144,11 +157,31 @@ const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead
   const [aiSummary, setAiSummary] = useState(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(false);
+  const [bookmarked, setBookmarked] = useState(false);
   const tgLink = p.id ? `https://t.me/${channelUsername}/${p.id.split('_').at(-1)}` : null;
   const externalLink = p.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
   const primaryTopic = p.topics?.[0];
+  const postId = p.id;
+
+  // Load initial bookmark state
+  useEffect(() => {
+    if (!postId) return;
+    fetchBookmarkIds().then((ids) => setBookmarked(ids.has(postId)));
+  }, [postId]);
 
   const handleRead = () => { if (onRead && p.id) onRead(p.id); };
+
+  const handleBookmark = async () => {
+    const newState = !bookmarked;
+    setBookmarked(newState);
+    if (newState) {
+      const ok = await addBookmark(postId);
+      if (!ok) setBookmarked(false);
+    } else {
+      const ok = await removeBookmark(postId);
+      if (!ok) setBookmarked(true);
+    }
+  };
 
   const handleSummarize = async () => {
     if (loadingSummary || !p.id) return;
@@ -264,6 +297,14 @@ const PostCard = React.memo(function PostCard({ post: p, channelUsername, onRead
       </CardContent>
 
       <CardActions sx={{ px: 2, pb: 1.25, pt: 0.5, gap: 0.5, flexWrap: 'wrap' }}>
+        {/* Bookmark */}
+        <Tooltip title={bookmarked ? 'Bỏ lưu' : 'Lưu bài'}>
+          <IconButton size="small" onClick={handleBookmark}
+            sx={{ color: bookmarked ? '#f59e0b' : 'text.disabled', mr: 0.5 }}>
+            {bookmarked ? <BookmarkIcon sx={{ fontSize: 18 }} /> : <BookmarkBorderIcon sx={{ fontSize: 18 }} />}
+          </IconButton>
+        </Tooltip>
+
         {/* Tóm tắt AI */}
         <Button size="small"
           startIcon={loadingSummary
@@ -1022,12 +1063,228 @@ const ChannelCard = React.memo(function ChannelCard({ ch, onUnsubscribe, onSumma
 });
 
 // ---------------------------------------------------------------------------
+// Bookmarks tab component (Đã lưu)
+// ---------------------------------------------------------------------------
+
+function BookmarksDashTab() {
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const data = await fetchBookmarks();
+    setPosts(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleRemove = useCallback(async (postId) => {
+    // Instant removal from list
+    setPosts((prev) => prev.filter((p) => (p.id || p._id) !== postId));
+    await removeBookmark(postId);
+    invalidateBookmarkCache();
+  }, []);
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 2 }}>
+        {[1, 2, 3].map((i) => <Skeleton key={i} variant="rectangular" height={110} sx={{ borderRadius: 2 }} />)}
+      </Box>
+    );
+  }
+
+  if (posts.length === 0) {
+    return (
+      <Box textAlign="center" py={8}>
+        <BookmarkBorderIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+        <Typography color="text.secondary" variant="subtitle2">Chưa có bài nào được lưu.</Typography>
+        <Typography variant="caption" color="text.disabled">
+          Nhấn biểu tượng <BookmarkBorderIcon sx={{ fontSize: 12, verticalAlign: 'middle' }} /> trên bất kỳ bài viết nào để lưu.
+        </Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box>
+      <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+        <Typography variant="subtitle2" color="text.secondary">{posts.length} bài đã lưu</Typography>
+        <Tooltip title="Làm mới">
+          <IconButton size="small" onClick={load}><HistoryIcon fontSize="small" /></IconButton>
+        </Tooltip>
+      </Box>
+      {posts.map((post) => {
+        const postId = post.id || post._id;
+        const summary = post.ai_summary;
+        const externalLink = post.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
+        return (
+          <Card key={postId} elevation={0} sx={{
+            mb: 2, borderRadius: 2, border: '1px solid #e5e7eb', bgcolor: 'white',
+            '&:hover': { boxShadow: '0 4px 14px rgba(0,0,0,0.08)' },
+          }}>
+            <CardContent sx={{ pb: 0, pt: 1.5, px: 2 }}>
+              <Box display="flex" alignItems="center" gap={0.75} mb={0.75} flexWrap="wrap">
+                {post.topics?.[0] && (
+                  <Chip label={post.topics[0]} size="small"
+                    sx={{ height: 18, fontSize: '0.63rem', fontWeight: 600, bgcolor: '#fef3c7', color: '#92400e' }} />
+                )}
+                {post.channel_username && (
+                  <Chip label={`@${post.channel_username}`} size="small"
+                    sx={{ height: 18, fontSize: '0.63rem', bgcolor: '#f3f4f6', color: 'text.secondary' }} />
+                )}
+              </Box>
+              {summary?.lead && (
+                <Typography variant="body2" fontWeight={600} color="text.primary" gutterBottom sx={{ lineHeight: 1.55, fontSize: '0.84rem' }}>
+                  {summary.lead}
+                </Typography>
+              )}
+              <Typography variant="body2" color="text.secondary" sx={{
+                display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                lineHeight: 1.65, fontSize: '0.82rem', whiteSpace: 'pre-line',
+              }}>
+                {post.text}
+              </Typography>
+            </CardContent>
+            <CardActions sx={{ px: 2, pb: 1.25, pt: 0.5, gap: 0.5 }}>
+              <Tooltip title="Bỏ lưu">
+                <IconButton size="small" onClick={() => handleRemove(postId)}
+                  sx={{ color: '#f59e0b', mr: 0.5 }}>
+                  <BookmarkIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+              {externalLink && (
+                <Button size="small" variant="contained"
+                  endIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
+                  href={externalLink} target="_blank" rel="noopener noreferrer"
+                  sx={{ textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1.5, py: 0.35, boxShadow: 'none' }}>
+                  Đọc bài gốc
+                </Button>
+              )}
+            </CardActions>
+          </Card>
+        );
+      })}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Read history tab component (Đã đọc)
+// ---------------------------------------------------------------------------
+
+function ReadHistoryTab() {
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const data = await fetchReadHistory(100);
+    setPosts(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 2 }}>
+        {[1, 2, 3].map((i) => <Skeleton key={i} variant="rectangular" height={100} sx={{ borderRadius: 2 }} />)}
+      </Box>
+    );
+  }
+
+  if (posts.length === 0) {
+    return (
+      <Box textAlign="center" py={8}>
+        <HistoryIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+        <Typography color="text.secondary" variant="subtitle2">Chưa có bài nào được đọc.</Typography>
+        <Typography variant="caption" color="text.disabled">
+          Mở bài viết từ một kênh — hệ thống sẽ tự động lưu lại.
+        </Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box>
+      <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+        <Typography variant="subtitle2" color="text.secondary">{posts.length} bài đã đọc</Typography>
+        <Tooltip title="Làm mới">
+          <IconButton size="small" onClick={load}><RefreshIcon fontSize="small" /></IconButton>
+        </Tooltip>
+      </Box>
+      {posts.map((post) => {
+        const postId = post.id || post._id;
+        const summary = post.ai_summary;
+        const externalLink = post.links?.find((l) => l && !l.includes('t.me') && l.startsWith('http'));
+        const tgLink = post.channel_username && post.id
+          ? `https://t.me/${post.channel_username}/${post.id.split('_').at(-1)}`
+          : null;
+        return (
+          <Card key={postId} elevation={0} sx={{
+            mb: 2, borderRadius: 2, border: '1px solid #e5e7eb', bgcolor: '#fafafa',
+            '&:hover': { boxShadow: '0 4px 14px rgba(0,0,0,0.06)' },
+          }}>
+            <CardContent sx={{ pb: 0, pt: 1.5, px: 2 }}>
+              <Box display="flex" alignItems="center" gap={0.75} mb={0.75} flexWrap="wrap">
+                <Chip label="Đã đọc" size="small"
+                  sx={{ height: 18, fontSize: '0.6rem', fontWeight: 600, bgcolor: '#f3f4f6', color: 'text.disabled' }} />
+                {post.topics?.[0] && (
+                  <Chip label={post.topics[0]} size="small"
+                    sx={{ height: 18, fontSize: '0.63rem', fontWeight: 600, bgcolor: '#fef3c7', color: '#92400e' }} />
+                )}
+                {post.channel_username && (
+                  <Chip label={`@${post.channel_username}`} size="small"
+                    sx={{ height: 18, fontSize: '0.63rem', bgcolor: '#f3f4f6', color: 'text.secondary' }} />
+                )}
+              </Box>
+              {summary?.lead && (
+                <Typography variant="body2" fontWeight={600} color="text.secondary" gutterBottom sx={{ lineHeight: 1.55, fontSize: '0.84rem' }}>
+                  {summary.lead}
+                </Typography>
+              )}
+              <Typography variant="body2" color="text.disabled" sx={{
+                display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                lineHeight: 1.65, fontSize: '0.82rem', whiteSpace: 'pre-line',
+              }}>
+                {post.text}
+              </Typography>
+            </CardContent>
+            <CardActions sx={{ px: 2, pb: 1.25, pt: 0.5, gap: 0.5 }}>
+              {externalLink && (
+                <Button size="small" variant="outlined"
+                  endIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
+                  href={externalLink} target="_blank" rel="noopener noreferrer"
+                  sx={{ textTransform: 'none', fontSize: '0.75rem', borderRadius: 2, px: 1.5, py: 0.3, borderColor: '#e5e7eb', color: 'text.secondary' }}>
+                  Đọc bài gốc
+                </Button>
+              )}
+              {tgLink && (
+                <Button size="small"
+                  endIcon={<OpenInNewIcon sx={{ fontSize: '13px !important' }} />}
+                  href={tgLink} target="_blank" rel="noopener noreferrer"
+                  sx={{ textTransform: 'none', fontSize: '0.75rem', color: '#9ca3af', px: 1, py: 0.25 }}>
+                  Telegram
+                </Button>
+              )}
+            </CardActions>
+          </Card>
+        );
+      })}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  const [dashTab, setDashTab] = useState(0); // 0=Kênh, 1=Đã lưu, 2=Đã đọc
 
   const [channels, setChannels] = useState([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
@@ -1239,9 +1496,35 @@ export default function DashboardPage() {
       </AppBar>
 
       <Container maxWidth="lg" sx={{ py: 4 }}>
+        {/* ── Top header ── */}
         <Typography variant="h5" fontWeight={800} gutterBottom>
-          Kênh đang theo dõi
+          Bảng điều khiển
         </Typography>
+
+        {/* ── Main tab navigation ── */}
+        <Tabs
+          value={dashTab}
+          onChange={(_, v) => setDashTab(v)}
+          sx={{
+            mb: 3,
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+            '& .MuiTab-root': { textTransform: 'none', fontWeight: 600, fontSize: '0.9rem' },
+          }}
+        >
+          <Tab icon={<TelegramIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="Kênh theo dõi" />
+          <Tab icon={<BookmarkIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="Đã lưu" />
+          <Tab icon={<HistoryIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="Đã đọc" />
+        </Tabs>
+
+        {/* ── Tab: Đã lưu ── */}
+        {dashTab === 1 && <BookmarksDashTab />}
+
+        {/* ── Tab: Đã đọc ── */}
+        {dashTab === 2 && <ReadHistoryTab />}
+
+        {/* ── Tab: Kênh theo dõi (hidden but mounted when other tabs active) ── */}
+        <Box sx={{ display: dashTab === 0 ? 'block' : 'none' }}>
         <Typography variant="body2" color="text.secondary" mb={3}>
           Thêm kênh <strong>Telegram</strong> hoặc tài khoản <strong>X (Twitter)</strong> để AI tóm tắt nội dung mới nhất mỗi ngày.
         </Typography>
@@ -1603,6 +1886,7 @@ export default function DashboardPage() {
             ))}
           </Box>
         )}
+        </Box> {/* end dashTab === 0 wrapper */}
       </Container>
 
       {audioState && (

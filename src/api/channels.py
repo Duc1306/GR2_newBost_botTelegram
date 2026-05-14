@@ -1057,33 +1057,154 @@ async def mark_post_read(
 
 
 # ---------------------------------------------------------------------------
+# Read history — list posts the user has already read (across all channels)
+# ---------------------------------------------------------------------------
+
+@router.get("/read-history")
+async def get_read_history(
+    limit: int = Query(50, ge=1, le=200),
+    current_username: str = Depends(get_current_user),
+):
+    """Returns the last *limit* posts the user has read, newest-read first."""
+    db = get_db()
+    user_doc = db["users"].find_one({"username": current_username})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    user_id = str(user_doc["_id"])
+
+    # Collect all read_post_ids across every subscribed channel
+    subs = list(
+        db["user_channels"].find(
+            {"user_id": user_id},
+            {"channel_username": 1, "read_post_ids": 1},
+        )
+    )
+
+    # Flatten; preserve order (each list is appended oldest→newest, so reversed = newest first)
+    all_ids: list[str] = []
+    for sub in subs:
+        all_ids.extend(sub.get("read_post_ids", []))
+
+    if not all_ids:
+        return []
+
+    # Deduplicate, keep most-recently-encountered first
+    seen: set[str] = set()
+    unique_ids: list[str] = []
+    for pid in reversed(all_ids):
+        if pid not in seen:
+            seen.add(pid)
+            unique_ids.append(pid)
+        if len(unique_ids) >= limit:
+            break
+
+    # Fetch matching posts from the posts collection
+    posts_raw = list(
+        db["posts"].find(
+            {"id": {"$in": unique_ids}},
+            {
+                "_id": 0,
+                "id": 1,
+                "text": 1,
+                "source": 1,
+                "created_at": 1,
+                "topics": 1,
+                "ai_summary": 1,
+                "links": 1,
+                "channel_username": 1,
+            },
+        )
+    )
+
+    # Re-sort by read order (newest-read first)
+    order = {pid: idx for idx, pid in enumerate(unique_ids)}
+    posts_raw.sort(key=lambda p: order.get(p.get("id", ""), 999))
+
+    return posts_raw[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Per-post AI summarize (lazy, on-demand — single post, fast ~2-3s)
 # ---------------------------------------------------------------------------
 
-_SINGLE_POST_SYSTEM_PROMPT = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
+_X_POST_SYSTEM_PROMPT = """Bạn là biên tập viên mạng xã hội của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
 
-NHIỆM VỤ: Viết tóm tắt báo chí chất lượng cao bằng tiếng Việt cho BÀI BÁO được cung cấp.
+NHIỆM VỤ: Phân tích và tóm tắt một TWEET từ X (Twitter) thành bài báo ngắn HOÀN CHỈNH, ĐẦY ĐỦ bằng tiếng Việt.
 
 QUY TẮC BẮT BUỘC:
-1. KHÔNG bịa thêm số liệu, tên người, địa điểm, sự kiện ngoài nội dung được cung cấp.
-2. Nếu nội dung quá ngắn (< 50 từ, chỉ có tiêu đề): đặt "thin": true, viết "lead" 1-2 câu từ tiêu đề, "body" và "key_points" để rỗng [].
-3. Nếu bài có nội dung đầy đủ: "thin": false, viết đủ cả lead + body + key_points.
-4. Câu văn khách quan, súc tích, ưu tiên số liệu và tên cụ thể (người, địa điểm, tổ chức).
+1. LUÔN dịch nội dung sang tiếng Việt dù tweet viết bằng ngôn ngữ nào.
+2. KHÔNG bịa thêm sự kiện, số liệu, tên người ngoài nội dung tweet.
+3. Dù tweet ngắn: vẫn viết đủ lead + body + conclusion + key_points. KHÔNG để body rỗng.
+4. Body BẮT BUỘC bổ sung bối cảnh: giải thích hashtag, tên dự án, tổ chức, sự kiện liên quan nếu biết.
+5. Câu văn rõ ràng, khách quan, súc tích nhưng ĐẦY ĐỦ.
+   Độ dài bắt buộc:
+   - lead: 2-3 câu tóm tắt nội dung tweet, nêu rõ WHO/WHAT/bối cảnh
+   - body: 3-4 đoạn (mỗi đoạn 2-3 câu), bao quát bối cảnh, ý nghĩa, phản ứng
+   - conclusion: 1-2 câu nhận định xu hướng tiếp theo và ý nghĩa
+   - key_points: 3-5 điểm nổi bật, ưu tiên số liệu cụ thể
+6. Đánh giá "sentiment": positive/negative/neutral/mixed dựa trên nội dung sự kiện.
+7. Đánh giá "risk_score" từ 1-10: mức độ rủi ro/tác động tiêu cực. 1=không rủi ro, 10=rủi ro cực kỳ cao.
 
-Trả về JSON đúng cấu trúc:
+ĐỊNH DẠNG ĐẦU RA (Chỉ trả về JSON, không thêm văn bản nào khác):
 {
-  "thin": true|false,
-  "lead": "2-3 câu nêu rõ AI/CÁI GÌ/KHI NÀO/Ở ĐÂU và tại sao quan trọng.",
+  "lead": "2-3 câu mở đầu tóm tắt nội dung tweet bằng tiếng Việt, nêu rõ ai, cái gì.",
   "body": [
-    "Câu 1: Bối cảnh/nguyên nhân hoặc diễn biến chính (số liệu cụ thể).",
-    "Câu 2: Chi tiết bổ sung (trích dẫn, phản ứng các bên, tác động).",
-    "Câu 3: Ý nghĩa hoặc xu hướng tiếp theo (bỏ qua nếu không có thông tin)."
+    "Bối cảnh hoặc giải thích thêm về chủ đề/hashtag/tổ chức liên quan (2-3 câu).",
+    "Ý nghĩa thực tế hoặc diễn biến liên quan đến thông điệp (2-3 câu).",
+    "Phản ứng cộng đồng hoặc xu hướng mà tweet phản ánh (2-3 câu).",
+    "Điểm đáng chú ý khác hoặc tác động tiềm năng (bỏ qua nếu không có thêm thông tin)."
   ],
+  "conclusion": "1-2 câu nhận định xu hướng tiếp theo và ý nghĩa của thông điệp.",
   "key_points": [
     "Điểm nổi bật 1 — ưu tiên con số, tên, ngày cụ thể",
     "Điểm nổi bật 2",
     "Điểm nổi bật 3"
-  ]
+  ],
+  "sentiment": "neutral|positive|negative|mixed",
+  "risk_score": 3
+}
+KHÔNG thêm văn bản nào khác ngoài JSON."""
+
+_SINGLE_POST_SYSTEM_PROMPT = """Bạn là Tổng biên tập của một tờ báo lớn tại Việt Nam. Bạn khắt khe, chính xác và không bao giờ bịa đặt.
+
+NHIỆM VỤ: Đọc BÀI BÁO được cung cấp, viết tóm tắt báo chí HOÀN CHỈNH, ĐẦY ĐỦ CHI TIẾT bằng tiếng Việt.
+
+QUY TẮC BẮT BUỘC:
+1. KHÔNG bịa thêm số liệu, tên người, địa điểm, sự kiện ngoài nội dung được cung cấp.
+2. Nếu nội dung quá ngắn (< 50 từ): đặt "thin": true, chỉ viết "lead" 1-2 câu, còn lại để rỗng [] — nhưng vẫn có "conclusion", "sentiment", "risk_score".
+3. Nếu bài có nội dung đầy đủ: "thin": false, viết đủ tất cả các trường theo định dạng.
+4. Câu văn rõ ràng, khách quan, súc tích nhưng ĐẦY ĐỦ.
+   Độ dài bắt buộc (khi thin=false):
+   - lead: 3-4 câu, nêu rõ WHO/WHAT/WHEN/WHERE và tại sao quan trọng
+   - body: 5-7 đoạn (mỗi đoạn 2-4 câu), bao quát toàn bộ nội dung bài báo
+   - conclusion: 2-3 câu nhận định xu hướng tiếp theo và tác động
+   - key_points: 5-7 điểm nổi bật, ưu tiên số liệu cụ thể
+5. Đánh giá "sentiment": positive/negative/neutral/mixed dựa trên nội dung sự kiện.
+6. Đánh giá "risk_score" từ 1-10: mức độ rủi ro/tác động tiêu cực của sự kiện đối với xã hội/kinh tế/chính trị. 1=không rủi ro, 10=rủi ro cực kỳ cao.
+
+ĐỊNH DẠNG ĐẦU RA (Chỉ trả về JSON, không thêm văn bản nào khác):
+{
+  "thin": true|false,
+  "lead": "3-4 câu mở đầu nêu rõ ai, cái gì, khi nào, ở đâu, và tại sao quan trọng.",
+  "body": [
+    "Bối cảnh và nguyên nhân dẫn đến sự kiện (số liệu cụ thể).",
+    "Diễn biến chính và các mốc thời gian quan trọng.",
+    "Số liệu, thống kê và bằng chứng cụ thể được đề cập trong bài.",
+    "Trích dẫn phát biểu chính thức từ các bên liên quan.",
+    "Phản ứng dư luận và tác động thực tế.",
+    "Phân tích chuyên sâu hoặc nhận định từ chuyên gia (bỏ qua nếu không có).",
+    "Tổng hợp toàn cảnh và những điểm quan trọng nhất của sự kiện."
+  ],
+  "conclusion": "2-3 câu nhận định xu hướng tiếp theo và ý nghĩa của sự kiện.",
+  "key_points": [
+    "Điểm nổi bật 1 — ưu tiên con số, tên, ngày cụ thể",
+    "Điểm nổi bật 2",
+    "Điểm nổi bật 3",
+    "Điểm nổi bật 4",
+    "Điểm nổi bật 5"
+  ],
+  "sentiment": "neutral|positive|negative|mixed",
+  "risk_score": 5
 }
 KHÔNG thêm văn bản nào khác ngoài JSON."""
 
@@ -1175,7 +1296,7 @@ async def summarize_single_post(
                 {"role": "system", "content": _SINGLE_POST_SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=800,
+            max_tokens=1500,
             temperature=0.2,
             response_format={"type": "json_object"},
         )
@@ -1184,7 +1305,10 @@ async def summarize_single_post(
         ai_summary = {
             "lead": (data.get("lead") or "").strip(),
             "body": [s.strip() for s in (data.get("body") or []) if s and s.strip()],
+            "conclusion": (data.get("conclusion") or "").strip(),
             "key_points": [s.strip() for s in (data.get("key_points") or []) if s and s.strip()],
+            "sentiment": (data.get("sentiment") or "neutral").strip(),
+            "risk_score": int(data.get("risk_score") or 5),
             "thin": bool(data.get("thin", False)),
         }
     except Exception as exc:

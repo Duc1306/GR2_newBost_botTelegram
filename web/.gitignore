@@ -3,6 +3,9 @@
 /.pnp
 .pnp.js
 
+# vite cache (moved out of node_modules to avoid Windows EPERM)
+/.vite
+
 # testing
 /coverage
 

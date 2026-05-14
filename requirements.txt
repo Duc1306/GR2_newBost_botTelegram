@@ -29,8 +29,8 @@ loguru==0.7.2
 # AI / OpenAI (optional – required for AI hot topic detection features)
 openai>=1.30.0          # GPT-4o-mini classification + text-embedding-3-small
 
-# Google OAuth (optional – required for Google Sign-In)
-google-auth>=2.29.0     # verify Google ID tokens
+# Google OAuth (optional – bật bằng cách cài google-auth>=2.29.0 và set GOOGLE_CLIENT_ID)
+# google-auth>=2.29.0     # verify Google ID tokens  ← bỏ comment nếu dùng Google Sign-In
 
 # TTS – Text-to-Speech (tính năng Nghe bản tin)
 edge-tts>=6.1.9         # Microsoft Edge TTS, free, hỗ trợ vi-VN-HoaiMyNeural

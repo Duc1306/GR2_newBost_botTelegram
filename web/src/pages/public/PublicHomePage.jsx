@@ -53,6 +53,9 @@ import LoginIcon from '@mui/icons-material/Login';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import TelegramIcon from '@mui/icons-material/Telegram';
 import HeadphonesIcon from '@mui/icons-material/Headphones';
+import TwitterIcon from '@mui/icons-material/Twitter';
+import FilterListIcon from '@mui/icons-material/FilterList';
+import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import {
   searchPublicPosts,
   fetchArticlePosts,
@@ -60,6 +63,7 @@ import {
   fetchHotNewsSummary,
   fetchHotNewsAudio,
   fetchPostTopics,
+  searchXPosts,
 } from '../../lib/publicApi.js';
 import AudioPlayer from '../../components/AudioPlayer.jsx';
 
@@ -96,9 +100,24 @@ const SENTIMENT_COLOR = {
   neutral: '#6b7280',
 };
 
+// ─── Highlight keyword in text ───────────────────────────────────────────────
+
+function highlightText(text, query) {
+  if (!query || !text) return text;
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return text;
+  const pattern = new RegExp(`(${words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+  const parts = text.split(pattern);
+  return parts.map((part, i) =>
+    pattern.test(part)
+      ? <mark key={i} style={{ backgroundColor: '#fef08a', padding: '0 2px', borderRadius: 2 }}>{part}</mark>
+      : part
+  );
+}
+
 // ─── Article Card (link-only) ────────────────────────────────────────────────
 
-const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic, onPlayAudio }) {
+const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic, onPlayAudio, searchQuery = '' }) {
   const externalLink = post.links?.find((l) => !l.includes('t.me') && l.startsWith('http'));
   const title = post.full_article?.title || null;
   const primaryTopic = (selectedTopic && post.topics?.includes(selectedTopic))
@@ -200,7 +219,7 @@ const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic, onPla
               fontSize: '0.975rem',
             }}
           >
-            {title}
+            {searchQuery ? highlightText(title, searchQuery) : title}
           </Typography>
         )}
 
@@ -215,12 +234,43 @@ const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic, onPla
             lineHeight: 1.65,
           }}
         >
-          {post.text}
+          {searchQuery ? highlightText(post.text, searchQuery) : post.text}
         </Typography>
 
         {/* Inline AI summary block */}
         {hasSummary && (
           <Box sx={{ bgcolor: '#f0f9ff', borderRadius: 1.5, p: 1.25, mt: 1 }}>
+            {/* sentiment + risk_score badges */}
+            {(aiSummary.sentiment || aiSummary.risk_score > 0) && (
+              <Box display="flex" gap={0.75} mb={0.75} flexWrap="wrap">
+                {aiSummary.sentiment && (() => {
+                  const s = aiSummary.sentiment;
+                  const map = {
+                    positive: { label: '😊 Tích cực', color: '#166534', bg: '#dcfce7' },
+                    negative: { label: '⚠️ Tiêu cực', color: '#991b1b', bg: '#fee2e2' },
+                    mixed:    { label: '🔄 Hỗn hợp',  color: '#92400e', bg: '#fef3c7' },
+                    neutral:  { label: '➖ Trung lập', color: '#374151', bg: '#f3f4f6' },
+                  };
+                  const style = map[s] || map.neutral;
+                  return (
+                    <Box component="span" sx={{
+                      fontSize: '0.68rem', fontWeight: 600, px: 0.75, py: 0.2,
+                      borderRadius: 1, bgcolor: style.bg, color: style.color,
+                    }}>
+                      {style.label}
+                    </Box>
+                  );
+                })()}
+                {aiSummary.risk_score >= 7 && (
+                  <Box component="span" sx={{
+                    fontSize: '0.68rem', fontWeight: 600, px: 0.75, py: 0.2,
+                    borderRadius: 1, bgcolor: '#fee2e2', color: '#991b1b',
+                  }}>
+                    🔴 Rủi ro cao {aiSummary.risk_score}/10
+                  </Box>
+                )}
+              </Box>
+            )}
             {aiSummary.lead && (
               <Typography variant="caption" color="#0369a1"
                 sx={{ display: 'block', fontWeight: 600, mb: 0.5, lineHeight: 1.6 }}>
@@ -233,6 +283,12 @@ const ArticleCard = React.memo(function ArticleCard({ post, selectedTopic, onPla
                 {b}
               </Typography>
             ))}
+            {aiSummary.conclusion && (
+              <Typography variant="caption"
+                sx={{ display: 'block', lineHeight: 1.6, mt: 0.5, fontStyle: 'italic', color: '#0369a1', opacity: 0.8 }}>
+                {aiSummary.conclusion}
+              </Typography>
+            )}
           </Box>
         )}
       </CardContent>
@@ -863,9 +919,11 @@ function HotNewsTab() {
             />
           ))}
           <Tooltip title="Làm mới">
-            <IconButton size="small" onClick={() => load(hours)} disabled={loading}>
-              <RefreshIcon fontSize="small" />
-            </IconButton>
+            <span>
+              <IconButton size="small" onClick={() => load(hours)} disabled={loading}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
           {lastRefreshed && (
             <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>
@@ -965,6 +1023,8 @@ function ArticlesTab() {
   const [postTopics, setPostTopics] = useState([]);
   const [topicsLoading, setTopicsLoading] = useState(true);
   const [selectedTopic, setSelectedTopic] = useState('');
+  const [selectedPlatform, setSelectedPlatform] = useState('all');
+  const [selectedDate, setSelectedDate] = useState('all'); // 'all' | 'today' | '7d' | '30d'
   const [posts, setPosts] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -975,11 +1035,25 @@ function ArticlesTab() {
   const [searchResults, setSearchResults] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [audioPlayer, setAudioPlayer] = useState(null);
   const timerRef = useRef(null);
   const loadAbortRef = useRef(null);
   const searchAbortRef = useRef(null);
 
   const totalPages = Math.max(1, Math.ceil(total / ARTICLES_LIMIT));
+
+  // Compute date_from based on selectedDate filter
+  const getDateFrom = useCallback(() => {
+    const now = new Date();
+    if (selectedDate === 'today') {
+      return now.toISOString().slice(0, 10);
+    } else if (selectedDate === '7d') {
+      const d = new Date(now); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10);
+    } else if (selectedDate === '30d') {
+      const d = new Date(now); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10);
+    }
+    return '';
+  }, [selectedDate]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -990,7 +1064,7 @@ function ArticlesTab() {
     return () => ac.abort();
   }, []);
 
-  const loadPosts = useCallback(async (topic, currentPage) => {
+  const loadPosts = useCallback(async (topic, currentPage, platform, dateFrom) => {
     if (loadAbortRef.current) loadAbortRef.current.abort();
     const ac = new AbortController();
     loadAbortRef.current = ac;
@@ -998,7 +1072,7 @@ function ArticlesTab() {
     setError(null);
     try {
       const skip = (currentPage - 1) * ARTICLES_LIMIT;
-      const data = await fetchArticlePosts(topic, skip, ARTICLES_LIMIT, '', ac.signal);
+      const data = await fetchArticlePosts(topic, skip, ARTICLES_LIMIT, '', ac.signal, platform, dateFrom, '');
       if (ac.signal.aborted) return;
       setPosts(data.posts || []);
       setTotal(data.total ?? (data.posts || []).length);
@@ -1015,20 +1089,20 @@ function ArticlesTab() {
     setSearchInput('');
     setSearchResults(null);
     setPage(1);
-    loadPosts(selectedTopic, 1);
-  }, [selectedTopic, loadPosts]);
+    loadPosts(selectedTopic, 1, selectedPlatform, getDateFrom());
+  }, [selectedTopic, selectedPlatform, selectedDate, loadPosts, getDateFrom]);
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
-      if (!searchQuery) loadPosts(selectedTopic, page);
+      if (!searchQuery) loadPosts(selectedTopic, page, selectedPlatform, getDateFrom());
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timerRef.current);
-  }, [selectedTopic, searchQuery, page, loadPosts]);
+  }, [selectedTopic, selectedPlatform, selectedDate, searchQuery, page, loadPosts, getDateFrom]);
 
   const handlePageChange = (newPage) => {
     setPage(newPage);
-    loadPosts(selectedTopic, newPage);
+    loadPosts(selectedTopic, newPage, selectedPlatform, getDateFrom());
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -1041,7 +1115,7 @@ function ArticlesTab() {
     setSearchQuery(q);
     setSearchLoading(true);
     try {
-      const data = await searchPublicPosts(q, 30, 0, ac.signal);
+      const data = await searchPublicPosts(q, 30, 0, ac.signal, selectedPlatform, getDateFrom(), '');
       if (ac.signal.aborted) return;
       const withLinks = (data.posts || []).filter((p) =>
         p.links?.some((l) => !l.includes('t.me') && l.startsWith('http'))
@@ -1058,6 +1132,18 @@ function ArticlesTab() {
 
   const displayPosts = searchResults !== null ? searchResults : posts;
 
+  const PLATFORM_OPTIONS = [
+    { value: 'all', label: 'Tất cả' },
+    { value: 'telegram', label: 'Telegram' },
+    { value: 'x', label: 'X (Twitter)' },
+  ];
+  const DATE_OPTIONS = [
+    { value: 'all', label: 'Mọi thời gian' },
+    { value: 'today', label: 'Hôm nay' },
+    { value: '7d', label: '7 ngày' },
+    { value: '30d', label: '30 ngày' },
+  ];
+
   return (
     <Box>
       <Box display="flex" alignItems="center" gap={1} mb={1.5}>
@@ -1070,6 +1156,40 @@ function ArticlesTab() {
             {postTopics.length} danh mục
           </Typography>
         )}
+      </Box>
+
+      {/* ── Advanced Filters Row ──────────────────────── */}
+      <Box display="flex" alignItems="center" gap={1} mb={1.5} flexWrap="wrap">
+        <FilterListIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+        <Typography variant="caption" color="text.secondary" fontWeight={600}>Nguồn:</Typography>
+        {PLATFORM_OPTIONS.map((opt) => (
+          <Chip
+            key={opt.value}
+            label={opt.label}
+            size="small"
+            clickable
+            onClick={() => setSelectedPlatform(opt.value)}
+            color={selectedPlatform === opt.value ? 'primary' : 'default'}
+            variant={selectedPlatform === opt.value ? 'filled' : 'outlined'}
+            sx={{ fontWeight: selectedPlatform === opt.value ? 700 : 500 }}
+          />
+        ))}
+        <Box sx={{ ml: { xs: 0, sm: 1 }, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CalendarTodayIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+          <Typography variant="caption" color="text.secondary" fontWeight={600}>Thời gian:</Typography>
+          {DATE_OPTIONS.map((opt) => (
+            <Chip
+              key={opt.value}
+              label={opt.label}
+              size="small"
+              clickable
+              onClick={() => setSelectedDate(opt.value)}
+              color={selectedDate === opt.value ? 'secondary' : 'default'}
+              variant={selectedDate === opt.value ? 'filled' : 'outlined'}
+              sx={{ fontWeight: selectedDate === opt.value ? 700 : 500 }}
+            />
+          ))}
+        </Box>
       </Box>
 
       {/* Topic filter chips */}
@@ -1180,7 +1300,7 @@ function ArticlesTab() {
         <Fade in>
           <Box>
             {displayPosts.map((post, idx) => (
-              <ArticleCard key={post._id || idx} post={post} selectedTopic={selectedTopic} onPlayAudio={(p) => setAudioPlayer(p)} />
+              <ArticleCard key={post._id || idx} post={post} selectedTopic={selectedTopic} searchQuery={searchQuery} onPlayAudio={(p) => setAudioPlayer(p)} />
             ))}
             {searchResults === null && totalPages > 1 && (
               <Box display="flex" flexDirection="column" alignItems="center" gap={1} mt={2} mb={4}>
@@ -1206,6 +1326,199 @@ function ArticlesTab() {
             )}
           </Box>
         </Fade>
+      )}
+
+      {audioPlayer && (
+        <AudioPlayer
+          audioUrl={audioPlayer.url}
+          title={audioPlayer.title}
+          onClose={() => { URL.revokeObjectURL(audioPlayer.url); setAudioPlayer(null); }}
+        />
+      )}
+    </Box>
+  );
+}
+
+// ─── X Search Tab ─────────────────────────────────────────────────────────────
+
+function XSearchTab() {
+  const [input, setInput] = useState('');
+  const [query, setQuery] = useState('');
+  const [posts, setPosts] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [isLive, setIsLive] = useState(false); // true = results just fetched from Apify
+  const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [audioPlayer, setAudioPlayer] = useState(null);
+  const abortRef = useRef(null);
+  const X_LIMIT = 20;
+
+  const doSearch = useCallback(async (q, currentPage) => {
+    if (abortRef.current) abortRef.current.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setLoading(true);
+    setError(null);
+    setIsLive(false);
+    try {
+      const skip = (currentPage - 1) * X_LIMIT;
+      const data = await searchXPosts(q, skip, X_LIMIT, ac.signal);
+      if (ac.signal.aborted) return;
+      setPosts(data.posts || []);
+      setTotal(data.total ?? (data.posts || []).length);
+      setIsLive(!!data.live); // backend returns live:true when Apify was triggered
+    } catch (e) {
+      if (e?.name !== 'AbortError') setError(e.message);
+    } finally {
+      if (!ac.signal.aborted) setLoading(false);
+    }
+  }, []);
+
+  // Load latest X posts on mount
+  useEffect(() => {
+    doSearch('', 1);
+  }, [doSearch]);
+
+  const handleSearch = () => {
+    const q = input.trim();
+    setQuery(q);
+    setPage(1);
+    doSearch(q, 1);
+  };
+
+  const handleClear = () => { setInput(''); setQuery(''); setPage(1); setIsLive(false); doSearch('', 1); };
+
+  const totalPages = Math.max(1, Math.ceil(total / X_LIMIT));
+
+  return (
+    <Box>
+      <Box display="flex" alignItems="center" gap={1} mb={2}>
+        <TwitterIcon sx={{ color: '#1d9bf0', fontSize: 24 }} />
+        <Typography variant="h6" fontWeight={700} fontSize="1rem">
+          Tìm kiếm trên X (Twitter)
+        </Typography>
+        <Chip
+          label={`${total} bài`}
+          size="small"
+          variant="outlined"
+          sx={{ ml: 'auto', color: '#1d9bf0', borderColor: '#1d9bf0' }}
+        />
+      </Box>
+
+      {/* Hint: searches are live from Apify */}
+      <Alert
+        severity="info"
+        icon={<TwitterIcon fontSize="small" sx={{ color: '#1d9bf0' }} />}
+        sx={{
+          mb: 2, py: 0.5, fontSize: '0.78rem',
+          bgcolor: 'rgba(29,155,240,0.07)', border: '1px solid rgba(29,155,240,0.25)',
+          '& .MuiAlert-icon': { color: '#1d9bf0' },
+        }}
+      >
+        Nhập hashtag hoặc từ khóa rồi nhấn <strong>Tìm</strong> — hệ thống sẽ lấy tweet mới nhất từ X qua Apify (có thể mất 20–60 giây).
+      </Alert>
+
+      <Box display="flex" gap={1} mb={2} alignItems="center">
+        <TextField
+          size="small"
+          placeholder="Nhập hashtag / từ khóa X…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+          InputProps={{
+            startAdornment: <InputAdornment position="start"><TwitterIcon sx={{ fontSize: 16, color: '#1d9bf0' }} /></InputAdornment>,
+            endAdornment: input && (
+              <InputAdornment position="end">
+                <IconButton size="small" onClick={handleClear}><ClearIcon fontSize="small" /></IconButton>
+              </InputAdornment>
+            ),
+          }}
+          sx={{ flex: 1, maxWidth: 400 }}
+        />
+        <Tooltip title={loading ? 'Đang lấy dữ liệu…' : 'Tìm trên X (Apify live)'}>
+          <span>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleSearch}
+              disabled={loading}
+              sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none', bgcolor: '#1d9bf0', '&:hover': { bgcolor: '#1a8cd8' } }}
+            >
+              {loading ? <CircularProgress size={14} color="inherit" /> : 'Tìm'}
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
+
+      {query && (
+        <Box display="flex" alignItems="center" gap={1} mb={1.5}>
+          <SearchIcon fontSize="small" color="action" />
+          <Typography variant="subtitle2" fontWeight={700}>
+            X results: "<Box component="span" color="#1d9bf0">{query}</Box>"
+          </Typography>
+          {isLive && (
+            <Chip label="Mới từ Apify" size="small" sx={{ bgcolor: 'rgba(29,155,240,0.12)', color: '#1d9bf0', fontSize: '0.7rem' }} />
+          )}
+          <Button size="small" onClick={handleClear} sx={{ ml: 'auto', textTransform: 'none' }}>Xoá</Button>
+        </Box>
+      )}
+
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
+
+      {loading ? (
+        <Box>
+          <Box display="flex" alignItems="center" gap={1} mb={2} sx={{ color: '#1d9bf0' }}>
+            <CircularProgress size={14} sx={{ color: '#1d9bf0' }} />
+            <Typography variant="caption" color="#1d9bf0">
+              {query ? 'Đang lấy tweet mới nhất từ X qua Apify… (có thể mất 20–60 giây)' : 'Đang tải…'}
+            </Typography>
+          </Box>
+          {[1, 2, 3].map((i) => <CardSkeleton key={i} />)}
+        </Box>
+      ) : posts.length === 0 ? (
+        <Box textAlign="center" py={8}>
+          <TwitterIcon sx={{ fontSize: 64, color: '#1d9bf0', opacity: 0.2, mb: 2 }} />
+          <Typography color="text.secondary">
+            {query ? 'Không tìm thấy tweet nào cho từ khóa này.' : 'Chưa có dữ liệu từ X.'}
+          </Typography>
+          <Typography variant="caption" color="text.disabled">
+            {query ? 'Thử hashtag khác hoặc kiểm tra APIFY_API_TOKEN trong .env' : 'Nhập hashtag và nhấn Tìm để lấy dữ liệu mới'}
+          </Typography>
+        </Box>
+      ) : (
+        <Fade in>
+          <Box>
+            {posts.map((post, idx) => (
+              <ArticleCard
+                key={post._id || idx}
+                post={post}
+                selectedTopic=""
+                searchQuery={query}
+                onPlayAudio={(p) => setAudioPlayer(p)}
+              />
+            ))}
+            {totalPages > 1 && (
+              <Box display="flex" justifyContent="center" mt={2} mb={4}>
+                <Pagination
+                  count={totalPages}
+                  page={page}
+                  onChange={(_, v) => { setPage(v); doSearch(query, v); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  color="primary"
+                  shape="rounded"
+                />
+              </Box>
+            )}
+          </Box>
+        </Fade>
+      )}
+
+      {audioPlayer && (
+        <AudioPlayer
+          audioUrl={audioPlayer.url}
+          title={audioPlayer.title}
+          onClose={() => { URL.revokeObjectURL(audioPlayer.url); setAudioPlayer(null); }}
+        />
       )}
     </Box>
   );
@@ -1346,6 +1659,12 @@ export default function PublicHomePage() {
               iconPosition="start"
               label={isMobile ? 'Bài báo' : 'Bài báo theo chủ đề'}
             />
+            <Tab
+              icon={<TwitterIcon sx={{ fontSize: 18 }} />}
+              iconPosition="start"
+              label="Tìm trên X"
+              sx={{ color: activeTab === 2 ? '#1d9bf0' : undefined }}
+            />
           </Tabs>
         </Container>
       </Box>
@@ -1386,6 +1705,7 @@ export default function PublicHomePage() {
 
         <Box sx={{ display: activeTab === 0 ? 'block' : 'none' }}><HotNewsTab /></Box>
         <Box sx={{ display: activeTab === 1 ? 'block' : 'none' }}><ArticlesTab /></Box>
+        <Box sx={{ display: activeTab === 2 ? 'block' : 'none' }}><XSearchTab /></Box>
 
         {/* Footer */}
         <Box textAlign="center" py={3} mt={2} borderTop="1px solid" borderColor="divider">

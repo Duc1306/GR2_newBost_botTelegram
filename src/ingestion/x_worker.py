@@ -255,20 +255,34 @@ def fetch_by_keywords(
     for kw in keywords:
         logger.info(f"[X-Worker][Keyword] Cào '{kw}' — tối đa {per_kw} tweets")
         try:
+            # Primary input schema (kaitoeasyapi actor)
             run_input: dict = {
                 "searchTerms": [kw],
                 "maxItems": max(20, per_kw),  # min 20 theo Actor requirement
                 "queryType": query_type,
             }
-            if language:
+            # language filter: một số actor không hỗ trợ "lang"
+            # → chỉ thêm nếu language được chỉ định rõ ràng
+            if language and language.strip():
                 run_input["lang"] = language
 
-            run    = client.actor(_ACTOR_KEYWORD).call(run_input=run_input)
+            logger.debug(f"[X-Worker][Keyword] Actor input: {run_input}")
+            run    = client.actor(_ACTOR_KEYWORD).call(run_input=run_input, timeout_secs=300)
+            if not run or not run.get("defaultDatasetId"):
+                logger.warning(f"[X-Worker][Keyword] Actor run thất bại hoặc không trả về dataset — keyword='{kw}'")
+                continue
             items  = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-            logger.info(f"[X-Worker][Keyword] '{kw}' → {len(items)} tweets")
+            logger.info(f"[X-Worker][Keyword] '{kw}' → {len(items)} tweets (dataset={run['defaultDatasetId']})")
+            if not items:
+                logger.warning(
+                    f"[X-Worker][Keyword] Dataset rỗng cho '{kw}'. "
+                    "Kiểm tra: (1) APIFY_API_TOKEN còn credits, "
+                    "(2) Actor ID còn hoạt động, (3) keyword không bị X giới hạn."
+                )
             all_tweets.extend(items)
         except Exception as e:
-            logger.error(f"[X-Worker][Keyword] Lỗi khi cào '{kw}': {e}")
+            logger.error(f"[X-Worker][Keyword] Lỗi khi cào '{kw}': {type(e).__name__}: {e}")
+            logger.debug("[X-Worker][Keyword] Gợi ý: kiểm tra APIFY_API_TOKEN, Actor ID, và quota Apify.")
 
     return all_tweets
 
