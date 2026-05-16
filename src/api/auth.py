@@ -39,7 +39,7 @@ def get_password_hash(password: str) -> str:
 # JWT Token Management
 # =============================================================================
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class Token(BaseModel):
