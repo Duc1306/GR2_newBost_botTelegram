@@ -71,6 +71,7 @@ async def get_public_posts(
     platform: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    geo: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     skip: int = Query(0, ge=0),
 ):
@@ -91,6 +92,9 @@ async def get_public_posts(
             query["platform"] = {"$in": ["x", "twitter"]}
         else:
             query["platform"] = platform
+
+    if geo and geo not in ("all", ""):
+        query["geo"] = geo
 
     if date_from or date_to:
         date_filter: dict = {}
@@ -329,3 +333,131 @@ async def get_public_post_topics(request: Request):
         if t["_id"]
     ]
     return {"topics": topics}
+
+
+# ─── Daily Stats ─────────────────────────────────────────────────────────────
+
+@router.get("/public/stats/daily", tags=["Public"])
+@limiter.limit("60/minute")
+async def get_daily_stats(
+    request: Request,
+    days: int = Query(30, ge=1, le=90),
+):
+    """Thống kê số bài viết và số chủ đề mỗi ngày trong N ngày gần nhất."""
+    db = get_db()
+    posts_coll = db["posts"]
+
+    start_date = datetime.utcnow() - timedelta(days=days)
+
+    pipeline = [
+        {"$match": {"created_at": {"$gte": start_date}}},
+        {"$group": {
+            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+            "posts": {"$sum": 1},
+            "all_topics": {"$push": "$topics"},
+            "platforms": {"$push": "$platform"},
+        }},
+        {"$sort": {"_id": 1}},
+    ]
+    results = list(posts_coll.aggregate(pipeline))
+
+    daily = []
+    for r in results:
+        unique_topics: set = set()
+        for topic_list in r["all_topics"]:
+            for t in (topic_list or []):
+                unique_topics.add(t)
+
+        platforms_count: dict = {}
+        for p in r["platforms"]:
+            if p:
+                platforms_count[p] = platforms_count.get(p, 0) + 1
+
+        daily.append({
+            "date": r["_id"],
+            "posts": r["posts"],
+            "topics": len(unique_topics),
+            "by_platform": platforms_count,
+        })
+
+    total_posts = sum(d["posts"] for d in daily)
+    return {
+        "daily": daily,
+        "days": days,
+        "total_posts": total_posts,
+        "avg_per_day": round(total_posts / len(daily), 1) if daily else 0,
+    }
+
+
+# ─── Geo Distribution ────────────────────────────────────────────────────────
+
+_GEO_REGION_EMOJI = {
+    "Việt Nam": "🇻🇳",
+    "Mỹ": "🇺🇸",
+    "Trung Quốc": "🇨🇳",
+    "Nga": "🇷🇺",
+    "Nhật Bản": "🇯🇵",
+    "Hàn Quốc": "🇰🇷",
+    "Châu Âu": "🇪🇺",
+    "Trung Đông": "🌙",
+    "Đông Nam Á": "🌏",
+    "Toàn cầu": "🌍",
+    "Khác": "📍",
+}
+
+_GEO_REGION_COLOR = {
+    "Việt Nam": "#ef4444",
+    "Mỹ": "#3b82f6",
+    "Trung Quốc": "#f59e0b",
+    "Nga": "#8b5cf6",
+    "Nhật Bản": "#ec4899",
+    "Hàn Quốc": "#10b981",
+    "Châu Âu": "#6366f1",
+    "Trung Đông": "#f97316",
+    "Đông Nam Á": "#14b8a6",
+    "Toàn cầu": "#22d3ee",
+    "Khác": "#6b7280",
+}
+
+
+@router.get("/public/stats/geo", tags=["Public"])
+@limiter.limit("60/minute")
+async def get_geo_stats(
+    request: Request,
+    days: int = Query(7, ge=1, le=30),
+):
+    """Phân phối bài viết theo khu vực địa lý trong N ngày gần nhất."""
+    db = get_db()
+    posts_coll = db["posts"]
+
+    start_date = datetime.utcnow() - timedelta(days=days)
+
+    pipeline = [
+        {"$match": {
+            "created_at": {"$gte": start_date},
+            "geo": {"$exists": True, "$nin": [None, ""]},
+        }},
+        {"$group": {"_id": "$geo", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]
+    results = list(posts_coll.aggregate(pipeline))
+
+    total = sum(r["count"] for r in results)
+    geo = [
+        {
+            "region": r["_id"],
+            "count": r["count"],
+            "percent": round(r["count"] / total * 100, 1) if total else 0,
+            "emoji": _GEO_REGION_EMOJI.get(r["_id"], "📍"),
+            "color": _GEO_REGION_COLOR.get(r["_id"], "#6b7280"),
+        }
+        for r in results
+        if r["_id"]
+    ]
+
+    return {
+        "geo": geo,
+        "total": total,
+        "days": days,
+        "has_data": total > 0,
+    }

@@ -246,7 +246,11 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
         # PRIORITY 3+: Keyword high-freq → SVM/Keyword agreement → OpenAI arbitration
         if not source_topic:
             await _assign_topic_cascade(post, cleaned_text, lang)
-    
+
+    # Geo: rule-based → OpenAI fallback nếu không xác định được
+    from src.processing.geo_classifier import classify_geo
+    post.geo = await classify_geo(cleaned_text, source=channel_name)
+
     return post
 
 async def save_posts(posts: List[Post], scrape_articles: bool = False) -> None:

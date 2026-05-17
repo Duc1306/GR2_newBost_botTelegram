@@ -35,13 +35,14 @@ export async function fetchTopicPosts(slug, skip = 0, limit = 20, aiRank = false
  * Fetch only posts that have external links, optionally filtered by topic.
  * Returns { posts: Array, total: number }
  */
-export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = '', signal, platform = '', dateFrom = '', dateTo = '') {
+export async function fetchArticlePosts(topic = '', skip = 0, limit = 20, q = '', signal, platform = '', dateFrom = '', dateTo = '', geo = '') {
   const params = new URLSearchParams({ limit, skip, link_only: 'true' });
   if (topic) params.set('topic', topic);
   if (q) params.set('q', q);
   if (platform && platform !== 'all') params.set('platform', platform);
   if (dateFrom) params.set('date_from', dateFrom);
   if (dateTo) params.set('date_to', dateTo);
+  if (geo && geo !== 'all') params.set('geo', geo);
   const res = await fetch(`${API_BASE}/public/posts?${params}`, { signal });
   if (!res.ok) throw new Error('Failed to fetch article posts');
   return res.json();
@@ -130,6 +131,26 @@ export async function fetchHotNewsAudio(slug, hours = 48, signal) {
 export async function fetchPostTopics(signal) {
   const res = await fetch(`${API_BASE}/public/post-topics`, { signal });
   if (!res.ok) throw new Error('Failed to fetch post topics');
+  return res.json();
+}
+
+/**
+ * Fetch daily post counts for the last N days.
+ * @returns {{ daily: Array<{date, posts, topics, by_platform}>, days, total_posts, avg_per_day }}
+ */
+export async function fetchDailyStats(days = 30, signal) {
+  const res = await fetch(`${API_BASE}/public/stats/daily?days=${days}`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch daily stats');
+  return res.json();
+}
+
+/**
+ * Fetch geographic distribution of posts for the last N days.
+ * @returns {{ geo: Array<{region, count, percent, emoji, color}>, total, days, has_data }}
+ */
+export async function fetchGeoStats(days = 7, signal) {
+  const res = await fetch(`${API_BASE}/public/stats/geo?days=${days}`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch geo stats');
   return res.json();
 }
 

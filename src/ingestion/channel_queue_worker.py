@@ -136,6 +136,9 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
             lang = detect_language(text)
             topics = classify_post_topics(text)
 
+            from src.processing.geo_classifier import classify_geo
+            geo = await classify_geo(text, source=channel_username)
+
             post_doc = {
                 "id": post_id,
                 "platform": "telegram",
@@ -145,6 +148,7 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
                 "links": links,
                 "lang": lang,
                 "topics": topics,
+                "geo": geo,
                 "created_at": msg.date.replace(tzinfo=None) if msg.date else datetime.utcnow(),
                 "fetched_at": datetime.utcnow(),
                 "dedupe_key": dedupe_key,

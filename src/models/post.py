@@ -68,6 +68,9 @@ class Post(BaseModel):
     verified_by: Optional[str] = Field(default=None, description="Username who verified the labels")
     verified_at: Optional[datetime] = Field(default=None, description="When labels were verified")
     
+    # Geographic region (e.g. "Việt Nam", "Mỹ", "Toàn cầu")
+    geo: Optional[str] = None
+
     # Scoring
     score: float = 0.0
     

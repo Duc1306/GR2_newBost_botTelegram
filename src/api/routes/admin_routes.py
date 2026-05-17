@@ -432,3 +432,54 @@ async def admin_delete_user(
 
     logger.info(f"Admin {current_user} deleted user {username} (id={user_id_str}) + related data")
     return {"success": True}
+
+
+# =============================================================================
+# Backfill: topics + geo classification
+# =============================================================================
+
+class BackfillRequest(BaseModel):
+    limit: int = 5000
+    geo_only: bool = False
+    ai_only: bool = False
+    count_only: bool = False   # chỉ đếm, không xử lý
+
+
+@router.post("/admin/backfill/topics-geo", tags=["Admin"])
+async def admin_backfill_topics_geo(
+    body: BackfillRequest,
+    current_user: str = Depends(get_current_admin_user),
+):
+    """Kích hoạt backfill topics (rule-based + OpenAI fallback) và geo cho bài viết còn thiếu.
+
+    - `count_only=true`: chỉ đếm số bài thiếu + ước tính chi phí, không xử lý.
+    - `geo_only=true`: chỉ backfill geo, bỏ qua topic.
+    - `ai_only=true`: dùng OpenAI cho tất cả (không chạy rule-based trước).
+    - `limit`: số bài xử lý tối đa mỗi lần (mặc định 5000).
+    """
+    from src.processing.backfill_topics import backfill_async, count_missing
+
+    if body.count_only:
+        result = count_missing(verbose=False)
+        est_topic = result["missing_topics"] * 150 / 1_000_000 * 0.15
+        est_geo   = result["missing_geo"]    * 100 / 1_000_000 * 0.15
+        return {
+            **result,
+            "est_topic_cost_usd": round(est_topic, 4),
+            "est_geo_cost_usd":   round(est_geo,   4),
+        }
+
+    logger.info(
+        f"[admin/backfill] {current_user} triggered backfill "
+        f"limit={body.limit} geo_only={body.geo_only} ai_only={body.ai_only}"
+    )
+    try:
+        stats = await backfill_async(
+            limit=body.limit,
+            geo_only=body.geo_only,
+            ai_only=body.ai_only,
+        )
+        return {"success": True, **stats}
+    except Exception as exc:
+        logger.error(f"[admin/backfill] error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))

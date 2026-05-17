@@ -1045,3 +1045,176 @@ async def gpt_name_ml_clusters(clusters: list[dict]) -> list[dict]:
             cl.setdefault("description", "")
             cl.setdefault("color", "#6b7280")
         return clusters
+
+
+# ─── 9. Classify a single post's topics using OpenAI ────────────────────────
+
+_TOPIC_CLASSIFY_SYSTEM = """Bạn là chuyên gia phân loại tin tức đa ngôn ngữ (Tiếng Việt + Tiếng Anh).
+Hãy phân loại bài viết sau vào 1-3 chủ đề phù hợp nhất từ danh sách dưới đây.
+
+Danh sách chủ đề hợp lệ:
+Kinh tế, Công nghệ, Crypto, Chính trị, Thế giới, Pháp luật, Ô tô - Xe máy,
+Khoa học, Thể thao, Giải trí, Sức khỏe, Giáo dục, Việc làm, Du lịch,
+Ẩm thực, Kinh doanh & Khởi nghiệp, Trò chơi & Ứng dụng, Tin tức & Truyền thông, Khác
+
+Trả về JSON array với đúng tên chủ đề từ danh sách trên. Ví dụ: ["Công nghệ", "Kinh tế"]
+Chỉ trả về JSON array, không giải thích thêm."""
+
+VALID_TOPICS = {
+    "Kinh tế", "Công nghệ", "Crypto", "Chính trị", "Thế giới", "Pháp luật",
+    "Ô tô - Xe máy", "Khoa học", "Thể thao", "Giải trí", "Sức khỏe", "Giáo dục",
+    "Việc làm", "Du lịch", "Ẩm thực", "Kinh doanh & Khởi nghiệp",
+    "Trò chơi & Ứng dụng", "Tin tức & Truyền thông", "Khác",
+}
+
+
+_RPD_EXHAUSTED = False  # module-level flag: True khi daily limit hết
+
+
+def _parse_retry_after(msg: str) -> float:
+    """Lấy số giây cần chờ từ thông báo lỗi 429 của OpenAI."""
+    import re
+    m = re.search(r"try again in (\d+\.?\d*)s", str(msg))
+    return float(m.group(1)) + 0.5 if m else 10.0
+
+
+async def classify_post_topic_with_ai(text: str, max_topics: int = 2) -> list[str]:
+    """Use OpenAI to classify a news post into topics when rule-based fails.
+
+    Args:
+        text: Post text (will be trimmed to 800 chars)
+        max_topics: Maximum number of topics to return (1-3)
+
+    Returns:
+        List of topic name strings from VALID_TOPICS. Empty list on failure.
+    """
+    global _RPD_EXHAUSTED
+    client = _get_client()
+    if not client or not text or len(text.strip()) < 20:
+        return []
+    if _RPD_EXHAUSTED:
+        return []
+
+    from src.config import OPENAI_MODEL
+    for attempt in range(4):  # tối đa 4 lần thử
+        try:
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": _TOPIC_CLASSIFY_SYSTEM},
+                    {"role": "user", "content": text[:800]},
+                ],
+                temperature=0.1,
+                max_tokens=80,
+            )
+            raw = response.choices[0].message.content.strip()
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [t for t in parsed[:max_topics] if isinstance(t, str) and t in VALID_TOPICS]
+            return []
+        except Exception as exc:
+            msg = str(exc)
+            if "429" in msg or "rate_limit_exceeded" in msg:
+                if "requests per day" in msg or "RPD" in msg:
+                    # Daily limit hết — dừng hẳn, không retry vô ích
+                    logger.error("[AI] Daily RPD limit exhausted — dừng gọi AI hôm nay.")
+                    _RPD_EXHAUSTED = True
+                    return []
+                wait = _parse_retry_after(msg)
+                logger.info("[AI/topic] 429 rate limit, chờ %.1fs (lần %d/4)…", wait, attempt + 1)
+                import asyncio as _aio
+                await _aio.sleep(wait)
+                continue
+            logger.warning("classify_post_topic_with_ai failed: %s", exc)
+            return []
+    return []
+
+
+# ─── 10. Classify geographic focus of a post using OpenAI ───────────────────
+
+_GEO_CLASSIFY_SYSTEM = """Bạn là chuyên gia địa lý và phân tích tin tức quốc tế.
+Xác định khu vực địa lý CHÍNH mà bài viết đề cập đến.
+
+Chọn MỘT trong các khu vực sau (đúng tên, không thay đổi):
+- Việt Nam
+- Mỹ
+- Trung Quốc
+- Nga
+- Nhật Bản
+- Hàn Quốc
+- Châu Âu
+- Trung Đông
+- Đông Nam Á
+- Toàn cầu
+- Khác
+
+Trả về JSON object: {"region": "tên khu vực"}
+Chỉ trả về JSON, không giải thích."""
+
+VALID_GEO_REGIONS = {
+    "Việt Nam", "Mỹ", "Trung Quốc", "Nga", "Nhật Bản", "Hàn Quốc",
+    "Châu Âu", "Trung Đông", "Đông Nam Á", "Toàn cầu", "Khác",
+}
+
+_GEO_REGION_EMOJI = {
+    "Việt Nam": "🇻🇳",
+    "Mỹ": "🇺🇸",
+    "Trung Quốc": "🇨🇳",
+    "Nga": "🇷🇺",
+    "Nhật Bản": "🇯🇵",
+    "Hàn Quốc": "🇰🇷",
+    "Châu Âu": "🇪🇺",
+    "Trung Đông": "🌙",
+    "Đông Nam Á": "🌏",
+    "Toàn cầu": "🌍",
+    "Khác": "📍",
+}
+
+
+async def classify_geo_with_ai(text: str) -> str | None:
+    """Classify the geographic focus of a news post using OpenAI.
+
+    Args:
+        text: Post text (trimmed to 600 chars)
+
+    Returns:
+        Region string from VALID_GEO_REGIONS, or None on failure.
+    """
+    global _RPD_EXHAUSTED
+    client = _get_client()
+    if not client or not text or len(text.strip()) < 20:
+        return None
+    if _RPD_EXHAUSTED:
+        return None
+
+    from src.config import OPENAI_MODEL
+    for attempt in range(4):  # tối đa 4 lần thử
+        try:
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": _GEO_CLASSIFY_SYSTEM},
+                    {"role": "user", "content": text[:600]},
+                ],
+                temperature=0.1,
+                max_tokens=40,
+            )
+            raw = response.choices[0].message.content.strip()
+            parsed = json.loads(raw)
+            region = parsed.get("region") if isinstance(parsed, dict) else None
+            return region if region in VALID_GEO_REGIONS else None
+        except Exception as exc:
+            msg = str(exc)
+            if "429" in msg or "rate_limit_exceeded" in msg:
+                if "requests per day" in msg or "RPD" in msg:
+                    logger.error("[AI] Daily RPD limit exhausted — dừng gọi AI hôm nay.")
+                    _RPD_EXHAUSTED = True
+                    return None
+                wait = _parse_retry_after(msg)
+                logger.info("[AI/geo] 429 rate limit, chờ %.1fs (lần %d/4)…", wait, attempt + 1)
+                import asyncio as _aio
+                await _aio.sleep(wait)
+                continue
+            logger.warning("classify_geo_with_ai failed: %s", exc)
+            return None
+    return None

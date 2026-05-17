@@ -220,6 +220,8 @@ def _classify_post(post: Post) -> None:
         post.topics = [kw_topic]
         post.score  = 0.5  # rule-based không có confidence cụ thể
 
+    # Geo sẽ được gán trong ingest_once (async context)
+
 
 # ============================================================
 # Actor A — Cào theo TỪ KHÓA / HASHTAG
@@ -483,6 +485,8 @@ async def ingest_once(
             skipped += 1
             continue
         _classify_post(post)
+        from src.processing.geo_classifier import classify_geo
+        post.geo = await classify_geo(post.text or "", source=post.source)
         posts.append(post)
 
     logger.info(f"[X-Worker] {len(posts)} posts hợp lệ | {skipped} bị bỏ qua (quá ngắn / trống)")
