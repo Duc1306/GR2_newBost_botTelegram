@@ -5,7 +5,6 @@ import {
   Grid,
   Paper,
   CircularProgress,
-  TextField,
   Button,
   Alert,
   Chip,
@@ -114,10 +113,6 @@ export default function AnalyticsPage() {
     count: k.count,
   })) || [];
 
-  console.log('Keywords data:', keywords);
-  console.log('Formatted keywordsData:', keywordsData);
-  console.log('Keywords loading:', keywordsLoading);
-
   return (
     <Box>
       <Box display="flex" alignItems="center" gap={1} mb={1}>
@@ -138,13 +133,13 @@ export default function AnalyticsPage() {
               label="Start Date"
               value={startDate}
               onChange={setStartDate}
-              renderInput={(params) => <TextField {...params} />}
+              slotProps={{ textField: { size: 'small' } }}
             />
             <DatePicker
               label="End Date"
               value={endDate}
               onChange={setEndDate}
-              renderInput={(params) => <TextField {...params} />}
+              slotProps={{ textField: { size: 'small' } }}
             />
             <Button variant="contained" onClick={handleApplyFilter}>
               Apply

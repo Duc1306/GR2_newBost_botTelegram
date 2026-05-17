@@ -12,12 +12,34 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.db.mongo import get_db
 
 
-# Vietnamese stopwords
+# Vietnamese + English stopwords — expanded to remove noise from news text
 STOPWORDS = {
+    # ── Vietnamese structural words ──────────────────────────────────────────
     'và', 'của', 'có', 'được', 'trong', 'cho', 'từ', 'này', 'đã', 'là', 'với',
     'các', 'một', 'những', 'về', 'để', 'đến', 'trên', 'theo', 'như', 'khi',
+    'mà', 'thì', 'sẽ', 'hay', 'cũng', 'đây', 'còn', 'rằng', 'bởi', 'nên',
+    'hơn', 'đó', 'sau', 'vào', 'bị', 'vì', 'tại', 'tới', 'nếu', 'lại',
+    'nữa', 'rất', 'quá', 'mọi', 'dù', 'tuy', 'nhưng', 'vẫn', 'cũng', 'thêm',
+    'đang', 'đều', 'kể', 'gì', 'nào', 'đâu', 'sao', 'chứ', 'nhé', 'thôi',
+    'ấy', 'đấy', 'thế', 'vậy', 'xin', 'hãy', 'đã', 'chưa', 'chỉ', 'mới',
+    'cả', 'lên', 'xuống', 'ra', 'vào', 'qua', 'lại', 'đi', 'về', 'lên',
+    # ── News-domain noise (appear in every article) ──────────────────────────
+    'tin', 'bài', 'mới', 'nhất', 'via', 'rss', 'nội', 'dung', 'thông',
+    'theo', 'nguồn', 'ảnh', 'video', 'xem', 'đọc', 'tiếp', 'more', 'read',
+    'click', 'link', 'http', 'https', 'www', 'com', 'net', 'org', 'vn',
+    # ── News source names (not meaningful keywords) ──────────────────────────
+    'vnexpress', 'tuoitre', 'dantri', 'vtv', 'vov', 'zing', 'zingnews',
+    'cafef', 'kenh14', 'thanhnien', 'nguoiduatin', 'baomoi', 'nld', 'laodong',
+    'tienphong', 'plo', 'soha', 'eva', 'afamily', 'vietnamnet', 'vietcong',
+    'vnpt', 'viettel', 'mobifone', 'thethaovanhoa', 'bongda', 'saostar',
+    # ── English structural words ─────────────────────────────────────────────
     'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-    'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be'
+    'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
+    'has', 'have', 'had', 'been', 'not', 'this', 'that', 'it', 'its',
+    'he', 'she', 'they', 'we', 'you', 'i', 'his', 'her', 'their', 'our',
+    'will', 'can', 'may', 'also', 'more', 'new', 'top', 'all', 'get',
+    # ── Number-like tokens ───────────────────────────────────────────────────
+    '000', '0000', '00000',
 }
 
 
@@ -32,10 +54,13 @@ def extract_keywords(text: str, min_length: int = 3) -> list:
     # Keep only alphanumeric and Vietnamese characters
     words = re.findall(r'[a-zA-Z0-9àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+', text)
     
-    # Filter stopwords and short words
+    # Filter stopwords, short words, and pure-numeric tokens
     keywords = [
-        w for w in words 
-        if len(w) >= min_length and w not in STOPWORDS
+        w for w in words
+        if len(w) >= min_length
+        and w not in STOPWORDS
+        and not re.match(r'^\d+$', w)          # skip pure numbers (000, 2024, etc.)
+        and not re.match(r'^[0-9,\.]+$', w)    # skip number-like tokens (1.000, 50,000)
     ]
     
     return keywords

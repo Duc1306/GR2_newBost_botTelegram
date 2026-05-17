@@ -2,12 +2,56 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional
+import re
 
 from fastapi import APIRouter, Query, HTTPException
 
 from src.db.mongo import get_db
 
 router = APIRouter(tags=["Analytics"])
+
+# ── Noise words filtered out of keyword results ──────────────────────────────
+# Covers common Vietnamese stop-words, news-domain boilerplate, source names,
+# and English function words that carry no informational value.
+_NOISE_WORDS: set[str] = {
+    # Vietnamese structural / function words
+    'và', 'của', 'có', 'được', 'trong', 'cho', 'từ', 'này', 'đã', 'là', 'với',
+    'các', 'một', 'những', 'về', 'để', 'đến', 'trên', 'theo', 'như', 'khi',
+    'mà', 'thì', 'sẽ', 'hay', 'cũng', 'đây', 'còn', 'rằng', 'bởi', 'nên',
+    'hơn', 'đó', 'sau', 'vào', 'bị', 'vì', 'tại', 'tới', 'nếu', 'lại',
+    'nữa', 'rất', 'quá', 'mọi', 'dù', 'tuy', 'nhưng', 'vẫn', 'thêm',
+    'đang', 'đều', 'kể', 'gì', 'nào', 'đâu', 'sao', 'chứ', 'nhé', 'thôi',
+    'ấy', 'đấy', 'thế', 'vậy', 'xin', 'hãy', 'chưa', 'chỉ', 'cả',
+    # News-domain boilerplate (appear in virtually every article)
+    'tin', 'bài', 'mới', 'nhất', 'via', 'rss', 'nội', 'dung', 'thông',
+    'nguồn', 'ảnh', 'video', 'xem', 'đọc', 'tiếp',
+    'more', 'read', 'click', 'link', 'http', 'https', 'www', 'com', 'net', 'org', 'vn',
+    # News source names
+    'vnexpress', 'tuoitre', 'dantri', 'vtv', 'vov', 'zing', 'zingnews',
+    'cafef', 'kenh14', 'thanhnien', 'nguoiduatin', 'baomoi', 'nld', 'laodong',
+    'tienphong', 'plo', 'soha', 'vietnamnet', 'saostar', 'afamily', 'eva',
+    # English function words
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
+    'has', 'have', 'had', 'been', 'not', 'this', 'that', 'it', 'its',
+    'he', 'she', 'they', 'we', 'you', 'his', 'her', 'their', 'our',
+    'will', 'can', 'may', 'also', 'more', 'new', 'top', 'all', 'get',
+    # Number-like tokens
+    '000', '0000', '00000',
+}
+
+
+def _is_noise_keyword(kw: str) -> bool:
+    """Return True if the keyword should be excluded from results."""
+    if kw in _NOISE_WORDS:
+        return True
+    # Pure numbers or number-like tokens (e.g. "2024", "1000")
+    if re.match(r'^\d+$', kw):
+        return True
+    # Very short tokens (shouldn't normally reach here, but guard anyway)
+    if len(kw) < 3:
+        return True
+    return False
 
 
 @router.get("/topics/trending")
@@ -87,6 +131,72 @@ async def get_trending_topics(
     }
 
 
+# ── Live fallback: compute keywords directly from posts ──────────────────────
+_TOKEN_RE = re.compile(
+    r"[a-zA-Z\u00C0-\u024F\u1E00-\u1EFF\u0300-\u036F"
+    r"\u00e0-\u00ff\u0400-\u04FF"
+    r"àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩị"
+    r"òóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+"
+)
+
+
+def _extract_keywords_from_posts(
+    db,
+    start_date: datetime,
+    end_date: datetime,
+    topic: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    Fallback: tokenise post text directly from the posts collection and return
+    top keyword counts in the same shape as the keyword_trends-backed result.
+    Used when keyword_trends has no clean data for the requested period.
+    """
+    posts_coll = db["posts"]
+    match: dict = {"created_at": {"$gte": start_date, "$lte": end_date}}
+    if topic:
+        match["topics"] = topic
+
+    from collections import Counter
+
+    freq: Counter = Counter()
+    post_kw: dict[str, set] = {}  # keyword → set of post _ids
+
+    cursor = posts_coll.find(
+        match,
+        {"_id": 1, "text": 1, "text_cleaned": 1, "topics": 1, "platform": 1},
+    ).limit(5000)
+
+    for post in cursor:
+        text = post.get("text_cleaned") or post.get("text", "")
+        tokens = [
+            t.lower()
+            for t in _TOKEN_RE.findall(text)
+            if len(t) >= 4 and not _is_noise_keyword(t.lower())
+        ]
+        pid = str(post["_id"])
+        for tok in tokens:
+            freq[tok] += 1
+            post_kw.setdefault(tok, set()).add(pid)
+
+    results = []
+    for kw, count in freq.most_common(limit * 3):
+        if _is_noise_keyword(kw):
+            continue
+        results.append({
+            "keyword": kw,
+            "count": count,
+            "unique_posts": len(post_kw.get(kw, set())),
+            "platforms": {"telegram": 0, "twitter": 0},
+            "topics": {},
+            "trend_velocity": 1.0,
+        })
+        if len(results) >= limit:
+            break
+
+    return results
+
+
 @router.get("/analytics/keywords")
 async def get_keywords(
     date_from: str = Query(..., description="Start date (YYYY-MM-DD)"),
@@ -152,7 +262,16 @@ async def get_keywords(
             "trend_velocity": round(avg_velocity, 2),
         })
 
+    # Remove noise/stopword keywords from results
+    keywords_result = [r for r in keywords_result if not _is_noise_keyword(r["keyword"])]
     keywords_result.sort(key=lambda x: x["count"], reverse=True)
+
+    # ── Fallback: keyword_trends empty/sparse → extract live from posts ─────
+    if len(keywords_result) < 5:
+        keywords_result = _extract_keywords_from_posts(
+            db, start_date, end_date, topic=topic, limit=limit
+        )
+
     return {
         "keywords": keywords_result[:limit],
         "total": len(keywords_result),
@@ -202,6 +321,8 @@ async def get_trending_keywords(
             "related_topics": list(data["topics"]),
         })
 
+    # Remove noise/stopword keywords from results
+    trending_keywords = [r for r in trending_keywords if not _is_noise_keyword(r["keyword"])]
     trending_keywords.sort(key=lambda x: x["trend_velocity"], reverse=True)
     return {
         "keywords": trending_keywords[:limit],

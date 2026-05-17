@@ -334,6 +334,7 @@ export default function OverviewPage() {
         <Grid size={{ xs: 12, md: 5 }}>
           <TopicPieChart
             data={topicDistribution.sort((a, b) => b.value - a.value)}
+            total={totalPosts}
             title="Topic Distribution"
             icon={<PieChartIcon />}
             height={520}
