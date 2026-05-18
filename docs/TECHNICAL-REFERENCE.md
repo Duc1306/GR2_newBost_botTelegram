@@ -59,11 +59,21 @@ botTele/
 ├── src/                    # Backend Python source
 │   ├── config.py           # Tất cả cấu hình từ env vars
 │   ├── api/
-│   │   ├── main.py         # FastAPI app entry point, routes chính
-│   │   ├── auth.py         # JWT + bcrypt auth logic
-│   │   ├── channels.py     # Channel subscription endpoints
-│   │   ├── telegram_auth.py# Telegram phone login (MTProto OTP flow)
-│   │   └── middleware.py   # Rate limiting, request logging
+│   │   ├── main.py         # FastAPI app entry point, lifespan
+│   │   ├── auth.py         # JWT + bcrypt + Google OAuth helpers
+│   │   ├── channels.py     # /user/channels/* router
+│   │   ├── telegram_auth.py# Telegram phone login (MTProto OTP)
+│   │   ├── middleware.py   # SlowAPI rate limiting, loguru logging
+│   │   └── routes/         # Route files tách theo domain
+│   │       ├── auth_routes.py         # /auth/*
+│   │       ├── post_routes.py         # /posts, /topics, /stats
+│   │       ├── analytics_routes.py    # /analytics/* (timeline, keywords, heatmap)
+│   │       ├── public_routes.py       # /public/* (no-auth)
+│   │       ├── hotnews_routes.py      # /hotnews, /hot-topics
+│   │       ├── tts_routes.py          # /public/tts
+│   │       ├── notification_routes.py # /notifications/*
+│   │       ├── settings_routes.py     # /settings, /settings/change-password
+│   │       └── admin_routes.py        # /admin/* (ML metrics, X fetch, user mgmt)
 │   ├── db/
 │   │   └── mongo.py        # MongoDB singleton client
 │   ├── ingestion/
@@ -76,23 +86,28 @@ botTele/
 │   │   ├── post.py         # Post, TopicPrediction, MediaItem
 │   │   ├── user.py         # UserInDB, UserPublic, RegisterRequest
 │   │   ├── channel.py      # Channel, ChannelSummary
-│   │   └── notification.py
+│   │   ├── notification.py
+│   │   └── settings.py     # UserSettings
 │   └── processing/
 │       ├── cleaning.py           # clean_text(), extract_links()
-│       ├── topic_classifier.py   # Rule-based keyword classifier
+│       ├── topic_classifier.py   # Rule-based keyword cascade
 │       ├── ml_topic_classifier.py# TF-IDF + LinearSVC
 │       ├── ai_topic_detector.py  # OpenAI GPT-4o-mini
+│       ├── geo_classifier.py     # Phân loại địa lý 10 vùng
+│       ├── backfill_topics.py    # Batch backfill topics & geo
+│       ├── category_mapper.py    # Channel category → Vietnamese topic
 │       ├── web_scraper.py        # Article enrichment
-│       └── deduplication.py      # SHA-256 dedupe
+│       ├── dedupe.py             # SHA-256 deduplication
+│       └── lang.py               # Language detection (vi/en)
 ├── scripts/                # CLI tools và maintenance scripts
 ├── web/                    # Frontend React/Vite
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── context/AuthContext.jsx
-│   │   ├── lib/api.jsx
-│   │   ├── hooks/useApi.jsx
-│   │   └── pages/
-├── tests/                  # pytest test suite
+│   └── src/
+│       ├── App.jsx
+│       ├── context/AuthContext.jsx
+│       ├── lib/api.jsx, publicApi.js
+│       ├── hooks/useApi.jsx
+│       └── pages/admin/, pages/user/, pages/public/, pages/auth/
+├── tests/                  # pytest test suite (9 files)
 ├── models/                 # ML model files (.pkl)
 ├── docs/                   # Tài liệu dự án
 └── requirements.txt
@@ -130,11 +145,19 @@ shutdown:
   → cancel tất cả 3 tasks
 ```
 
-**Hot News Cache:**
+**Routers được include:**
 ```python
-_hotnews_mem: dict[str, dict] = {}
-_hotnews_locks: dict[str, asyncio.Lock] = {}
-# TTL: 1h cho window 24h, 2h cho 48h, 3h cho 72h+
+app.include_router(channels_router)       # /user/channels/*
+app.include_router(telegram_auth_router)  # /auth/telegram/*
+app.include_router(auth_router)           # /auth/*
+app.include_router(post_router)           # /posts, /topics, /stats
+app.include_router(analytics_router)      # /analytics/*
+app.include_router(notification_router)   # /notifications/*
+app.include_router(settings_router)       # /settings
+app.include_router(public_router)         # /public/*, / , /health
+app.include_router(tts_router)            # /public/tts
+app.include_router(hotnews_router)        # /hotnews, /hot-topics
+app.include_router(admin_router)          # /admin/*
 ```
 
 #### `src/api/auth.py` — Auth Logic
@@ -258,13 +281,48 @@ class MLTopicClassifier:
 
 **Pipeline:** `TF-IDF Vectorizer (ngram 1-2, max_features=50000)` → `LinearSVC (C=1.0)`
 
+#### `src/processing/geo_classifier.py` — Geographic Region (Mới)
+
+```python
+_GEO_KEYWORDS: dict[str, list[str]] = {
+    "Việt Nam": [...],   # ≈ 30 keywords
+    "Mỹ": [...],
+    "Trung Quốc": [...],
+    "Nga": [...],
+    "Nhật Bản": [...],
+    "Hàn Quốc": [...],
+    "Châu Âu": [...],
+    "Trung Đông": [...],
+    "Đông Nam Á": [...],
+    "Toàn cầu": [...],
+}
+
+def classify_geo(text: str, channel_username: str = "") -> str | None:
+    """Rule-based: return région or None. Dùng trong ingest pipeline."""
+
+async def classify_geo_with_ai(text: str) -> str | None:
+    """OpenAI fallback khi rule-based không chắc. Dùng trong backfill."""
+```
+
+#### `src/processing/backfill_topics.py` — Backfill (Mới)
+
+```bash
+# Chế độ chạy:
+python -m src.processing.backfill_topics --count      # xem trước
+python -m src.processing.backfill_topics              # rule-based + AI + geo
+python -m src.processing.backfill_topics --geo-only   # chỉ backfill geo
+python -m src.processing.backfill_topics --ai-only    # chỉ AI topic
+python -m src.processing.backfill_topics --limit 500  # giới hạn bài
+```
+
 #### `src/processing/ai_topic_detector.py`
 
 | Hàm | Input | Output |
 |---|---|---|
 | `detect_new_hot_topics(posts, window_hours)` | `list[Post], int` | `list[HotTopic]` |
 | `expand_keywords(topic_name)` | `str` | `list[str]` |
-| `score_posts_by_embedding(posts, query)` | `list[Post], str` | `list[(Post, float)]` |
+| `classify_post_topic_with_ai(text)` | `str` | `list[str]` |
+| `classify_geo_with_ai(text)` | `str` | `str \| None` |
 
 **Graceful degradation:** Trả `[]`/giá trị gốc nếu `OPENAI_API_KEY` không có.
 

@@ -71,8 +71,20 @@ botTele/
 ├── src/
 │   ├── api/
 │   │   ├── main.py              ← FastAPI app, lifespan (khởi động background workers)
+│   │   ├── auth.py              ← JWT + bcrypt + Google OAuth helpers
 │   │   ├── channels.py          ← Subscribe/Unsubscribe kênh (trigger ingestion)
-│   │   └── ...                  ← các route khác (posts, analytics, auth...)
+│   │   ├── telegram_auth.py     ← Telegram phone OTP login
+│   │   ├── middleware.py        ← SlowAPI rate limiting, logging
+│   │   └── routes/              ← Route files tách theo domain
+│   │       ├── auth_routes.py        # /auth/*
+│   │       ├── post_routes.py        # /posts, /topics, /stats
+│   │       ├── analytics_routes.py   # /analytics/*
+│   │       ├── public_routes.py      # /public/* (no-auth)
+│   │       ├── hotnews_routes.py     # /hotnews, /hot-topics + in-memory cache
+│   │       ├── tts_routes.py         # /public/tts (edge-tts)
+│   │       ├── notification_routes.py# /notifications/*
+│   │       ├── settings_routes.py    # /settings
+│   │       └── admin_routes.py       # /admin/*
 │   ├── ingestion/
 │   │   ├── telegram_worker.py   ← Fetch tin từ Telegram (Telethon)
 │   │   ├── x_worker.py          ← Fetch tweet từ X/Twitter (Apify)
@@ -81,11 +93,16 @@ botTele/
 │   ├── processing/
 │   │   ├── cleaning.py          ← Làm sạch text, tách link
 │   │   ├── lang.py              ← Nhận dạng ngôn ngữ (langdetect)
-│   │   ├── ml_topic_classifier.py ← TF-IDF + LinearSVC
 │   │   ├── topic_classifier.py  ← 4-tier cascade (P1→P2→P3→P4)
-│   │   └── web_scraper.py       ← Làm giàu nội dung từ URL gốc (tuỳ chọn)
+│   │   ├── ml_topic_classifier.py ← TF-IDF + LinearSVC
+│   │   ├── ai_topic_detector.py ← OpenAI GPT-4o-mini
+│   │   ├── geo_classifier.py    ← Phân loại địa lý 10 vùng (rule-based + AI)
+│   │   ├── backfill_topics.py   ← Batch backfill topics & geo cho bài cũ
+│   │   ├── category_mapper.py   ← Channel category → Vietnamese topic
+│   │   ├── web_scraper.py       ← Làm giàu nội dung từ URL gốc (tuỳ chọn)
+│   │   └── dedupe.py            ← SHA-256 deduplication
 │   ├── models/
-│   │   └── post.py              ← Dataclass Post (dedupe_key SHA-256)
+│   │   └── post.py              ← Dataclass Post (includes geo field)
 │   └── config.py                ← Tất cả biến môi trường, đọc từ .env
 ├── models/
 │   └── topic_classifier_svm.pkl ← Model ML đã train (TF-IDF + SVM)
@@ -95,6 +112,17 @@ botTele/
 │   ├── fetch_x.cmd              ← Trigger thủ công: fetch X/Twitter
 │   ├── seed_x_sources.py        ← Seed danh sách tài khoản X vào DB
 │   └── train_ml_classifier.py   ← Train lại model offline
+├── web/
+│   └── src/
+│       ├── App.jsx
+│       ├── context/AuthContext.jsx
+│       ├── lib/api.jsx, publicApi.js
+│       ├── hooks/useApi.jsx
+│       └── pages/
+│           ├── admin/    # OverviewPage, PostsPage, AnalyticsPage, TrendingPage, UsersPage, SettingsPage
+│           ├── user/     # DashboardPage
+│           ├── auth/     # LoginPage, RegisterPage, TelegramLoginPage
+│           └── public/   # PublicHomePage + tabs/ (ArticlesTab, HotNewsTab, XSearchTab, StatsTab)
 ├── docs/
 │   ├── system_overview.md       ← File này
 │   ├── deploy.md                ← Hướng dẫn deploy (Render + Vercel + Atlas)
@@ -113,9 +141,10 @@ botTele/
 uvicorn src.api.main:app --reload --port 8000
 ```
 
-Khi API server khởi động, FastAPI **tự động bật 2 background workers** (xem Mục 7):
+Khi API server khởi động, FastAPI **tự động bật 3 background workers** (xem Mục 7):
 - `run_worker()` — poll hàng đợi `pending_channels` mỗi 30 giây
 - `run_refresh_loop()` — refresh tất cả kênh active mỗi 12 giờ
+- `_hotnews_precompute_worker()` — warm hot news cache
 
 > **Lưu ý:** Để chạy trong production, bỏ `--reload` và thêm `--workers 1`.
 

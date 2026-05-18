@@ -1,13 +1,14 @@
-# 🤖 NewsBot - Telegram News Aggregator
+# 🤖 NewsBot - Multi-Source News Aggregator
 
-Thu thập, phân loại và hiển thị tin tức từ **Telegram** với AI/ML.
+Thu thập, phân loại và hiển thị tin tức từ **Telegram** và **X (Twitter)** với AI/ML.
 
-**Pipeline:** Telegram → Clean → ML Topic Classification → Risk Scoring → Web UI
+**Pipeline:** Telegram / X → Clean → Geo Classify → ML Topic Classification → AI Hot News → Web UI
 
-**Tech:** Python 3.12, FastAPI, MongoDB, React 18, scikit-learn (TF-IDF + SVM), OpenAI GPT
+**Tech:** Python 3.12, FastAPI, MongoDB, React 18, scikit-learn (TF-IDF + SVM), OpenAI GPT-4o-mini, edge-tts
 
 **Platforms:**
 - ✅ **Telegram** - Channels & Groups
+- ✅ **X (Twitter)** - Accounts & Keywords (via Apify)
 
 ---
 
@@ -426,51 +427,94 @@ scripts\evaluate_model.cmd
 botTele/
 ├── src/
 │   ├── api/
-│   │   ├── main.py                    # FastAPI server (incl. /admin/ml-metrics)
-│   │   ├── auth.py                    # JWT authentication
-│   │   ├── channels.py                # Channel management API
-│   │   └── middleware.py              # Rate limiting, logging
+│   │   ├── main.py                    # FastAPI app + lifespan (khởi động workers)
+│   │   ├── auth.py                    # JWT + bcrypt, Google OAuth helpers
+│   │   ├── channels.py                # /user/channels/* router
+│   │   ├── telegram_auth.py           # /auth/telegram/* (Telegram OTP flow)
+│   │   ├── middleware.py              # SlowAPI rate limiting, loguru logging
+│   │   └── routes/                    # Tách route theo domain
+│   │       ├── auth_routes.py         # /auth/* (login, register, Google, me)
+│   │       ├── post_routes.py         # /posts, /topics, /stats, bookmarks
+│   │       ├── analytics_routes.py    # /analytics/* (timeline, keywords, heatmap...)
+│   │       ├── public_routes.py       # /public/* (no-auth feed, X search, TTS)
+│   │       ├── hotnews_routes.py      # /hotnews, /hot-topics/* (AI clusters)
+│   │       ├── tts_routes.py          # /public/tts (edge-tts MP3)
+│   │       ├── notification_routes.py # /notifications/*
+│   │       ├── settings_routes.py     # /settings, change-password
+│   │       └── admin_routes.py        # /admin/* (users, ML metrics, X fetch)
 │   ├── ingestion/
-│   │   ├── telegram_worker.py         # Telegram ingestion + auto ML predict
-│   │   ├── channel_queue_worker.py    # Background worker + AI summary + risk_score
-│   │   └── sources.py                 # Channel configs
+│   │   ├── telegram_worker.py         # Telegram ingestion + auto classify
+│   │   ├── x_worker.py                # Apify X/Twitter ingest
+│   │   ├── channel_queue_worker.py    # Background worker + AI summary
+│   │   ├── run_scheduled_refresh.py   # Cron one-shot: refresh toàn bộ kênh
+│   │   └── sources.py                 # Đọc danh sách nguồn từ MongoDB
 │   ├── processing/
-│   │   ├── ml_topic_classifier.py     # ML classifier (TF-IDF + SVM), 19 topics
-│   │   ├── topic_classifier.py        # Rule-based keywords, 19 topics
-│   │   ├── ai_topic_detector.py       # OpenAI GPT: summary + sentiment + risk_score
+│   │   ├── ml_topic_classifier.py     # ML classifier (TF-IDF + LinearSVC), 19 topics
+│   │   ├── topic_classifier.py        # Rule-based keyword cascade (4 tầng)
+│   │   ├── ai_topic_detector.py       # OpenAI GPT-4o-mini: summary + sentiment + risk_score
+│   │   ├── geo_classifier.py          # Phân loại địa lý (10 vùng), rule-based + AI fallback
+│   │   ├── backfill_topics.py         # Batch backfill topics & geo cho bài cũ
 │   │   ├── category_mapper.py         # Channel category → Vietnamese topic
 │   │   ├── web_scraper.py             # Article scraping + URL topic detection
-│   │   ├── cleaning.py                # Text cleaning
-│   │   ├── dedupe.py                  # Deduplication
-│   │   └── lang.py                    # Language detection
+│   │   ├── cleaning.py                # Text cleaning, extract_links()
+│   │   ├── dedupe.py                  # SHA-256 deduplication
+│   │   └── lang.py                    # Language detection (vi/en)
 │   ├── models/
-│   │   ├── post.py                    # Post data model
-│   │   ├── channel.py                 # Channel data model
-│   │   └── settings.py                # Settings model
-│   ├── db/mongo.py                    # MongoDB client
-│   └── config.py                      # Configuration
+│   │   ├── post.py                    # Post, TopicPrediction, MediaItem, FullArticle
+│   │   ├── channel.py                 # Channel, ChannelSummary
+│   │   ├── user.py                    # UserInDB, UserPublic, RegisterRequest
+│   │   ├── notification.py            # Notification model
+│   │   └── settings.py                # UserSettings model
+│   ├── db/mongo.py                    # MongoDB singleton client + helpers
+│   └── config.py                      # Tất cả env vars, CORS, safety checks
 ├── web/                               # React 18 + Vite frontend
 │   └── src/
 │       ├── pages/
 │       │   ├── admin/
-│       │   │   └── AnalyticsPage.jsx  # Analytics + ML chart + Export CSV
-│       │   └── public/
-│       │       └── PublicHomePage.jsx # Hot news + risk_score badge
+│       │   │   ├── AnalyticsPage.jsx  # Analytics + ML chart + Export CSV + Heatmap
+│       │   │   ├── OverviewPage.jsx   # Tổng quan hệ thống
+│       │   │   ├── PostsPage.jsx      # Quản lý bài viết
+│       │   │   ├── TrendingPage.jsx   # Xu hướng chủ đề
+│       │   │   ├── SettingsPage.jsx   # Cài đặt hệ thống
+│       │   │   └── UsersPage.jsx      # Quản lý người dùng (admin)
+│       │   ├── user/
+│       │   │   └── DashboardPage.jsx  # Dashboard người dùng + kênh đã subscribe
+│       │   ├── public/
+│       │   │   ├── PublicHomePage.jsx # Trang chủ công khai (4 tab)
+│       │   │   └── tabs/
+│       │   │       ├── ArticlesTab.jsx  # Danh sách bài viết công khai
+│       │   │       ├── HotNewsTab.jsx   # AI Hot News clusters + TTS
+│       │   │       ├── StatsTab.jsx     # Thống kê nhanh
+│       │   │       └── XSearchTab.jsx   # Tìm kiếm X/Twitter live
+│       │   └── auth/
+│       │       ├── LoginPage.jsx
+│       │       ├── RegisterPage.jsx
+│       │       └── TelegramLoginPage.jsx
 │       ├── components/
-│       │   └── PostDetailModal.jsx    # Explainable AI topic tooltips
+│       │   ├── PostDetailModal.jsx    # Explainable AI topic tooltips
+│       │   ├── AudioPlayer.jsx        # TTS audio player
+│       │   ├── NotificationDropdown.jsx
+│       │   ├── public/                # ArticleCard, HotClusterCard, NewsTicker...
+│       │   └── charts/                # TimelineChart, KeywordsBarChart...
+│       ├── lib/
+│       │   ├── api.jsx                # fetchWithAuth() + auth token
+│       │   └── publicApi.js           # Public API calls (no auth)
 │       └── theme/colors.jsx           # 19 topic colors
 ├── scripts/
 │   ├── train_ml_classifier.py         # Train (auto-inject + auto-balance)
 │   ├── evaluate_model.py              # Evaluate → models/evaluation_report.json
-│   ├── auto_retrain.py                # Auto retrain logic
-│   ├── predict_topics.py              # Batch predictions
-│   ├── create_session.py              # Telegram auth
-│   ├── create_indexes.py              # MongoDB indexes
+│   ├── auto_retrain.py                # Auto retrain theo lịch
+│   ├── predict_topics.py              # Batch predict topics cho posts cũ
+│   ├── create_session.py              # Tạo Telegram session
+│   ├── create_indexes.py              # Tạo MongoDB indexes
 │   └── *.cmd                          # Windows shortcuts
-├── tests/                             # Unit tests
+├── tests/                             # pytest: 9 test files
+│   ├── test_auth_jwt.py, test_auth_roles.py, test_cleaning.py
+│   ├── test_dedupe.py, test_ml_classifier.py, test_post_model.py
+│   ├── test_security.py, test_web_scraper.py, test_x_scraper.py
 ├── models/
 │   ├── topic_classifier_svm.pkl       # Trained model (19 topics)
-│   └── evaluation_report.json         # Evaluation results (for ML chart)
+│   └── evaluation_report.json         # Evaluation results (cho ML chart)
 ├── docs/                              # Documentation
 ├── .env                               # Environment config
 └── requirements.txt                   # Python dependencies
@@ -480,11 +524,71 @@ botTele/
 
 ## 🔧 API Endpoints
 
+### Public (không cần đăng nhập)
 ```
-GET  /posts?topic=Technology&limit=20&skip=0    # Get posts
-GET  /topics                                     # List all topics
-GET  /stats                                      # Database statistics  
-GET  /posts/count?topic=Crypto                  # Count posts
+GET  /                                           # Root info
+GET  /health                                     # Health check
+GET  /public/posts                               # Bảng tin công khai (filter: topic, lang, geo, platform, date)
+GET  /public/x/search?q=keyword                 # Tìm kiếm X/Twitter live (Apify)
+POST /public/tts                                 # Text-to-Speech MP3 (vi-VN-HoaiMyNeural)
+GET  /hotnews?window_hours=48                    # AI hot news clusters (cached)
+GET  /hot-topics                                 # Danh sách hot topics
+```
+
+### Auth
+```
+POST /auth/login                                 # Đăng nhập (username/password)
+POST /auth/register                              # Đăng ký tài khoản
+POST /auth/google                                # Đăng nhập Google OAuth
+POST /auth/logout                                # Đăng xuất
+GET  /auth/me                                    # Thông tin user hiện tại
+```
+
+### Posts & Analytics (yêu cầu JWT)
+```
+GET  /posts?topic=Crypto&limit=20&skip=0         # Danh sách bài viết
+GET  /posts/count                                # Đếm bài viết
+GET  /topics                                     # Danh sách chủ đề + count
+GET  /topics/trending?days=7                     # Chủ đề đang nổi
+GET  /stats                                      # Thống kê tổng quan
+GET  /analytics/timeline?date_from=...           # Timeline chart
+GET  /analytics/keywords?limit=20               # Top từ khóa
+GET  /analytics/keywords/trending               # Từ khóa tăng tốc
+GET  /analytics/comparison                      # So sánh platform/topic
+GET  /analytics/heatmap                         # Heatmap ngày/giờ
+```
+
+### User & Settings
+```
+GET  /user/channels                              # Kênh đã subscribe
+POST /user/channels/subscribe                    # Subscribe kênh
+DEL  /user/channels/{username}                   # Unsubscribe
+GET  /settings                                   # Cài đặt người dùng
+PUT  /settings                                   # Cập nhật cài đặt
+POST /settings/change-password                  # Đổi mật khẩu
+GET  /notifications                              # Danh sách thông báo
+POST /notifications/{id}/read                   # Đánh dấu đã đọc
+POST /notifications/mark-all-read              # Đánh dấu tất cả đã đọc
+```
+
+### Telegram Auth
+```
+POST /auth/telegram/send-code                   # Gửi OTP
+POST /auth/telegram/verify                      # Xác minh OTP → JWT
+POST /auth/telegram/verify-2fa                  # Xác minh 2FA
+```
+
+### Admin (yêu cầu role=admin)
+```
+GET  /admin/ml-metrics                           # Evaluation report ML model
+POST /admin/x/fetch                              # Kích hoạt cào X theo từ khóa
+POST /admin/hot-topics/seed                      # Seed hot topics mặc định
+GET  /admin/hot-topics                           # Danh sách hot topics (admin)
+PUT  /admin/hot-topics/{slug}                    # Cập nhật hot topic
+GET  /admin/users                                # Danh sách users
+PUT  /admin/users/{username}/role                # Đổi role
+PUT  /admin/users/{username}/status              # Đổi status
+
 GET  /docs                                       # Swagger UI
 ```
 
@@ -627,6 +731,8 @@ scripts\run_api.cmd
 
 ## 💾 Database Design
 
+Database: **MongoDB `newsbot`** — 7 collections.
+
 ### Collections Schema
 
 #### 1. **posts** - Main collection
@@ -634,8 +740,9 @@ scripts\run_api.cmd
 ```javascript
 {
   _id: ObjectId("..."),
-  platform: "telegram",
-  source: "telegram:channel_username",
+  id: "telegram:channel_username:3195",   // UNIQUE
+  platform: "telegram" | "twitter",
+  source: "channel_username",
   source_id: "3195",
   author: "@username",
   text: "Original raw text...",
@@ -645,91 +752,104 @@ scripts\run_api.cmd
   media: [{type: "photo", url: "..."}],
   created_at: ISODate("..."),
   fetched_at: ISODate("..."),
-  dedupe_key: "hash",
+  dedupe_key: "sha256_hash[:32]",         // UNIQUE — chống trùng
   topics: ["Crypto", "Kinh tế"],
-  source_topic: "Crypto",        // Ground truth từ news URL
   topic_predictions: [
     {
       topic: "Crypto",
       confidence: 0.95,
       model_version: "svm_v1.0_20260102",
       predicted_at: ISODate("..."),
-      method: "ml" | "rule" | "url" | "channel"
+      method: "ml" | "rule-based" | "manual"
     }
   ],
-  score: 0.0
+  source_category: "crypto",             // Slug category từ URL báo gốc
+  source_topic: "Crypto",                // Ground truth từ URL
+  manual_labels: ["Crypto"],
+  labels_verified: false,
+  geo: "Việt Nam" | "Mỹ" | "Trung Quốc" | "Nga" | "Nhật Bản"
+       | "Hàn Quốc" | "Châu Âu" | "Trung Đông" | "Đông Nam Á"
+       | "Toàn cầu" | null,              // Phân loại địa lý (mới)
+  score: 0.0,
+  full_article: {                         // Bài báo gốc đã crawl (tuỳ chọn)
+    title, content, author, published_at, scraped_at
+  }
 }
 ```
 
-#### 2. **channel_summaries** - AI summary + risk score
+#### 2. **channel_metadata** - Kênh Telegram
 
 ```javascript
 {
-  channel_id: "telegram:crypto_news",
-  summary: "Tóm tắt nội dung cụm tin...",
-  sentiment: "positive" | "neutral" | "negative",
-  risk_score: 3,                 // 1–10, lưu từ GPT
-  topics: ["Crypto"],
-  created_at: ISODate("..."),
-  updated_at: ISODate("...")
-}
-```
-
-#### 3. **sources** - Source metadata
-
-```javascript
-{
-  _id: ObjectId("..."),
   platform: "telegram",
-  source_type: "channel" | "group",
-  source_id: "@channel_username",
-  name: "Channel Display Name",
-  url: "https://...",
+  username: "channel_username",
+  link: "https://t.me/channel_username",
+  category: "Auto & Moto",               // Category tiếng Anh
   is_active: true,
-  post_count: 1234,
-  metadata: {...}
+  source_type: "channel"
 }
 ```
 
-#### 4. **topic_stats** - Daily aggregated statistics
+#### 3. **hot_topics** - Chủ đề nóng
 
 ```javascript
 {
-  topic: "Crypto",
-  date: ISODate("2026-01-02T00:00:00Z"),
-  platform: "telegram" | "all",
-  post_count: 1234,
-  avg_confidence: 0.87,
-  top_keywords: [{keyword: "bitcoin", count: 456}],
-  trend_score: 1.23,
-  trend_direction: "up"
+  slug: "crypto",                        // UNIQUE, URL-safe
+  name: "💰 Crypto",
+  description: "Bitcoin, Ethereum...",
+  keywords: ["bitcoin", "ethereum"],
+  color: "#F7931A",
+  priority: 1,
+  active: true
 }
 ```
 
-#### 5. **keyword_trends** - Keyword tracking
+#### 4. **keyword_trends** - Xu hướng từ khóa (pre-aggregated)
 
 ```javascript
 {
   keyword: "bitcoin",
   date: ISODate("..."),
-  topics: {"Crypto": 567, "Kinh tế": 123},
   total_count: 690,
+  unique_posts: 456,
+  platforms: {telegram: 500, twitter: 190},
+  topics: {"Crypto": 567, "Kinh tế": 123},
   trend_velocity: 2.5
 }
 ```
 
-#### 6. **ml_model_versions** - Model tracking
+#### 5. **notifications** - Thông báo người dùng
 
 ```javascript
 {
-  version: "svm_v1.0_20260102",
-  model_type: "svm",
-  accuracy: 0.9868,
-  f1_score: 0.99,
-  training_samples: 32129,
-  topic_count: 19,
-  is_active: true,
-  trained_at: ISODate("...")
+  user: "username",
+  type: "info" | "success" | "warning" | "error",
+  title: "Tiêu đề",
+  message: "Nội dung",
+  link: "https://...",
+  read: false,
+  created_at: ISODate("...")
+}
+```
+
+#### 6. **user_settings** - Cài đặt người dùng
+
+```javascript
+{
+  username: "admin",
+  // các preference của user
+}
+```
+
+#### 7. **channels** - Kênh đã subscribe (per user)
+
+```javascript
+{
+  username: "user",
+  channel: "channel_username",
+  platform: "telegram",
+  status: "active",
+  subscribed_at: ISODate("...")
 }
 ```
 
@@ -737,17 +857,17 @@ scripts\run_api.cmd
 
 ```javascript
 // Unique constraints
-posts: (platform, source, source_id)
-posts: dedupe_key
-sources: (platform, source_id)
-topic_stats: (topic, date, platform)
-keyword_trends: (keyword_normalized, date)
+posts: id (UNIQUE)
+posts: dedupe_key (UNIQUE)
+channel_metadata: (username, platform) UNIQUE
+hot_topics: slug UNIQUE
 
 // Query optimization
 posts: (platform, created_at)
 posts: (topics, created_at)
 posts: (topic_predictions.topic, created_at)
-posts: text (fulltext search)
+posts: (lang, platform)
+posts: text_cleaned TEXT (full-text search)
 ```
 
 ### Database Migration
@@ -755,6 +875,22 @@ posts: text (fulltext search)
 Chạy migration 1 lần:
 ```bash
 scripts\migrate_db_schema.cmd
+```
+
+### Backfill topics & geo cho bài cũ
+
+```bash
+# Xem trước số bài thiếu topics/geo
+python -m src.processing.backfill_topics --count
+
+# Backfill đầy đủ (rule-based + OpenAI fallback + geo)
+python -m src.processing.backfill_topics
+
+# Chỉ backfill geo
+python -m src.processing.backfill_topics --geo-only
+
+# Giới hạn số bài
+python -m src.processing.backfill_topics --limit 500
 ```
 
 ### Generate Analytics Data
@@ -769,5 +905,5 @@ scripts\extract_keyword_trends.cmd --days 7
 
 ---
 
-**Status:** ✅ Production Ready | **Version:** 3.0 (with ML + AI + 19 Topics)
+**Status:** ✅ Production Ready | **Version:** 2.0.0 (ML + AI + Geo + Public API + X Search)
 

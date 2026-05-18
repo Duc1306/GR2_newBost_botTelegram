@@ -14,18 +14,22 @@ Dự án **NewsBot** là hệ thống tổng hợp tin tức tự động đa ng
 
 | Hạng mục | Trạng thái | Ghi chú |
 |---|---|---|
-| Backend API | ✅ Hoàn thành | FastAPI 2.0, 35+ endpoints |
+| Backend API | ✅ Hoàn thành | FastAPI 2.0, 40+ endpoints, tách route theo domain |
 | Thu thập dữ liệu Telegram | ✅ Hoàn thành | Telethon MTProto, tự động |
-| Thu thập dữ liệu X/Twitter | ✅ Hoàn thành | Apify scraping |
+| Thu thập dữ liệu X/Twitter | ✅ Hoàn thành | Apify scraping + on-demand admin trigger |
 | Phân loại chủ đề (ML) | ✅ Hoàn thành | TF-IDF + LinearSVC, 19 chủ đề |
 | Phân loại chủ đề (Rule-based) | ✅ Hoàn thành | Keyword matching vi/en |
+| Phân loại địa lý (Geo) | ✅ Hoàn thành | 10 vùng, rule-based + OpenAI fallback |
+| Backfill topics & geo | ✅ Hoàn thành | Batch xử lý bài cũ song song |
 | Tính năng AI Hot News | ✅ Hoàn thành | GPT-4o-mini, in-memory cache |
+| Public API (không auth) | ✅ Hoàn thành | /public/posts, /public/tts, /public/x/search |
+| X Live Search | ✅ Hoàn thành | Tìm kiếm X/Twitter real-time qua Apify |
 | Xác thực & Phân quyền | ✅ Hoàn thành | JWT + Google OAuth + Telegram OTP |
-| Giao diện Frontend | ✅ Hoàn thành | React 18 + MUI, 10 trang |
-| Analytics & Thống kê | ✅ Hoàn thành | 6 loại biểu đồ/báo cáo |
-| Text-to-Speech | ✅ Hoàn thành | Tiếng Việt, HoaiMyNeural |
+| Giao diện Frontend | ✅ Hoàn thành | React 18 + MUI, 13 trang, 4 public tab |
+| Analytics & Thống kê | ✅ Hoàn thành | Timeline, Keywords, Heatmap, Comparison, Trending |
+| Text-to-Speech | ✅ Hoàn thành | Tiếng Việt, HoaiMyNeural, rate-limited |
 | Triển khai Production | ✅ Hoàn thành | Render + Vercel + MongoDB Atlas |
-| Testing | ✅ Hoàn thành | 8 test files, pytest |
+| Testing | ✅ Hoàn thành | 9 test files, pytest |
 
 ---
 
@@ -43,6 +47,7 @@ Hệ thống kết nối trực tiếp vào Telegram bằng tài khoản thật 
 - Phát hiện ngôn ngữ tự động (tiếng Việt / tiếng Anh)
 - Tự động join kênh từ danh sách (`scripts/auto_join_channels.py`)
 - Background worker tự động refresh mỗi 12 giờ
+- Phân loại địa lý (geo) ngay khi ingest
 
 ### 1.2 Thu thập từ X / Twitter ✅
 
@@ -53,14 +58,17 @@ Hệ thống kết nối trực tiếp vào Telegram bằng tài khoản thật 
 - Scrape theo từ khóa / hashtag (`xkw:bitcoin`)
 - Cooldown 6 giờ/nguồn để tiết kiệm Apify credits
 - Tự động trigger khi user subscribe kênh mới
+- **Admin endpoint** `POST /admin/x/fetch`: kích hoạt cào X theo từ khóa ngay lập tức
 
 ### 1.3 Xử lý & Làm sạch dữ liệu ✅
 
 **Tính năng đã làm:**
 - Làm sạch text: xóa emoji, chuẩn hóa khoảng trắng
 - Tách và lưu riêng các URL trong bài
-- Chống trùng lặp bằng SHA-256 hash (dedupe_key)
+- Chống trùng lập bằng SHA-256 hash (dedupe_key, module `dedupe.py`)
 - Enrich bài viết bằng cách scrape nội dung từ URL đính kèm (BeautifulSoup)
+- Phân loại **địa lý** (geo) bằng rule-based + OpenAI fallback (module `geo_classifier.py`)
+- **Backfill** hàng loạt bài cũ thiếu topics/geo bằng `src/processing/backfill_topics.py`
 
 ---
 
@@ -111,6 +119,29 @@ Crypto, Kinh tế, Công nghệ, Chính trị, Thế giới, Pháp luật, Ô t�
 - Tóm tắt dựa trên bài viết 24 giờ gần nhất
 - Lưu vào collection `channel_summaries`
 - Hiển thị trên Dashboard người dùng
+
+### 3.3 Phân loại Địa lý (Geo) ✅
+
+**Tình năng:** `src/processing/geo_classifier.py`
+
+**10 vùng địa lý được phân loại:**
+Việt Nam, Mỹ, Trung Quốc, Nga, Nhật Bản, Hàn Quốc, Châu Âu, Trung Đông, Đông Nam Á, Toàn cầu.
+
+**Tính năng đã làm:**
+- Rule-based: keyword matching (instant, miễn phí)
+- OpenAI fallback: gọi GPT khi rule-based không chắc chắn
+- Lưu trường `geo` trực tiếp vào document `posts`
+- Filter theo geo qua `GET /public/posts?geo=Việt+Nam`
+
+### 3.4 Backfill Hàng loạt ✅
+
+**Tình năng:** `src/processing/backfill_topics.py`
+
+**Tính năng đã làm:**
+- Backfill `topics` + `geo` cho bài cũ chưa có field
+- Bất đồng bộ (asyncio) với giới hạn 5 OpenAI calls song song (tránh rate-limit)
+- Batch ghi DB 200 bài/lần (`bulk_write`)
+- Các chế độ: `--count` (xem trước), `--geo-only`, `--ai-only`, `--limit`
 
 ---
 
@@ -174,6 +205,26 @@ Crypto, Kinh tế, Công nghệ, Chính trị, Thế giới, Pháp luật, Ô t�
 - Trigger refresh thủ công: `POST /user/channels/{username}/refresh`
 - Trạng thái kênh: `pending` → `active` → (refresh mỗi 12h)
 
+### 5.3 Public News Feed ✅
+
+**Endpoint:** `GET /public/posts` (không cần đăng nhập)
+
+**Tính năng đã làm:**
+- Bảng tin công khai không yêu cầu JWT
+- Filter: `topic`, `lang`, `geo`, `platform`, `date_from`, `date_to`, `link_only`
+- Rate limit: 200 req/phút/IP
+
+### 5.4 X Live Search ✅
+
+**Endpoint:** `GET /public/x/search?q=keyword` (không cần đăng nhập)
+
+**Tính năng đã làm:**
+- Tìm kiếm X/Twitter real-time qua Apify Actor
+- Cache per-keyword 5 phút (tránh gọi Apify lặp lại)
+- Flag `live: true` khi kết quả vừa được cào mới
+- Frontend tab **X Search** hiển thị kết quả kèm pagination
+- Nếu không có Apify token: trả về kết quả từ DB sẵn có
+
 ---
 
 ## VI. Analytics & Thống kê
@@ -216,10 +267,10 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 
 | Trang | Đường dẫn | Nội dung |
 |---|---|---|
-| **Overview** | `/overview` | StatCards (tổng bài, nguồn, chủ đề), Timeline chart, Topic pie chart, Keyword cloud |
-| **Analytics** | `/analytics` | Biểu đồ xu hướng, heatmap, so sánh nền tảng |
-| **Posts** | `/posts` | Bảng danh sách bài viết, filter theo chủ đề/nguồn/ngôn ngữ/từ khóa |
-| **Trending** | `/trending` | Top trending topics + trending keywords |
+| **Overview** | `/overview` | StatCards, Timeline chart, Topic pie chart, Keyword cloud |
+| **Analytics** | `/analytics` | Timeline, Keywords bar, Heatmap, Comparison, ML Evaluation chart, Export CSV |
+| **Posts** | `/posts` | Bảng danh sách bài viết, filter |
+| **Trending** | `/trending` | Top trending topics + keywords |
 | **Users** | `/users` | Quản lý tài khoản (chỉ admin) |
 | **Settings** | `/settings` | Cài đặt hệ thống |
 
@@ -227,10 +278,18 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 
 | Trang | Đường dẫn | Nội dung |
 |---|---|---|
-| **Dashboard** | `/dashboard` | Danh sách kênh đã subscribe, tóm tắt AI, nút subscribe/unsubscribe |
-| **Public Home** | `/` | Trang giới thiệu công khai |
+| **Dashboard** | `/dashboard` | Kênh đã subscribe, tóm tắt AI, nghè bản tin TTS |
 
-### 7.3 Trang Xác thực ✅
+### 7.3 Trang Công khai (không cần đăng nhập) ✅
+
+| Tab | Nội dung |
+|---|---|
+| **Bài viết** | Filter theo chủ đề, ngôn ngữ, nền tảng, ngày |
+| **Tin Nóng (AI)** | Clusters tin nóng GPT-4o-mini + TTS audio |
+| **Thống kê** | Quick stats, top topics, post count |
+| **Tìm kiếm X** | Tìm kiếm X/Twitter real-time qua Apify |
+
+### 7.4 Trang Xác thực ✅
 
 | Trang | Đường dẫn |
 |---|---|
@@ -247,6 +306,8 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 - ErrorBoundary để hiển thị lỗi thay vì blank page
 - Responsive design (MUI Grid)
 - Tất cả data dùng TanStack Query (staleTime, cache, retry)
+- AudioPlayer component cho TTS
+- NewsTicker cho PublicHomePage
 
 ---
 
@@ -256,11 +317,12 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 **Giọng đọc:** `vi-VN-HoaiMyNeural` (tiếng Việt, giọng nữ)
 
 **Tính năng đã làm:**
+- Endpoint `POST /public/tts` (không cần JWT) — rate limit 20 req/phút/IP
 - Endpoint `GET /user/channels/{slug}/audio` → trả file MP3
 - Pre-generate audio ngay sau khi tạo channel summary
 - Stream MP3 trực tiếp (`StreamingResponse`)
-- Giới hạn 7000 ký tự/lần đọc
-- Nút "Nghe bản tin" trên giao diện Dashboard
+- Giới hạn 3000 ký tự/lần đọc (public endpoint)
+- Nút "Nghe bản tin" trên giao diện Dashboard và HotNewsTab
 
 ---
 
@@ -317,6 +379,7 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 
 | File Test | Nội dung kiểm tra |
 |---|---|
+| `test_auth_jwt.py` | JWT encode/decode, token expiry |
 | `test_auth_roles.py` | JWT auth flow, role-based access |
 | `test_cleaning.py` | `clean_text()`, `extract_links()`, `remove_emojis()` |
 | `test_dedupe.py` | SHA-256 deduplication |
@@ -360,11 +423,14 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 | 8 | Phân quyền Admin / User | ✅ 100% |
 | 9 | Quản lý kênh (subscribe/unsubscribe) | ✅ 100% |
 | 10 | Analytics: trend, keyword, timeline, heatmap | ✅ 100% |
-| 11 | Giao diện web 10 trang | ✅ 100% |
-| 12 | Text-to-Speech tiếng Việt | ✅ 100% |
+| 11 | Giao diện web 13 trang (3 trang public, 6 admin, 1 user, 3 auth) | ✅ 100% |
+| 12 | Text-to-Speech tiếng Việt (public + authenticated) | ✅ 100% |
 | 13 | Background workers tự động hóa | ✅ 100% |
 | 14 | Triển khai production (Render + Vercel + Atlas) | ✅ 100% |
-| 15 | Tài liệu kỹ thuật đầy đủ (9 files) | ✅ 100% |
+| 15 | Phân loại địa lý (Geo) 10 vùng | ✅ 100% |
+| 16 | Public API + X Live Search | ✅ 100% |
+| 17 | Backfill hàng loạt topics & geo | ✅ 100% |
+| 18 | Tài liệu kỹ thuật đầy đủ (9 files) | ✅ 100% |
 
 ### Điểm nổi bật kỹ thuật
 

@@ -125,11 +125,21 @@ botTele/
 │   │
 │   ├── api/                      # HTTP interfaces
 │   │   ├── __init__.py
-│   │   ├── main.py               # FastAPI app, lifespan, core endpoints
+│   │   ├── main.py               # FastAPI app, lifespan, router inclusion
 │   │   ├── auth.py               # JWT + bcrypt functions
 │   │   ├── channels.py           # /user/channels/* router
 │   │   ├── telegram_auth.py      # /auth/telegram/* router
-│   │   └── middleware.py         # SlowAPI setup, logging middleware
+│   │   ├── middleware.py         # SlowAPI setup, logging middleware
+│   │   └── routes/               # Route files tách theo domain
+│   │       ├── auth_routes.py         # /auth/*
+│   │       ├── post_routes.py         # /posts, /topics, /stats
+│   │       ├── analytics_routes.py    # /analytics/* (timeline, keywords, heatmap)
+│   │       ├── public_routes.py       # /public/* (no-auth, rate limited)
+│   │       ├── hotnews_routes.py      # /hotnews, /hot-topics + cache
+│   │       ├── tts_routes.py          # /public/tts (TTS tiếng Việt)
+│   │       ├── notification_routes.py # /notifications/*
+│   │       ├── settings_routes.py     # /settings
+│   │       └── admin_routes.py        # /admin/* (ML, X fetch, user mgmt)
 │   │
 │   ├── db/                       # Data access
 │   │   ├── __init__.py
@@ -148,7 +158,8 @@ botTele/
 │   │   ├── post.py               # Post, TopicPrediction, MediaItem, FullArticle
 │   │   ├── user.py               # UserInDB, UserPublic, RegisterRequest
 │   │   ├── channel.py            # Channel, ChannelSummary, ChannelWithSummary
-│   │   └── notification.py       # Notification model
+│   │   ├── notification.py       # Notification model
+│   │   └── settings.py           # UserSettings
 │   │
 │   └── processing/               # Pure business logic (no I/O)
 │       ├── __init__.py
@@ -156,8 +167,12 @@ botTele/
 │       ├── topic_classifier.py   # Rule-based keyword classifier
 │       ├── ml_topic_classifier.py # TF-IDF + LinearSVC
 │       ├── ai_topic_detector.py  # OpenAI GPT-4o-mini
+│       ├── geo_classifier.py     # Phân loại địa lý 10 vùng
+│       ├── backfill_topics.py    # Batch backfill topics & geo
+│       ├── category_mapper.py    # Channel category → Vietnamese topic
 │       ├── web_scraper.py        # Article enrichment
-│       └── deduplication.py      # SHA-256 dedupe key
+│       ├── dedupe.py             # SHA-256 deduplication
+│       └── lang.py               # Language detection (vi/en)
 │
 ├── scripts/                      # CLI maintenance tools
 │   ├── create_indexes.py         # Tạo MongoDB indexes (tự chạy khi startup)
@@ -184,11 +199,17 @@ botTele/
 │       ├── context/
 │       │   └── AuthContext.jsx   # JWT state, inactivity logout
 │       ├── lib/
-│       │   └── api.jsx           # fetchWithAuth wrapper
+│       │   ├── api.jsx           # fetchWithAuth wrapper
+│       │   └── publicApi.js      # Public API calls (no-auth)
 │       ├── hooks/
 │       │   └── useApi.jsx        # TanStack Query hooks
-│       ├── components/           # Reusable UI components
-│       └── pages/                # Route-level page components
+│       ├── components/
+│       │   └── public/           # ArticleCard, HotClusterCard, NewsTicker...
+│       └── pages/
+│           ├── admin/            # OverviewPage, PostsPage, AnalyticsPage...
+│           ├── user/             # DashboardPage
+│           ├── auth/             # LoginPage, RegisterPage, TelegramLoginPage
+│           └── public/           # PublicHomePage + tabs/ (ArticlesTab, HotNewsTab, XSearchTab, StatsTab)
 │
 ├── tests/                        # pytest test suite
 ├── docs/                         # Tài liệu dự án
@@ -242,6 +263,27 @@ async def lifespan(app: FastAPI):
 #    - SlowAPI (rate limit)
 #    - log_requests_middleware (logging)
 #    - CORSMiddleware (CORS headers)
+
+# 3. Tất cả routes đã được tách sang src/api/routes/
+# main.py chỉ gọi app.include_router() cho 11 router
+```
+
+#### `src/api/routes/hotnews_routes.py` — Hot News Cache
+
+```python
+# In-memory cache (trong hotnews_routes.py)
+_hotnews_mem: dict[str, dict] = {}
+_hotnews_locks: dict[str, asyncio.Lock] = {}
+# TTL: 1h cho window 24h, 2h cho 48h, 3h cho 72h+
+
+# 8 hot topics mặc định (seed khi DB trống)
+DEFAULT_HOT_TOPICS = [
+    {"name": "Iran-Israel Conflict", ...},
+    {"name": "Ukraine War", ...},
+    {"name": "Gaza Crisis", ...},
+    {"name": "US Politics", ...},
+    # + 4 others
+]
 ```
 
 **Hot News endpoint design:**
@@ -263,6 +305,24 @@ Check _hotnews_mem[bucket]
     Lưu vào _hotnews_mem[bucket] + set TTL
         ▼
     Release lock + trả response
+```
+
+#### `src/api/routes/public_routes.py` — Public Endpoints (No Auth)
+
+```
+- GET /public/posts: filter by topic/lang/geo/platform/date/link_only
+  Rate limit: 200 req/min
+- GET /public/x/search?q=: X/Twitter live search (Apify)
+  In-memory cache: 5 phút per query
+```
+
+#### `src/api/routes/tts_routes.py` — Text-to-Speech
+
+```
+- POST /public/tts { text: str (max 3000 chars) }
+  Rate limit: 20 req/min
+  Engine: edge-tts, voice: vi-VN-HoaiMyNeural
+  Trả về: audio/mpeg binary
 ```
 
 #### `src/api/channels.py` — Channel Subscription Design
@@ -440,6 +500,44 @@ def clean_text(raw: str) -> tuple[str, list[str]]:
     """
 ```
 
+#### `src/processing/geo_classifier.py` — Phân loại Địa lý (Mới)
+
+```python
+_GEO_KEYWORDS: dict[str, list[str]] = {
+    "Việt Nam":  ["việt nam", "vn", "hà nội", "hcm", "sài gòn", ...],
+    "Mỹ":        ["mỹ", "hoa kỳ", "usa", "biden", "trump", ...],
+    "Trung Quốc":["trung quốc", "china", "beijing", "tập cận bình", ...],
+    "Nga":       ["nga", "russia", "putin", "moscow", ...],
+    "Nhật Bản":  ["nhật bản", "japan", "tokyo", ...],
+    "Hàn Quốc":  ["hàn quốc", "korea", "seoul", ...],
+    "Châu Âu":   ["châu âu", "europe", "eu", "brussels", ...],
+    "Trung Đông":["trung đông", "israel", "gaza", "iran", ...],
+    "Đông Nam Á":["đông nam á", "asean", "thái lan", "singapore", ...],
+    "Toàn cầu":  ["thế giới", "toàn cầu", "quốc tế", "global", ...],
+}
+
+def classify_geo(text: str, channel_username: str = "") -> str | None:
+    """Rule-based: count keyword hits → trả region có nhiều hit nhất.
+    Trả None nếu không match."""
+
+async def classify_geo_with_ai(text: str) -> str | None:
+    """OpenAI GPT-4o-mini fallback cho bài không match rule-based."""
+```
+
+#### `src/processing/backfill_topics.py` — Batch Backfill (Mới)
+
+```python
+_BATCH_SIZE = 200      # số bài mỗi batch MongoDB
+_AI_CONCURRENCY = 5   # số concurrent OpenAI calls
+
+# Modes:
+# --count     : chỉ đếm bài thiếu topics/geo
+# --geo-only  : chỉ classify geo cho bài thiếu
+# --ai-only   : chỉ dùng AI classify topics
+# --limit N   : giới hạn N bài
+# (không args): rule-based + AI cascade + geo
+```
+
 #### `src/processing/web_scraper.py`
 
 ```python
@@ -506,6 +604,7 @@ class Post(BaseModel):
     topic_predictions: List[TopicPrediction] = []
     source_category: Optional[str] = None
     source_topic: Optional[str] = None
+    geo: Optional[str] = None        # vùng địa lý (10 regions or None)
     dedupe_key: Optional[str] = None # SHA-256[:32]
     score: float = 0.0
     media: List[MediaItem] = []
