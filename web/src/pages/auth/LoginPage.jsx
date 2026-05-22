@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -14,38 +14,21 @@ import {
   InputAdornment,
   IconButton,
   Chip,
-  Stack,
-  CircularProgress,
 } from '@mui/material';
 import { Visibility, VisibilityOff, Lock, Person } from '@mui/icons-material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
-import GoogleIcon from '@mui/icons-material/Google';
 import TelegramIcon from '@mui/icons-material/Telegram';
-
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login, loginWithGoogle } = useAuth();
+  const { login } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
-
-  // Load Google Identity Services script
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    document.head.appendChild(script);
-    return () => { try { document.head.removeChild(script); } catch {} };
-  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -63,37 +46,6 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleGoogleLogin = () => {
-    if (!GOOGLE_CLIENT_ID || !window.google) {
-      setError('Google Sign-In chưa được cấu hình.');
-      return;
-    }
-    setGoogleLoading(true);
-    setError('');
-    window.google.accounts.id.initialize({
-      client_id: GOOGLE_CLIENT_ID,
-      callback: async (response) => {
-        try {
-          const result = await loginWithGoogle(response.credential);
-          if (result.success) {
-            navigate(result.role === 'admin' ? '/admin' : '/dashboard', { replace: true });
-          } else {
-            setError(result.error || 'Đăng nhập Google thất bại.');
-          }
-        } catch {
-          setError('Đã xảy ra lỗi khi đăng nhập Google.');
-        } finally {
-          setGoogleLoading(false);
-        }
-      },
-    });
-    window.google.accounts.id.prompt((notification) => {
-      if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-        setGoogleLoading(false);
-      }
-    });
   };
 
   return (
@@ -218,30 +170,6 @@ export default function LoginPage() {
                 {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
               </Button>
             </form>
-
-            {GOOGLE_CLIENT_ID && (
-              <>
-                <Divider sx={{ my: 2 }}>hoặc</Divider>
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  size="large"
-                  onClick={handleGoogleLogin}
-                  disabled={googleLoading}
-                  startIcon={googleLoading ? <CircularProgress size={18} /> : <GoogleIcon />}
-                  sx={{
-                    py: 1.4,
-                    textTransform: 'none',
-                    fontSize: '0.95rem',
-                    borderColor: '#dadce0',
-                    color: '#3c4043',
-                    '&:hover': { borderColor: '#4285f4', bgcolor: '#f8f9ff' },
-                  }}
-                >
-                  {googleLoading ? 'Đang xử lý...' : 'Đăng nhập bằng Google'}
-                </Button>
-              </>
-            )}
 
             <Divider sx={{ my: 2 }}>hoặc</Divider>
             <Button

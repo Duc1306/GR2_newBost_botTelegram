@@ -70,9 +70,6 @@ if ENV == "production":
     if JWT_SECRET_KEY.startswith("your-secret-key"):
         raise RuntimeError("JWT_SECRET_KEY must be configured in production")
 
-# Google OAuth
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")  # OAuth 2.0 Client ID from Google Console
-
 # Rate Limiting
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))

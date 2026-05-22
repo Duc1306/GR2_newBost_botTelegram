@@ -60,7 +60,7 @@ botTele/
 │   ├── config.py           # Tất cả cấu hình từ env vars
 │   ├── api/
 │   │   ├── main.py         # FastAPI app entry point, lifespan
-│   │   ├── auth.py         # JWT + bcrypt + Google OAuth helpers
+│   │   ├── auth.py         # JWT + bcrypt auth helpers
 │   │   ├── channels.py     # /user/channels/* router
 │   │   ├── telegram_auth.py# Telegram phone login (MTProto OTP)
 │   │   ├── middleware.py   # SlowAPI rate limiting, loguru logging
@@ -521,7 +521,6 @@ async function fetchWithAuth(url, options = {}) {
   "phone_number": "...",
   "telegram_username": "...",
   "telegram_session": "1BVtsO...(session string)",
-  "google_sub": "...(optional)",
   "created_at": "ISODate",
   "last_login": "ISODate"
 }
@@ -555,7 +554,6 @@ async function fetchWithAuth(url, options = {}) {
 |---|---|---|
 | JWT Bearer | `Authorization: Bearer <token>` | Login → nhận token → gửi mỗi request |
 | API Key | `X-API-Key: <key>` | Dùng cho script/automation |
-| Google OAuth | id_token từ Google SDK | Frontend lấy id_token → POST `/auth/google` |
 | Telegram OTP | Phone number + Telegram OTP | POST `/auth/telegram/send-code` → verify |
 
 ### JWT Specification
@@ -594,7 +592,6 @@ Mặc định:     60 req/phút, 1000 req/giờ
 | POST | `/auth/register` | Không | `{username, password, full_name?, email?}` | `LoginResponse` |
 | POST | `/auth/logout` | Bearer | — | `{message}` |
 | GET | `/auth/me` | Bearer | — | `{username, role, full_name, email, ...}` |
-| POST | `/auth/google` | Không | `{id_token}` | `LoginResponse` |
 | POST | `/auth/telegram/send-code` | Không | `{phone_number, display_name?}` | `{session_id, phone_code_hash}` |
 | POST | `/auth/telegram/verify-code` | Không | `{session_id, phone_number, code, phone_code_hash}` | `LoginResponse` |
 | GET | `/auth/telegram/channels` | Bearer | — | `[{id, title, username, ...}]` |
@@ -677,7 +674,6 @@ Mặc định:     60 req/phút, 1000 req/giờ
 | `OPENAI_API_KEY` | `""` | Bỏ trống = tắt tính năng AI |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Model OpenAI |
 | `APIFY_API_TOKEN` | `""` | Bỏ trống = tắt X scraping |
-| `GOOGLE_CLIENT_ID` | `""` | Bỏ trống = tắt Google OAuth |
 
 ---
 
@@ -764,13 +760,6 @@ Trò chơi & Ứng dụng | Tin tức & Truyền thông | Khác
 - **Model:** `gpt-4o-mini` (hot topic detection)
 - **Embedding:** `text-embedding-3-small` (post scoring)
 - **Graceful degradation:** Hệ thống hoạt động bình thường nếu không có API key
-
-### Google OAuth
-
-- **Verify:** `google-auth` library server-side verification
-- **Auto-register:** User Google mới được tạo tự động với `status="active"`
-
----
 
 ## 12. Build & Deployment
 

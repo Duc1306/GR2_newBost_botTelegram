@@ -194,18 +194,44 @@ async def backfill_async(limit: int = 10000, geo_only: bool = False, ai_only: bo
         )
 
     # ── Phase 2: Geo backfill ────────────────────────────────────────────────
-    geo_docs = list(coll.find(_missing_geo_query(), {"id": 1, "text": 1}).limit(limit))
+    geo_docs = list(coll.find(_missing_geo_query(), {"id": 1, "text": 1, "source": 1}).limit(limit))
     geo_total = len(geo_docs)
     print(f"[geo] {geo_total:,} bài cần phân loại địa lý …")
 
     if geo_total > 0:
+        from src.processing.geo_classifier import classify_geo_rule_based
         import src.processing.ai_topic_detector as _aitd
+
+        geo_rule_batch: list[UpdateOne] = []
+        geo_ai_pending: list[dict] = []
+        geo_rule_skipped_short = 0
+
+        # Bước 2a: Rule-based (miễn phí)
+        for doc in geo_docs:
+            text = doc.get("text", "")
+            source = doc.get("source", "")
+            region = classify_geo_rule_based(text, source=source)
+            if region:
+                geo_rule_batch.append(UpdateOne({"id": doc["id"]}, {"$set": {"geo": region}}))
+            elif len(text.strip()) >= _MIN_TEXT_LEN:
+                geo_ai_pending.append(doc)
+            else:
+                geo_rule_skipped_short += 1
+
+        stats["geo_updated"] += _flush(coll, geo_rule_batch)
+        geo_ai_total = len(geo_ai_pending)
+        print(
+            f"[geo] Rule-based: cập nhật {len(geo_rule_batch):,}  |  "
+            f"Cần AI: {geo_ai_total:,}  |  Bỏ qua (quá ngắn): {geo_rule_skipped_short:,}"
+        )
+
+        # Bước 2b: AI fallback cho những bài rule-based không xác định được
         geo_batch: list[UpdateOne] = []
-        for i in range(0, geo_total, _BATCH_SIZE):
+        for i in range(0, geo_ai_total, _BATCH_SIZE):
             if _aitd._RPD_EXHAUSTED:
-                print(f"[geo] ⚠️  Daily RPD limit hết — dừng ở bài {i}/{geo_total}. Chạy lại vào ngày mai.")
+                print(f"[geo] ⚠️  Daily RPD limit hết — dừng ở bài {i}/{geo_ai_total}. Chạy lại vào ngày mai.")
                 break
-            chunk = geo_docs[i:i + _BATCH_SIZE]
+            chunk = geo_ai_pending[i:i + _BATCH_SIZE]
             texts = [d.get("text", "") for d in chunk]
             regions = await _ai_geo_batch(texts)
             for doc, region in zip(chunk, regions):
@@ -214,11 +240,11 @@ async def backfill_async(limit: int = 10000, geo_only: bool = False, ai_only: bo
             if len(geo_batch) >= _BATCH_SIZE:
                 stats["geo_updated"] += _flush(coll, geo_batch)
                 geo_batch = []
-            done = min(i + _BATCH_SIZE, geo_total)
+            done = min(i + _BATCH_SIZE, geo_ai_total)
             elapsed = time.time() - t0
             rate = done / elapsed if elapsed > 0 else 0
-            eta = int((geo_total - done) / rate) if rate > 0 else 0
-            print(f"[geo] {done}/{geo_total}  ({rate:.1f} bài/s  ETA {eta}s)")
+            eta = int((geo_ai_total - done) / rate) if rate > 0 else 0
+            print(f"[geo/AI] {done}/{geo_ai_total}  ({rate:.1f} bài/s  ETA {eta}s)")
 
         stats["geo_updated"] += _flush(coll, geo_batch)
 

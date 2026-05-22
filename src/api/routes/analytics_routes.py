@@ -514,3 +514,119 @@ async def get_activity_heatmap(
         "period": {"from": from_date.isoformat(), "to": to_date.isoformat()},
         "total_posts": sum(sum(hours.values()) for hours in heatmap.values()),
     }
+
+
+# ── CSV Export ────────────────────────────────────────────────────────────────
+
+_EXPORT_TYPES = {"timeline", "keywords", "topics", "comparison"}
+
+
+@router.get("/analytics/export")
+async def export_analytics_csv(
+    type: str = Query(..., description="Loại dữ liệu: timeline | keywords | topics | comparison"),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    platform: Optional[str] = Query("all"),
+    topic: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    """Xuất dữ liệu phân tích dạng CSV.
+
+    - **timeline**: số bài theo ngày
+    - **keywords**: từ khóa phổ biến và số lần xuất hiện
+    - **topics**: phân bố bài viết theo chủ đề
+    - **comparison**: so sánh Telegram và X theo chủ đề
+    """
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    if type not in _EXPORT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"type không hợp lệ. Chọn một trong: {', '.join(sorted(_EXPORT_TYPES))}",
+        )
+
+    db = get_db()
+    posts = db["posts"]
+
+    to_dt = datetime.fromisoformat(date_to) if date_to else datetime.utcnow()
+    from_dt = datetime.fromisoformat(date_from) if date_from else to_dt - timedelta(days=30)
+
+    base_match: dict = {"created_at": {"$gte": from_dt, "$lte": to_dt}}
+    if platform and platform != "all":
+        base_match["platform"] = platform
+    if topic:
+        base_match["topics"] = topic
+
+    rows: list[dict] = []
+    fieldnames: list[str] = []
+
+    if type == "timeline":
+        pipeline = [
+            {"$match": base_match},
+            {"$group": {
+                "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"_id": 1}},
+            {"$limit": limit},
+        ]
+        fieldnames = ["date", "count"]
+        rows = [{"date": r["_id"], "count": r["count"]} for r in posts.aggregate(pipeline)]
+
+    elif type == "keywords":
+        pipeline = [
+            {"$match": base_match},
+            {"$project": {"words": {"$split": [{"$toLower": "$content"}, " "]}}},
+            {"$unwind": "$words"},
+            {"$match": {"words": {"$regex": r"^\w{3,}$"}}},
+            {"$group": {"_id": "$words", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": limit},
+        ]
+        fieldnames = ["keyword", "count"]
+        raw = [{"keyword": r["_id"], "count": r["count"]} for r in posts.aggregate(pipeline)]
+        rows = [r for r in raw if not _is_noise_keyword(r["keyword"])]
+
+    elif type == "topics":
+        pipeline = [
+            {"$match": {**base_match, "topics": {"$exists": True, "$ne": []}}},
+            {"$unwind": "$topics"},
+            {"$group": {"_id": "$topics", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": limit},
+        ]
+        fieldnames = ["topic", "count"]
+        rows = [{"topic": r["_id"], "count": r["count"]} for r in posts.aggregate(pipeline)]
+
+    elif type == "comparison":
+        pipeline = [
+            {"$match": {**base_match, "topics": {"$exists": True, "$ne": []}}},
+            {"$unwind": "$topics"},
+            {"$group": {
+                "_id": {"platform": "$platform", "topic": "$topics"},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"count": -1}},
+            {"$limit": limit},
+        ]
+        fieldnames = ["platform", "topic", "count"]
+        rows = [
+            {"platform": r["_id"]["platform"], "topic": r["_id"]["topic"], "count": r["count"]}
+            for r in posts.aggregate(pipeline)
+        ]
+
+    # Serialize to CSV in-memory
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    buf.seek(0)
+
+    filename = f"analytics_{type}_{from_dt.date()}_{to_dt.date()}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

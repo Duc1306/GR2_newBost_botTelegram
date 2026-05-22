@@ -179,7 +179,6 @@ async def login_endpoint(request: Request, body: LoginRequest):
 | CORS whitelist | `get_allowed_origins()` chỉ cho phép origin đã cấu hình |
 | Không SQL injection | MongoDB query builder — không concatenate string |
 | Không lưu password plaintext | Chỉ lưu `password_hash` trong database |
-| Google OAuth xác thực server-side | Verify `id_token` qua Google SDK, không trust client |
 | Admin role check | `get_current_admin_user()` kiểm tra `role == "admin"` |
 
 ---
@@ -374,22 +373,6 @@ class Post(BaseModel):
     topic_predictions: List[TopicPrediction] = []
     dedupe_key: Optional[str] = None
 ```
-
----
-
-### 🟡 CẢI THIỆN — Import nằm trong function body
-
-**Vị trí:** `src/api/main.py:google_oauth_login()`
-
-```python
-async def google_oauth_login(body: GoogleTokenRequest):
-    # ...
-    from google.oauth2 import id_token as google_id_token   # import trong function
-    from google.auth.transport import requests as google_requests
-    from src.api.auth import get_password_hash               # import circular tiềm ẩn
-```
-
-**Khuyến nghị:** Chuyển imports lên đầu file. Dùng `TYPE_CHECKING` guard nếu lo ngại circular import.
 
 ---
 

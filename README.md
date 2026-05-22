@@ -428,12 +428,12 @@ botTele/
 ├── src/
 │   ├── api/
 │   │   ├── main.py                    # FastAPI app + lifespan (khởi động workers)
-│   │   ├── auth.py                    # JWT + bcrypt, Google OAuth helpers
+│   │   ├── auth.py                    # JWT + bcrypt auth helpers
 │   │   ├── channels.py                # /user/channels/* router
 │   │   ├── telegram_auth.py           # /auth/telegram/* (Telegram OTP flow)
 │   │   ├── middleware.py              # SlowAPI rate limiting, loguru logging
 │   │   └── routes/                    # Tách route theo domain
-│   │       ├── auth_routes.py         # /auth/* (login, register, Google, me)
+│   │       ├── auth_routes.py         # /auth/* (login, register, logout, me)
 │   │       ├── post_routes.py         # /posts, /topics, /stats, bookmarks
 │   │       ├── analytics_routes.py    # /analytics/* (timeline, keywords, heatmap...)
 │   │       ├── public_routes.py       # /public/* (no-auth feed, X search, TTS)
@@ -539,7 +539,6 @@ GET  /hot-topics                                 # Danh sách hot topics
 ```
 POST /auth/login                                 # Đăng nhập (username/password)
 POST /auth/register                              # Đăng ký tài khoản
-POST /auth/google                                # Đăng nhập Google OAuth
 POST /auth/logout                                # Đăng xuất
 GET  /auth/me                                    # Thông tin user hiện tại
 ```
@@ -906,4 +905,3 @@ scripts\extract_keyword_trends.cmd --days 7
 ---
 
 **Status:** ✅ Production Ready | **Version:** 2.0.0 (ML + AI + Geo + Public API + X Search)
-

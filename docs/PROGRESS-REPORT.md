@@ -24,7 +24,7 @@ Dự án **NewsBot** là hệ thống tổng hợp tin tức tự động đa ng
 | Tính năng AI Hot News | ✅ Hoàn thành | GPT-4o-mini, in-memory cache |
 | Public API (không auth) | ✅ Hoàn thành | /public/posts, /public/tts, /public/x/search |
 | X Live Search | ✅ Hoàn thành | Tìm kiếm X/Twitter real-time qua Apify |
-| Xác thực & Phân quyền | ✅ Hoàn thành | JWT + Google OAuth + Telegram OTP |
+| Xác thực & Phân quyền | ✅ Hoàn thành | JWT + Telegram OTP |
 | Giao diện Frontend | ✅ Hoàn thành | React 18 + MUI, 13 trang, 4 public tab |
 | Analytics & Thống kê | ✅ Hoàn thành | Timeline, Keywords, Heatmap, Comparison, Trending |
 | Text-to-Speech | ✅ Hoàn thành | Tiếng Việt, HoaiMyNeural, rate-limited |
@@ -156,14 +156,7 @@ Việt Nam, Mỹ, Trung Quốc, Nga, Nhật Bản, Hàn Quốc, Châu Âu, Trung
 - Hỗ trợ cả Bearer Token và API Key (`X-API-Key` header)
 - Phân quyền 2 cấp: `user` và `admin`
 
-### 4.2 Google OAuth ✅
-
-**Tính năng đã làm:**
-- Đăng nhập bằng tài khoản Google (`POST /auth/google`)
-- Xác minh `id_token` server-side bằng Google Auth SDK
-- Tự động tạo tài khoản khi đăng nhập Google lần đầu
-
-### 4.3 Telegram Phone Login ✅
+### 4.2 Telegram Phone Login ✅
 
 **Tính năng đã làm:**
 - Đăng nhập bằng số điện thoại Telegram (MTProto OTP)
@@ -171,7 +164,7 @@ Việt Nam, Mỹ, Trung Quốc, Nga, Nhật Bản, Hàn Quốc, Châu Âu, Trung
 - Hỗ trợ 2FA Telegram (nhập mật khẩu bổ sung)
 - Session Telethon được lưu vào database, dùng để đọc kênh riêng tư của user
 
-### 4.4 Quản lý Người dùng (Admin) ✅
+### 4.3 Quản lý Người dùng (Admin) ✅
 
 **Tính năng đã làm:**
 - Admin xem danh sách tất cả user
@@ -360,7 +353,6 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 | Rate limiting | SlowAPI: 60 req/phút, 1000 req/giờ |
 | CORS whitelist | Chỉ cho phép origin đã cấu hình |
 | Input validation | Pydantic v2 tại tất cả endpoints |
-| Google OAuth | Verify server-side bằng Google SDK |
 | Chống SQL/NoSQL injection | MongoDB query builder, không concatenate |
 
 ---
@@ -419,7 +411,7 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 | 4 | Phân loại chủ đề bằng Rule-based | ✅ 100% |
 | 5 | AI phát hiện Hot News (GPT-4o-mini) | ✅ 100% |
 | 6 | AI tóm tắt kênh tự động | ✅ 100% |
-| 7 | Xác thực JWT + Google OAuth + Telegram OTP | ✅ 100% |
+| 7 | Xác thực JWT + Telegram OTP | ✅ 100% |
 | 8 | Phân quyền Admin / User | ✅ 100% |
 | 9 | Quản lý kênh (subscribe/unsubscribe) | ✅ 100% |
 | 10 | Analytics: trend, keyword, timeline, heatmap | ✅ 100% |
@@ -437,7 +429,7 @@ Bản đồ nhiệt hoạt động: giờ trong ngày × ngày trong tuần.
 - **Pipeline phân loại 4 tầng** đảm bảo phân loại tối đa — không bỏ sót bài nào
 - **Graceful degradation** cho OpenAI và Apify — hệ thống hoạt động ngay cả khi không có API key
 - **Cache thông minh** cho hot news — tránh gọi OpenAI lặp lại, tiết kiệm chi phí
-- **3 phương thức đăng nhập** — mật khẩu, Google, Telegram OTP
+- **2 phương thức đăng nhập** — mật khẩu, Telegram OTP
 - **Không cần Twitter API** — dùng Apify scraping, tránh chi phí và giới hạn Twitter
 
 ### Hướng phát triển tiếp theo (đề xuất)

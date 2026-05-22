@@ -113,7 +113,6 @@ Document schema (từ `src/models/user.py`):
 | `telegram_username` | String? | Username Telegram |
 | `telegram_session` | String? | Telethon session string (sau OTP login) |
 | `telegram_user_id` | Int? | Telegram user ID |
-| `google_sub` | String? | Google OAuth `sub` claim |
 | `created_at` | DateTime | Thời gian đăng ký |
 | `last_login` | DateTime? | Lần đăng nhập cuối |
 

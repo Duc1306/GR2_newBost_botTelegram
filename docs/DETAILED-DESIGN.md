@@ -51,7 +51,6 @@
 | requests | 2.32.3 | HTTP client sync |
 | orjson | 3.10.7 | JSON serialization nhanh |
 | edge-tts | ≥6.1.9 | Text-to-Speech tiếng Việt |
-| google-auth | ≥2.29.0 | Google OAuth token verify |
 | numpy | 1.26.4 | Tính toán vector (embedding) |
 
 ### Frontend
@@ -80,7 +79,7 @@
 ┌────────────────────────▼────────────────────────────────────┐
 │  API Layer (FastAPI — Render.com)                           │
 │  main.py │ auth.py │ channels.py │ telegram_auth.py        │
-│  ├── Auth: JWT HS256 + Google OAuth + Telegram OTP          │
+│  ├── Auth: JWT HS256 + Telegram OTP                         │
 │  ├── Rate Limiting: SlowAPI                                 │
 │  └── Background Tasks: 3 asyncio workers                   │
 └─────────┬───────────────────────────┬───────────────────────┘
@@ -629,7 +628,6 @@ class UserInDB(BaseModel):
     phone_number: Optional[str] = None
     telegram_username: Optional[str] = None
     telegram_session: Optional[str] = None   # Telethon session string
-    google_sub: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_login: Optional[datetime] = None
 
@@ -900,23 +898,6 @@ GET /hotnews?window_hours=24
    → get_current_admin_user()
    → get_current_user() → TokenData
    → if token_data.role != "admin": raise 403
-```
-
-### Luồng Google OAuth
-
-```
-Frontend:
-  1. Google Sign-In button → Google popup
-  2. Nhận id_token từ Google SDK
-  3. POST /auth/google { id_token }
-
-Backend:
-  4. google_id_token.verify_oauth2_token(id_token, Request(), GOOGLE_CLIENT_ID)
-     → id_info { email, name, sub }
-  5. users.find_one({ email }) → Tìm user đã có
-     Nếu chưa có → auto-register { role:"user", status:"active" }
-  6. create_access_token({ sub: username, role })
-  7. Return JWT → Frontend lưu như token thường
 ```
 
 ### Luồng Telegram Phone Auth

@@ -129,6 +129,15 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
                         links.append(_wp_url)
             except Exception:
                 pass
+
+            # Skip garbage posts: too short AND no external (non-t.me) link
+            _ext_links = [
+                l for l in links
+                if not l.lower().startswith("http://t.me") and not l.lower().startswith("https://t.me")
+            ]
+            if len(text.strip()) < 15 and not _ext_links:
+                continue
+
             dedupe_key = Post.make_dedupe_key(text, links)
             source_id = str(msg.id)
             post_id = Post.make_id(channel_username, source_id)  # "telegram:channel:msgid"

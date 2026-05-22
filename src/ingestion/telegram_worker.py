@@ -24,6 +24,14 @@ from src.models.post import Post, MediaItem
 from src.db.mongo import get_posts_collection
 from pathlib import Path
 
+# Minimum text length (chars) for a post to be saved — posts shorter than this
+# with no external news link are treated as garbage (stickers, emoji captions, etc.)
+_MIN_TEXT_LEN = 15
+
+
+class _SkipMessage(Exception):
+    """Raised inside process_message to silently drop garbage/too-short posts."""
+
 # Session name (file) nếu không dùng session string
 SESSION_NAME = "telegram_session"
 
@@ -179,6 +187,14 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
                 links.append(wp_url)
     except Exception:
         pass
+
+    # Skip garbage posts: too short AND no external (non-t.me) link
+    _has_news_link = any(
+        not l.lower().startswith("http://t.me") and not l.lower().startswith("https://t.me")
+        for l in links
+    )
+    if len(cleaned_text.strip()) < _MIN_TEXT_LEN and not _has_news_link:
+        raise _SkipMessage(f"Bỏ qua tin quá ngắn ({len(cleaned_text.strip())} ký tự)")
 
     media_items: List[MediaItem] = []
     if m.media:
@@ -350,6 +366,8 @@ async def ingest_once(full_mode: bool = False, scrape_articles: bool = False, li
                     if links_only and not _has_external_link(post.links):
                         continue
                     batch_posts.append(post)
+                except _SkipMessage:
+                    pass  # silently drop garbage/too-short posts
                 except Exception as ex:  # pragma: no cover
                     print(f"     Lỗi xử lý message {m.id}: {ex}")
             

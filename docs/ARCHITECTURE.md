@@ -77,7 +77,7 @@ botTele/                            Thư mục gốc dự án
 | `auth.py` | JWT login/register, bcrypt hash, Bearer token & API Key auth | `login()`, `get_current_user()`, `get_current_admin_user()` |
 | `channels.py` | Subscribe/unsubscribe kênh Telegram & X, trigger xử lý ngay | `POST /user/channels/subscribe` |
 | `middleware.py` | Rate limiting (SlowAPI), structured logging (Loguru) | `setup_rate_limiting()`, `setup_logging()` |
-| `telegram_auth.py` | Xác thực qua Telegram Widget / Google OAuth | `router` (prefix `/auth`) |
+| `telegram_auth.py` | Xác thực Telegram bằng OTP | `router` (prefix `/auth/telegram`) |
 | `main.py` (routes) | Toàn bộ endpoints posts, analytics, hotnews, TTS, admin | Inline trong `main.py` |
 
 ### Tầng Thu Thập Dữ Liệu (`src/ingestion/`)
@@ -127,7 +127,7 @@ botTele/                            Thư mục gốc dự án
 | `src/context/AuthContext.jsx` | JWT state: login, logout, inactivity timeout 60p, role decode | `useAuth()` hook |
 | `src/context/ThemeContext.jsx` | Dark/Light mode toggle | MUI ThemeProvider |
 | `src/hooks/useApi.jsx` | Custom hook gọi API với loading/error state | — |
-| `src/pages/auth/LoginPage.jsx` | Form đăng nhập + nút Google OAuth, Telegram Widget | — |
+| `src/pages/auth/LoginPage.jsx` | Form đăng nhập tài khoản thường | — |
 | `src/pages/auth/RegisterPage.jsx` | Form đăng ký tài khoản | — |
 | `src/pages/public/PublicHomePage.jsx` | Trang xem tin không cần đăng nhập | — |
 | `src/pages/admin/OverviewPage.jsx` | Dashboard tổng quan: thống kê, biểu đồ | — |

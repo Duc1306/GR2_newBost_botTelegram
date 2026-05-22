@@ -71,7 +71,7 @@ botTele/
 ├── src/
 │   ├── api/
 │   │   ├── main.py              ← FastAPI app, lifespan (khởi động background workers)
-│   │   ├── auth.py              ← JWT + bcrypt + Google OAuth helpers
+│   │   ├── auth.py              ← JWT + bcrypt auth helpers
 │   │   ├── channels.py          ← Subscribe/Unsubscribe kênh (trigger ingestion)
 │   │   ├── telegram_auth.py     ← Telegram phone OTP login
 │   │   ├── middleware.py        ← SlowAPI rate limiting, logging
