@@ -14,7 +14,7 @@ requests==2.32.3
 beautifulsoup4==4.12.3
 pytest==8.2.0
 tqdm==4.66.1
-numpy==1.26.4
+numpy>=2.0.2
 
 # Security & Auth
 python-jose[cryptography]==3.3.0
