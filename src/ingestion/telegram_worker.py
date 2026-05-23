@@ -141,8 +141,12 @@ async def _assign_topic_cascade(post, text: str, lang: str | None) -> None:
             # Cả SVM lẫn keyword đồng thuận → kết luận ngay
             post.topics = [svm_topic]
             post.score = svm_confidence
+        elif svm_confidence >= 0.65:
+            # SVM tự tin cao → tin tưởng SVM, không cần gọi AI (tiết kiệm chi phí)
+            post.topics = [svm_topic]
+            post.score = svm_confidence
         else:
-            # Bất đồng → dùng OpenAI phân xử
+            # Bất đồng + SVM không chắc → dùng OpenAI phân xử
             from src.processing.ai_topic_detector import arbitrate_topic
             ai_result = await arbitrate_topic(text, svm_topic, kw_topic)
             if ai_result:

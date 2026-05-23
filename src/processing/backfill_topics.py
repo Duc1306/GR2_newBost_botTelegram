@@ -25,11 +25,15 @@ from pymongo.errors import BulkWriteError
 from src.db.mongo import get_posts_collection
 from src.processing.topic_classifier import classify_post_topics
 from src.processing.lang import detect_language
-from src.processing.ai_topic_detector import classify_post_topic_with_ai, classify_geo_with_ai
+from src.processing.ai_topic_detector import (
+    classify_post_topic_with_ai, classify_geo_with_ai,
+    batch_classify_post_topic_with_ai, batch_classify_geo_with_ai,
+)
 
 _BATCH_SIZE = 200           # số bài mỗi batch ghi DB
 _AI_CONCURRENCY = 5         # số lượng OpenAI calls đồng thời (tránh rate-limit)
 _MIN_TEXT_LEN = 30          # bài ngắn hơn thế này → bỏ qua, không gọi AI
+_AI_BATCH_SIZE = 30         # số bài gửi một lần vào batch API (tiết kiệm token)
 
 
 def _flush(coll, ops: list) -> int:
@@ -43,25 +47,13 @@ def _flush(coll, ops: list) -> int:
 
 
 async def _ai_topics_batch(texts: list[str]) -> list[list[str]]:
-    """Gọi classify_post_topic_with_ai song song, giới hạn _AI_CONCURRENCY luồng."""
-    sem = asyncio.Semaphore(_AI_CONCURRENCY)
-
-    async def _one(text: str) -> list[str]:
-        async with sem:
-            return await classify_post_topic_with_ai(text)
-
-    return list(await asyncio.gather(*[_one(t) for t in texts]))
+    """Phân loại chủ đề nhiều bài bằng batch API (tiết kiệm ~60-70% token)."""
+    return await batch_classify_post_topic_with_ai(texts, batch_size=_AI_BATCH_SIZE)
 
 
 async def _ai_geo_batch(texts: list[str]) -> list[str | None]:
-    """Gọi classify_geo_with_ai song song, giới hạn _AI_CONCURRENCY luồng."""
-    sem = asyncio.Semaphore(_AI_CONCURRENCY)
-
-    async def _one(text: str) -> str | None:
-        async with sem:
-            return await classify_geo_with_ai(text)
-
-    return list(await asyncio.gather(*[_one(t) for t in texts]))
+    """Phân loại địa lý nhiều bài bằng batch API (tiết kiệm ~60-70% token)."""
+    return await batch_classify_geo_with_ai(texts, batch_size=_AI_BATCH_SIZE)
 
 
 def _missing_topics_query() -> dict:

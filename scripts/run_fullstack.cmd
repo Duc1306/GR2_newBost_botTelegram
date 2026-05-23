@@ -10,8 +10,8 @@ start "FastAPI Backend" cmd /k "cd /d c:\Users\84328\botTele && python -m uvicor
 
 timeout /t 3 /nobreak >nul
 
-echo Starting Fetch Daemon (tu dong fetch moi 2 gio)...
-start "Fetch Daemon" cmd /k "cd /d c:\Users\84328\botTele && scripts\fetch_daemon.cmd 2"
+echo Starting Fetch Daemon (tu dong fetch moi 3 gio)...
+start "Fetch Daemon" cmd /k "cd /d c:\Users\84328\botTele && scripts\fetch_daemon.cmd 3"
 
 echo Starting Vite frontend on port 5173...
 cd /d c:\Users\84328\botTele\web

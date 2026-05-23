@@ -14,8 +14,8 @@ REM ============================================================
 setlocal
 set ROOT=%~dp0\..
 
-REM Khoảng thời gian (giờ) — mặc định 2 giờ
-set INTERVAL_HOURS=2
+REM Khoảng thời gian (giờ) — mặc định 3 giờ
+set INTERVAL_HOURS=3
 if not "%1"=="" set INTERVAL_HOURS=%1
 
 echo.
@@ -34,7 +34,7 @@ set ROOT=%~dp0\..
 set SCRIPT=%ROOT%\scripts\fetch_telegram.cmd
 
 REM ── Tùy chỉnh khoảng thời gian (giờ) ──
-set INTERVAL_HOURS=2
+set INTERVAL_HOURS=3
 REM ────────────────────────────────────────
 
 echo.

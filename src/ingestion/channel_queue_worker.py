@@ -35,10 +35,12 @@ from src.processing.cleaning import clean_text
 from src.processing.lang import detect_language
 from src.processing.topic_classifier import classify_post_topics
 
-POLL_INTERVAL    = int(os.getenv("QUEUE_POLL_INTERVAL", "30"))    # seconds — pending queue poll
-MAX_ATTEMPTS     = int(os.getenv("QUEUE_MAX_ATTEMPTS", "3"))
-SUMMARY_POSTS    = int(os.getenv("SUMMARY_MAX_POSTS", "15"))   # posts fed to AI
-REFRESH_INTERVAL = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "43200"))  # 12 hours = 2× per day
+POLL_INTERVAL          = int(os.getenv("QUEUE_POLL_INTERVAL", "30"))    # seconds — pending queue poll
+MAX_ATTEMPTS           = int(os.getenv("QUEUE_MAX_ATTEMPTS", "3"))
+SUMMARY_POSTS          = int(os.getenv("SUMMARY_MAX_POSTS", "15"))   # posts fed to AI
+REFRESH_INTERVAL       = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "43200"))  # 12 hours = 2× per day
+SUMMARY_MIN_NEW_POSTS  = int(os.getenv("SUMMARY_MIN_NEW_POSTS", "3"))   # min new posts để trigger regenerate summary
+SUMMARY_COOLDOWN_HOURS = int(os.getenv("SUMMARY_COOLDOWN_HOURS", "4"))  # giờ cooldown giữa 2 lần summary cùng channel
 
 
 # ---------------------------------------------------------------------------
@@ -657,11 +659,33 @@ async def refresh_active_channels(db) -> None:
                             {"username": username},
                             {"$set": {"post_count": total_posts}},
                         )
-                        if saved > 0:
-                            logger.info(f"  @{username}: +{saved} new posts → regenerating summary")
-                            summary = await _generate_summary(username, db)
-                            if summary:
-                                _save_summary(username, summary, total_posts, db)
+                        if saved >= SUMMARY_MIN_NEW_POSTS:
+                            # Kiểm tra cooldown: không regenerate nếu summary vừa được tạo gần đây
+                            ch_doc = channels_col.find_one({"username": username}, {"last_summary_at": 1})
+                            last_sum = ch_doc.get("last_summary_at") if ch_doc else None
+                            cooldown_ok = (
+                                last_sum is None
+                                or (datetime.utcnow() - last_sum).total_seconds() >= SUMMARY_COOLDOWN_HOURS * 3600
+                            )
+                            if cooldown_ok:
+                                logger.info(
+                                    f"  @{username}: +{saved} new posts → regenerating summary"
+                                )
+                                summary = await _generate_summary(username, db)
+                                if summary:
+                                    _save_summary(username, summary, total_posts, db)
+                                    channels_col.update_one(
+                                        {"username": username},
+                                        {"$set": {"last_summary_at": datetime.utcnow()}},
+                                    )
+                            else:
+                                logger.debug(
+                                    f"  @{username}: +{saved} new posts nhưng cooldown còn hiệu lực, bỏ qua summary."
+                                )
+                        elif saved > 0:
+                            logger.debug(
+                                f"  @{username}: +{saved} new posts (< threshold {SUMMARY_MIN_NEW_POSTS}), bỏ qua summary."
+                            )
                     except Exception as exc:
                         logger.warning(f"  Refresh failed for @{username}: {exc}")
         finally:

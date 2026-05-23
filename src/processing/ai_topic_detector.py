@@ -1218,3 +1218,202 @@ async def classify_geo_with_ai(text: str) -> str | None:
             logger.warning("classify_geo_with_ai failed: %s", exc)
             return None
     return None
+
+
+# ─── 11. Batch classify geo & topics (cost-saving: N posts → 1 API call) ────
+
+_GEO_BATCH_SYSTEM = """Bạn là chuyên gia địa lý. Phân loại địa lý CHÍNH cho nhiều bài báo cùng lúc.
+
+Khu vực hợp lệ: Việt Nam, Mỹ, Trung Quốc, Nga, Nhật Bản, Hàn Quốc, Châu Âu, Trung Đông, Đông Nam Á, Toàn cầu, Khác
+
+Input: danh sách bài theo định dạng [idx] text
+Output: JSON array theo đúng thứ tự: [{"idx": 0, "region": "tên khu vực"}, ...]
+Chỉ trả về JSON array, không giải thích."""
+
+_TOPIC_BATCH_SYSTEM = """Bạn là chuyên gia phân loại tin tức đa ngôn ngữ.
+
+Chủ đề hợp lệ: Kinh tế, Công nghệ, Crypto, Chính trị, Thế giới, Pháp luật, Ô tô - Xe máy, Khoa học, Thể thao, Giải trí, Sức khỏe, Giáo dục, Việc làm, Du lịch, Ẩm thực, Kinh doanh & Khởi nghiệp, Trò chơi & Ứng dụng, Tin tức & Truyền thông, Khác
+
+Input: danh sách bài theo định dạng [idx] text
+Output: JSON array theo đúng thứ tự: [{"idx": 0, "topics": ["Chủ đề1"]}, ...]
+Chỉ trả về JSON array, không giải thích."""
+
+
+async def batch_classify_geo_with_ai(
+    texts: list[str],
+    batch_size: int = 30,
+) -> list[str | None]:
+    """Phân loại địa lý cho nhiều bài trong một lần gọi API.
+
+    Tiết kiệm ~60% token so với gọi từng bài riêng lẻ (system prompt overhead
+    chỉ trả một lần thay vì N lần).
+
+    Args:
+        texts:      Danh sách text cần phân loại.
+        batch_size: Số bài mỗi lần gọi API (mặc định 30).
+
+    Returns:
+        List kết quả cùng độ dài với ``texts``. None nếu thất bại hoặc
+        bài quá ngắn / không xác định được.
+    """
+    global _RPD_EXHAUSTED
+    if not texts:
+        return []
+
+    client = _get_client()
+    if not client or _RPD_EXHAUSTED:
+        return [None] * len(texts)
+
+    from src.config import OPENAI_MODEL
+    import asyncio as _aio
+
+    results: list[str | None] = [None] * len(texts)
+
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start: start + batch_size]
+
+        # Build numbered prompt; skip texts that are too short
+        lines: list[str] = []
+        valid_indices: list[int] = []
+        for local_i, text in enumerate(chunk):
+            if text and len(text.strip()) >= 20:
+                lines.append(f"[{local_i}] {text[:400]}")
+                valid_indices.append(local_i)
+
+        if not lines:
+            continue
+
+        user_msg = "\n".join(lines)
+
+        for attempt in range(3):
+            try:
+                response = await client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": _GEO_BATCH_SYSTEM},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    temperature=0.1,
+                    max_tokens=len(valid_indices) * 25 + 20,
+                    response_format={"type": "json_object"},
+                )
+                raw = response.choices[0].message.content.strip()
+                # Response may be {"results": [...]} or just [...]
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("results", parsed.get("data", list(parsed.values())[0] if parsed else []))
+                if not isinstance(parsed, list):
+                    break
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    local_i = item.get("idx")
+                    region = item.get("region")
+                    if isinstance(local_i, int) and region in VALID_GEO_REGIONS:
+                        results[start + local_i] = region
+                break
+            except Exception as exc:
+                msg = str(exc)
+                if "429" in msg or "rate_limit_exceeded" in msg:
+                    if "requests per day" in msg or "RPD" in msg:
+                        logger.error("[AI] Daily RPD limit exhausted — dừng gọi AI hôm nay.")
+                        _RPD_EXHAUSTED = True
+                        return results
+                    wait = _parse_retry_after(msg)
+                    logger.info("[AI/geo-batch] 429, chờ %.1fs (lần %d/3)…", wait, attempt + 1)
+                    await _aio.sleep(wait)
+                    continue
+                logger.warning("batch_classify_geo_with_ai failed: %s", exc)
+                break
+
+    return results
+
+
+async def batch_classify_post_topic_with_ai(
+    texts: list[str],
+    batch_size: int = 25,
+    max_topics: int = 2,
+) -> list[list[str]]:
+    """Phân loại chủ đề cho nhiều bài trong một lần gọi API.
+
+    Tiết kiệm ~60-70% token so với gọi từng bài riêng lẻ.
+
+    Args:
+        texts:      Danh sách text cần phân loại.
+        batch_size: Số bài mỗi lần gọi API (mặc định 25).
+        max_topics: Số chủ đề tối đa trả về mỗi bài.
+
+    Returns:
+        List kết quả cùng độ dài với ``texts``. List rỗng nếu thất bại.
+    """
+    global _RPD_EXHAUSTED
+    if not texts:
+        return []
+
+    client = _get_client()
+    if not client or _RPD_EXHAUSTED:
+        return [[] for _ in texts]
+
+    from src.config import OPENAI_MODEL
+    import asyncio as _aio
+
+    results: list[list[str]] = [[] for _ in texts]
+
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start: start + batch_size]
+
+        lines: list[str] = []
+        valid_indices: list[int] = []
+        for local_i, text in enumerate(chunk):
+            if text and len(text.strip()) >= 20:
+                lines.append(f"[{local_i}] {text[:500]}")
+                valid_indices.append(local_i)
+
+        if not lines:
+            continue
+
+        user_msg = "\n".join(lines)
+
+        for attempt in range(3):
+            try:
+                response = await client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": _TOPIC_BATCH_SYSTEM},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    temperature=0.1,
+                    max_tokens=len(valid_indices) * 40 + 20,
+                    response_format={"type": "json_object"},
+                )
+                raw = response.choices[0].message.content.strip()
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("results", parsed.get("data", list(parsed.values())[0] if parsed else []))
+                if not isinstance(parsed, list):
+                    break
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    local_i = item.get("idx")
+                    topics = item.get("topics", [])
+                    if isinstance(local_i, int) and isinstance(topics, list):
+                        valid = [t for t in topics[:max_topics] if isinstance(t, str) and t in VALID_TOPICS]
+                        if valid:
+                            results[start + local_i] = valid
+                break
+            except Exception as exc:
+                msg = str(exc)
+                if "429" in msg or "rate_limit_exceeded" in msg:
+                    if "requests per day" in msg or "RPD" in msg:
+                        logger.error("[AI] Daily RPD limit exhausted — dừng gọi AI hôm nay.")
+                        _RPD_EXHAUSTED = True
+                        return results
+                    wait = _parse_retry_after(msg)
+                    logger.info("[AI/topic-batch] 429, chờ %.1fs (lần %d/3)…", wait, attempt + 1)
+                    await _aio.sleep(wait)
+                    continue
+                logger.warning("batch_classify_post_topic_with_ai failed: %s", exc)
+                break
+
+    return results
