@@ -181,20 +181,15 @@ def classify_geo_rule_based(text: str, source: str = "") -> str | None:
 async def classify_geo(text: str, source: str = "") -> str | None:
     """Phân loại địa lý đầy đủ cho bài MỚI trong ingestion pipeline.
 
-    Bước 1 — Rule-based: nhanh, miễn phí, phủ ~70-80% bài.
-    Bước 2 — OpenAI fallback: tự động gọi nếu rule-based không xác định được.
+    Chỉ dùng rule-based (nhanh, miễn phí). Bài không xác định được trả về
+    "Khác" thay vì gọi OpenAI để tiết kiệm chi phí.
 
     Args:
         text:   Nội dung bài viết (đã clean)
         source: Tên kênh / nguồn (Telegram username, domain…)
 
     Returns:
-        Tên region (str) hoặc None nếu cả hai bước đều thất bại.
+        Tên region (str) — luôn trả về giá trị hợp lệ ("Khác" nếu không rõ).
     """
     result = classify_geo_rule_based(text, source=source)
-    if result:
-        return result
-
-    # Fallback: OpenAI
-    from src.processing.ai_topic_detector import classify_geo_with_ai
-    return await classify_geo_with_ai(text)
+    return result if result else "Khác"
