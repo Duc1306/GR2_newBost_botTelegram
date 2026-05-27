@@ -16,7 +16,7 @@ const STEPS = ['Nhập số điện thoại', 'Xác minh OTP'];
 
 export default function TelegramLoginPage() {
   const navigate = useNavigate();
-  const { loginWithTelegram } = useAuth();
+  const { loginWithTelegram, isAuthenticated, user, logout } = useAuth();
 
   const [activeStep, setActiveStep] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -33,6 +33,32 @@ export default function TelegramLoginPage() {
   const [otpCode, setOtpCode] = useState('');
   const [needs2FA, setNeeds2FA] = useState(false);
   const [password2FA, setPassword2FA] = useState('');
+
+  // ── Already logged in: ask to logout first ─────────────────
+  if (isAuthenticated) {
+    return (
+      <Box minHeight="100vh" display="flex" alignItems="center" justifyContent="center"
+        sx={{ bgcolor: 'background.default', px: 2 }}>
+        <Paper elevation={3} sx={{ borderRadius: 3, p: 4, maxWidth: 420, width: '100%', textAlign: 'center' }}>
+          <TelegramIcon sx={{ fontSize: 48, color: '#0088cc', mb: 1 }} />
+          <Typography variant="h6" fontWeight={700} mb={1}>Đăng nhập bằng Telegram</Typography>
+          <Typography variant="body2" color="text.secondary" mb={3}>
+            Bạn đang đăng nhập với tài khoản{' '}
+            <strong>{user?.full_name || user?.username}</strong>.
+            Vui lòng đăng xuất trước để tiếp tục đăng nhập bằng Telegram.
+          </Typography>
+          <Box display="flex" gap={2} justifyContent="center">
+            <Button variant="outlined" onClick={() => navigate(-1)}>Quay lại</Button>
+            <Button variant="contained" color="primary"
+              onClick={() => { logout(); }}
+              startIcon={<TelegramIcon />}>
+              Đăng xuất &amp; tiếp tục
+            </Button>
+          </Box>
+        </Paper>
+      </Box>
+    );
+  }
 
   // ─── Step 1: Send OTP ─────────────────────────────────────
   const handleSendCode = async (e) => {

@@ -227,6 +227,14 @@ export const AuthProvider = ({ children }) => {
   // Derive role directly from the signed JWT — cannot be spoofed via localStorage edits.
   const jwtRole = token ? decodeJwtRole(token) : null;
 
+  const updateUser = (fields) => {
+    setUser((prev) => {
+      const updated = { ...prev, ...fields };
+      localStorage.setItem('auth_user', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   const value = useMemo(() => ({
     user,
     token,
@@ -238,6 +246,7 @@ export const AuthProvider = ({ children }) => {
     loginWithTelegram,
     register,
     logout,
+    updateUser,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [user, token, loading, jwtRole, isTokenExpired]);
 

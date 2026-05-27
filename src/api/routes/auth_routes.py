@@ -62,6 +62,7 @@ async def get_current_user_info(token_data=Depends(get_current_user_token_data))
             "phone_number": user_doc.get("phone_number"),
             "telegram_username": user_doc.get("telegram_username"),
             "telegram_linked": bool(user_doc.get("telegram_session")),
+            "has_password": bool(user_doc.get("password_hash")),
         }
     return {
         "username": token_data.username,
@@ -69,4 +70,40 @@ async def get_current_user_info(token_data=Depends(get_current_user_token_data))
         "authenticated": True,
         **profile,
     }
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+
+
+@router.put("/auth/profile")
+async def update_profile(
+    request: UpdateProfileRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Update current user's profile (full_name, email)."""
+    users_col = get_users_collection()
+    updates: dict = {}
+    if request.full_name is not None:
+        name = request.full_name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Họ tên không được để trống.")
+        updates["full_name"] = name
+    if request.email is not None:
+        email = request.email.strip()
+        # Basic email format check
+        if email and "@" not in email:
+            raise HTTPException(status_code=400, detail="Email không hợp lệ.")
+        updates["email"] = email
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="Không có trường nào cần cập nhật.")
+
+    result = users_col.update_one({"username": current_user}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản.")
+
+    logger.info(f"Profile updated for {current_user}: {list(updates.keys())}")
+    return {"success": True, "updated_fields": list(updates.keys())}
 

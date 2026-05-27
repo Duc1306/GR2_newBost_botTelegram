@@ -150,6 +150,12 @@ export default function Navbar({ onMenuClick }) {
               />
             </MenuItem>
             <Divider />
+            <MenuItem onClick={() => { handleMenuClose(); navigate('/profile'); }}>
+              <ListItemIcon>
+                <PersonIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Hồ sơ cá nhân</ListItemText>
+            </MenuItem>
             <MenuItem onClick={() => { handleMenuClose(); navigate('/settings'); }}>
               <ListItemIcon>
                 <SettingsIcon fontSize="small" />

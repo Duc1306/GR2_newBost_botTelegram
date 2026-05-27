@@ -14,6 +14,7 @@ const TrendingPage = lazy(() => import('./pages/admin/TrendingPage.jsx'));
 const SettingsPage = lazy(() => import('./pages/admin/SettingsPage.jsx'));
 const UsersPage = lazy(() => import('./pages/admin/UsersPage.jsx'));
 const DashboardPage = lazy(() => import('./pages/user/DashboardPage.jsx'));
+const ProfilePage = lazy(() => import('./pages/user/ProfilePage.jsx'));
 const PublicHomePage = lazy(() => import('./pages/public/PublicHomePage.jsx'));
 const LoginPage = lazy(() => import('./pages/auth/LoginPage.jsx'));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage.jsx'));
@@ -110,10 +111,11 @@ function AppRoutes() {
       {/* ── Auth ────────────────────────────────────────────── */}
       <Route path="/login"    element={<GuestOnly><Suspense fallback={<PageLoader />}><LoginPage /></Suspense></GuestOnly>} />
       <Route path="/register" element={<GuestOnly><Suspense fallback={<PageLoader />}><RegisterPage /></Suspense></GuestOnly>} />
-      <Route path="/login/telegram" element={<GuestOnly><Suspense fallback={<PageLoader />}><TelegramLoginPage /></Suspense></GuestOnly>} />
+      <Route path="/login/telegram" element={<Suspense fallback={<PageLoader />}><TelegramLoginPage /></Suspense>} />
 
       {/* ── User routes (role: user or admin) ───────────────── */}
       <Route path="/dashboard" element={<UserRoute page={<Suspense fallback={<PageLoader />}><DashboardPage /></Suspense>} />} />
+      <Route path="/profile" element={<UserRoute page={<Suspense fallback={<PageLoader />}><ProfilePage /></Suspense>} />} />
       <Route path="/news" element={<Navigate to="/" replace />} />
 
       {/* ── Admin routes (role: admin only) ─────────────────── */}

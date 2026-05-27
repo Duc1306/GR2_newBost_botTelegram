@@ -39,6 +39,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import TelegramIcon from '@mui/icons-material/Telegram';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import LogoutIcon from '@mui/icons-material/Logout';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import LinkIcon from '@mui/icons-material/Link';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import CheckIcon from '@mui/icons-material/Check';
@@ -85,6 +86,17 @@ export default function DashboardPage() {
   const [tgChannelsLoading, setTgChannelsLoading] = useState(false);
   const [tgChannelsError, setTgChannelsError] = useState('');
   const [tgSubscribing, setTgSubscribing] = useState(new Set()); // channel IDs in flight
+
+  // Telegram-linked status (to conditionally show Telegram scan section)
+  const [telegramLinked, setTelegramLinked] = useState(null); // null = loading
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    fetch(`${apiBase}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => setTelegramLinked(!!d.telegram_linked))
+      .catch(() => setTelegramLinked(false));
+  }, []);
 
   // Channel catalog (106 curated channels from channel.json, grouped by category)
   const [catalog, setCatalog] = useState([]);       // [{category, channels[]}]
@@ -262,9 +274,13 @@ export default function DashboardPage() {
               sx={{ textTransform: 'none', color: 'text.secondary' }}>
               Trang công khai
             </Button>
-            <Typography variant="body2" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
-              Xin chào, <strong>{user?.full_name || user?.username}</strong>
-            </Typography>
+            <Tooltip title="Hồ sơ cá nhân">
+              <Button component={RouterLink} to="/profile" size="small"
+                startIcon={<AccountCircleIcon />}
+                sx={{ textTransform: 'none', color: 'primary.main', fontWeight: 500 }}>
+                {user?.full_name || user?.username}
+              </Button>
+            </Tooltip>
             <Tooltip title="Đăng xuất">
               <IconButton size="small" onClick={handleLogout}>
                 <LogoutIcon fontSize="small" />
@@ -388,9 +404,9 @@ export default function DashboardPage() {
         </Paper>
 
         {/* ══════════════════════════════════════════════════════════
-            KÊNH TELEGRAM CỦA TÔI (quét từ tài khoản Telegram)
+            KÊNH TELEGRAM CỦA TÔI — chỉ hiện khi tài khoản có Telegram
             ══════════════════════════════════════════════════════════ */}
-        <Paper elevation={0} sx={{ mb: 4, borderRadius: 3, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+        {telegramLinked && <Paper elevation={0} sx={{ mb: 4, borderRadius: 3, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
           <Box sx={{ p: 3 }}>
             <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
               <Typography variant="subtitle1" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
@@ -531,7 +547,7 @@ export default function DashboardPage() {
               </>
             )}
           </Box>
-        </Paper>
+        </Paper>}
 
         {/* ══════════════════════════════════════════════════════════
             DANH MỤC KÊNH GỢI Ý
