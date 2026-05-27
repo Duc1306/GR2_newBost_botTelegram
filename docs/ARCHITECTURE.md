@@ -1,7 +1,7 @@
 # Kiến Trúc Hệ Thống — NewsBot (Telegram & X News Aggregator)
 
-> Phiên bản: 1.0  
-> Tài liệu cập nhật: 2026-05-11  
+> Phiên bản: 2.0.0  
+> Tài liệu cập nhật: 2026
 > Kho lưu trữ: `Duc1306/GR2_newBost_botTelegram`
 
 ---
@@ -78,7 +78,7 @@ botTele/                            Thư mục gốc dự án
 | `channels.py` | Subscribe/unsubscribe kênh Telegram & X, trigger xử lý ngay | `POST /user/channels/subscribe` |
 | `middleware.py` | Rate limiting (SlowAPI), structured logging (Loguru) | `setup_rate_limiting()`, `setup_logging()` |
 | `telegram_auth.py` | Xác thực Telegram bằng OTP | `router` (prefix `/auth/telegram`) |
-| `main.py` (routes) | Toàn bộ endpoints posts, analytics, hotnews, TTS, admin | Inline trong `main.py` |
+| `main.py` (routes) | Toàn bộ endpoints posts, analytics, hotnews, TTS, admin | Tách theo 9 route files trong `routes/` |
 
 ### Tầng Thu Thập Dữ Liệu (`src/ingestion/`)
 
@@ -339,12 +339,14 @@ src/db/mongo.py          src/models/
 ### Frontend
 | Công nghệ | Vai trò |
 |---|---|
-| React 18 | UI framework |
-| Vite | Build tool & dev server |
-| React Router v6 | Client-side routing |
-| MUI (Material UI) | Component library |
-| TanStack Query | Server state & caching |
-| Fetch API | HTTP client |
+| React 18.2 | UI framework |
+| Vite 7.3 | Build tool & dev server |
+| React Router 7 | Client-side routing |
+| MUI 7.3 (Material UI) | Component library |
+| TanStack Query 5 | Server state & caching |
+| axios 1.13 | HTTP client |
+| Recharts 3.6 | Biểu đồ thống kê |
+| d3-cloud 1.2 | Word cloud visualization |
 
 ### Infrastructure
 | Công nghệ | Vai trò |

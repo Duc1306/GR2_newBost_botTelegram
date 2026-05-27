@@ -57,19 +57,16 @@ APIFY_API_TOKEN=apify_api_XXXXXXXXXXXXXXXXXXXXXX
 
 ## 3. Chọn Actor phù hợp
 
-Truy cập https://apify.com/store và tìm kiếm. Dưới đây là 2 Actor tốt nhất:
+Truy cập https://apify.com/store và tìm kiếm. Dự án này sử dụng Actor **Pay-Per-Result**:
 
-### Actor A — `apidojo/tweet-scraper` (Khuyên dùng nhất)
-- **Link:** https://apify.com/apidojo/tweet-scraper
-- **Chức năng:** Cào tweet theo từ khóa, hashtag, URL tweet cụ thể
-- **Input chính:** `searchTerms`, `maxItems`, `language`
-- **Chi phí:** ~$0.50–1.00 cho 10.000 tweet (< $1 từ $5 credit)
+### Actor chính — `kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest`
+- **Link:** https://apify.com/kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest
+- **Chức năng:** Cào tweet theo từ khóa, hashtag, hoặc từ tài khoản cụ thể (dùng `from:username`)
+- **Input chính:** `searchTerms`, `maxItems`
+- **Chi phí:** ~$0.25/1.000 tweet — rất tiết kiệm với $5 free credit
+- **Ưu điểm:** Dùng chung 1 actor cho cả keyword search và user timeline
 
-### Actor B — `apidojo/twitter-user-scraper`
-- **Link:** https://apify.com/apidojo/twitter-user-scraper
-- **Chức năng:** Cào toàn bộ timeline của một tài khoản X cụ thể
-- **Input chính:** `usernames`, `maxTweets`
-- **Dùng khi:** Bạn muốn theo dõi @VnExpress, @tuoitrenews, v.v. trên X
+> **Lưu ý:** Các Actor khác như `apidojo/tweet-scraper` và `apidojo/twitter-user-scraper` cũng hoạt động tốt nhưng tính phí theo compute units (CU) thay vì pay-per-result.
 
 ---
 
@@ -145,8 +142,8 @@ from src.db.mongo import get_db
 
 
 APIFY_TOKEN = os.getenv("APIFY_API_TOKEN")
-TWEET_SCRAPER_ACTOR = "apidojo/tweet-scraper"
-USER_SCRAPER_ACTOR  = "apidojo/twitter-user-scraper"
+# Actor Pay-Per-Result — dùng cho cả keyword search và user timeline
+X_ACTOR = "kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest"
 
 
 def fetch_tweets_by_keyword(
@@ -176,7 +173,7 @@ def fetch_tweets_by_keyword(
         "includeSearchTerms": False,
     }
 
-    run = client.actor(TWEET_SCRAPER_ACTOR).call(run_input=run_input)
+    run = client.actor(X_ACTOR).call(run_input=run_input)
     items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
     logger.info(f"[X-Worker] Got {len(items)} tweets for '{keyword}'")
     return items
@@ -205,7 +202,7 @@ def fetch_tweets_by_user(
         "addUserInfo": True,
     }
 
-    run = client.actor(USER_SCRAPER_ACTOR).call(run_input=run_input)
+    run = client.actor(X_ACTOR).call(run_input=run_input)
     items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
     logger.info(f"[X-Worker] Got {len(items)} tweets from {usernames}")
     return items
@@ -491,4 +488,4 @@ A: Vào Render dashboard → service của bạn → **Environment** → **Add E
 
 ---
 
-*Tài liệu này thuộc về hệ thống newsbot — cập nhật lần cuối: 2026-04-11*
+*Tài liệu này thuộc về hệ thống newsbot — cập nhật lần cuối: 2025*

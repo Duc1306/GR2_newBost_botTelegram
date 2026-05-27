@@ -1,6 +1,6 @@
 # Tài liệu Thiết kế Chi tiết — NewsBot
 
-> **Phiên bản:** 2.0.0 | **Cập nhật:** 2025  
+> **Phiên bản:** 2.0.0 | **Cập nhật:** 2026  
 > Tài liệu mô tả chi tiết thiết kế kỹ thuật từng module — dành cho developer muốn hiểu sâu hoặc mở rộng hệ thống.
 
 ---
@@ -51,18 +51,21 @@
 | requests | 2.32.3 | HTTP client sync |
 | orjson | 3.10.7 | JSON serialization nhanh |
 | edge-tts | ≥6.1.9 | Text-to-Speech tiếng Việt |
-| numpy | 1.26.4 | Tính toán vector (embedding) |
+| numpy | >=2.0.2 | Tính toán vector (embedding) |
 
 ### Frontend
 
 | Thư viện | Vai trò |
 |---|---|
-| React 18 | UI framework |
-| Vite 5 | Build tool |
-| Material UI (MUI) v5 | Component library |
-| TanStack Query v5 | Server state management |
-| React Router v6 | Client-side routing |
-| Axios / fetch | HTTP client |
+| React 18.2 | UI framework |
+| Vite 7.3 | Build tool |
+| Material UI (MUI) 7.3 | Component library |
+| TanStack Query 5 | Server state management |
+| React Router 7 | Client-side routing |
+| axios 1.13 | HTTP client |
+| Recharts 3.6 | Biểu đồ thống kê |
+| d3-cloud 1.2 | Word cloud |
+| date-fns 4.1 | Date utilities |
 
 ---
 

@@ -365,13 +365,14 @@ POST /channels/subscribe
 
 ## 7. Background Workers (Auto-Start)
 
-`src/api/main.py` dùng FastAPI `lifespan` để tự động khởi động 2 workers khi API server bật:
+`src/api/main.py` dùng FastAPI `lifespan` để tự động khởi động 3 workers khi API server bật:
 
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(run_worker())         # Worker 1
-    asyncio.create_task(run_refresh_loop())   # Worker 2
+    asyncio.create_task(run_worker())                    # Worker 1: Poll pending queue
+    asyncio.create_task(run_refresh_loop())              # Worker 2: Refresh kênh active
+    asyncio.create_task(_hotnews_precompute_worker())    # Worker 3: Warm hot news cache
     yield
 ```
 
@@ -450,7 +451,7 @@ P4: Rule-Based Keywords  (từ điển song ngữ vi/en — luôn có kết qu�
 OUTPUT: post.topics = ["Kinh tế"] (hoặc chủ đề khác)
 ```
 
-**14 chủ đề:** Kinh tế · Công nghệ · Crypto · Chính trị · Thế giới · Pháp luật · Ô tô - Xe máy · Khoa học · Thể thao · Giải trí · Sức khỏe · Giáo dục · Du lịch · Ẩm thực
+**19 chủ đề:** Crypto · Kinh tế · Công nghệ · Chính trị · Thế giới · Pháp luật · Ô tô - Xe máy · Khoa học · Thể thao · Giải trí · Sức khỏe · Giáo dục · Việc làm · Du lịch · Ẩm thực · Kinh doanh & Khởi nghiệp · Trò chơi & Ứng dụng · Tin tức & Truyền thông · Khác
 
 ---
 
@@ -478,33 +479,50 @@ Tạo file `.env` ở thư mục gốc `botTele/`:
 
 ```env
 # === MongoDB ===
-MONGODB_URI=mongodb://localhost:27017   # local, hoặc Atlas URI
-MONGODB_DB=newsbot
+MONGO_URI=mongodb://localhost:27017        # local, hoặc Atlas connection string
+DB_NAME=newsbot
 
 # === Telegram (bắt buộc cho luồng Telegram) ===
-TELEGRAM_API_ID=12345678               # từ my.telegram.org
-TELEGRAM_API_HASH=abcdef1234567890     # từ my.telegram.org
-TELEGRAM_SESSION_NAME=telegram_session # tên file .session
+TELEGRAM_API_ID=12345678                   # từ my.telegram.org
+TELEGRAM_API_HASH=abcdef1234567890         # từ my.telegram.org
+TELEGRAM_SESSION_STRING=...                # chuỗi session từ scripts/create_session.py
+TELEGRAM_BOT_TOKEN=...                     # (tuỳ chọn) bot token
+TELEGRAM_FETCH_LIMIT=200                   # số tin tối đa mỗi kênh
 
 # === Apify (bắt buộc cho luồng X/Twitter) ===
-APIFY_API_TOKEN=apify_api_xxxxxxxxxxxx # từ console.apify.com
+APIFY_API_TOKEN=apify_api_xxxxxxxxxxxx     # từ console.apify.com
+X_KEYWORDS=ReactJS;AI Việt Nam             # từ khóa cào tweet, phân cách bằng ;
+X_USERNAMES=VnExpress;tuoitrenews          # tài khoản X theo dõi, phân cách bằng ;
+X_FETCH_LIMIT=50                           # số tweet tối đa mỗi lần fetch
 
-# === FastAPI / Auth ===
-SECRET_KEY=your-very-long-secret-key   # dùng: openssl rand -hex 32
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_HOURS=24
-API_KEY=your-api-key-for-scripts       # tùy chọn, cho X-API-Key header
+# === Security & Auth ===
+JWT_SECRET_KEY=your-very-long-secret-key   # dùng: openssl rand -hex 32
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440       # 24 giờ
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your-strong-password        # BẮT BUỘC đổi trên production
+API_KEY=your-api-key-for-scripts           # tuỳ chọn, cho X-API-Key header
+ENV=development                            # đổi thành "production" trên server
+
+# === Rate Limiting ===
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_PER_MINUTE=60
+RATE_LIMIT_PER_HOUR=1000
 
 # === OpenAI (tuỳ chọn — hệ thống chạy được mà không có) ===
 OPENAI_API_KEY=sk-...
-
-# === Cấu hình Fetch ===
-FETCH_LIMIT=200                        # số tin mỗi kênh Telegram
-REFRESH_INTERVAL_HOURS=12             # chu kỳ auto-refresh (giờ)
-X_DEFAULT_MAX_ITEMS=50                # số tweet mặc định mỗi lần fetch X
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBED_MODEL=text-embedding-3-small
 
 # === CORS (Frontend URLs) ===
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+ALLOWED_ORIGINS=http://localhost:5173,https://newsbot-web.vercel.app
+
+# === Scheduling ===
+CHANNEL_REFRESH_INTERVAL=43200         # 12 giờ (giây)
+QUEUE_POLL_INTERVAL=30                 # giây
+
+# === Logging ===
+LOG_LEVEL=INFO
+LOG_FILE=logs/api.log
 ```
 
 ---
@@ -517,9 +535,9 @@ ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 | **Thu thập X/Twitter** | Apify Python SDK, Actor `kaitoeasyapi` (PPR) |
 | **Xử lý & Phân loại** | scikit-learn (TF-IDF + LinearSVC), langdetect, BeautifulSoup4 |
 | **AI tùy chọn** | OpenAI GPT-4o-mini, text-embedding-3-small |
-| **Lưu trữ** | MongoDB (pymongo), GridFS |
+| **Lưu trữ** | MongoDB Atlas (pymongo 4.8, dnspython) |
 | **API Backend** | FastAPI, Uvicorn, python-jose (JWT), passlib (bcrypt), slowapi |
-| **Frontend** | React 18, Vite, MUI (Material UI), React Query, React Router v6 |
+| **Frontend** | React 18.2, Vite 7.3, MUI 7.3, TanStack Query 5, React Router 7, Recharts 3 |
 | **Logging** | Loguru (file rotation 500MB, giữ 30 ngày) |
 | **Deploy** | Render (API), Vercel (Frontend), MongoDB Atlas (DB) |
 

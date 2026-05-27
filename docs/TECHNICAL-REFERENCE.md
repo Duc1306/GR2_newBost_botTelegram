@@ -400,10 +400,12 @@ async def ingest_once(
 ## 4. Frontend — Phân tích
 
 ### Công nghệ
-- React 18 + Vite 5 + TypeScript (JSX)
-- MUI (Material UI) v5 components
-- TanStack Query v5 (React Query) — server state
-- React Router v6 — client-side routing
+- React 18.2 + Vite 7.3 (JSX)
+- MUI (Material UI) 7.3 components
+- TanStack Query 5 (React Query) — server state
+- React Router 7 — client-side routing
+- axios 1.13 — HTTP client
+- Recharts 3.6, d3-cloud 1.2 — visualization
 - Deploy: Vercel (SPA, rewrites về `index.html`)
 
 ### Routing (`web/src/App.jsx`)

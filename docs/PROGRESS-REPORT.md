@@ -14,7 +14,7 @@ Dự án **NewsBot** là hệ thống tổng hợp tin tức tự động đa ng
 
 | Hạng mục | Trạng thái | Ghi chú |
 |---|---|---|
-| Backend API | ✅ Hoàn thành | FastAPI 2.0, 40+ endpoints, tách route theo domain |
+| Backend API | ✅ Hoàn thành | FastAPI 0.115, 40+ endpoints, tách route theo domain |
 | Thu thập dữ liệu Telegram | ✅ Hoàn thành | Telethon MTProto, tự động |
 | Thu thập dữ liệu X/Twitter | ✅ Hoàn thành | Apify scraping + on-demand admin trigger |
 | Phân loại chủ đề (ML) | ✅ Hoàn thành | TF-IDF + LinearSVC, 19 chủ đề |
