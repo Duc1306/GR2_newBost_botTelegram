@@ -355,19 +355,43 @@ async def embed_and_cluster_posts(
         for post, emb_row in zip(posts, embs_norm):
             post["_emb"] = emb_row  # numpy array row (already unit-normalized)
 
-        # Group posts by cluster label (-1 = noise/outlier → skip)
+        # Group posts by cluster label (-1 = noise/outlier -> skip). DBSCAN can
+        # "chain" through loosely related general-news posts, so tighten each
+        # cluster around its medoid before returning it.
         from collections import defaultdict
-        cluster_map: dict[int, list[dict]] = defaultdict(list)
+        cluster_map: dict[int, list[int]] = defaultdict(list)
         for idx, label in enumerate(labels):
             if label >= 0:
-                cluster_map[label].append(posts[idx])
+                cluster_map[label].append(idx)
 
         if not cluster_map:
             logger.info("embed_and_cluster_posts: DBSCAN found no clusters (eps=%.2f, n=%d)", eps, len(posts))
             return []
 
+        tightened_clusters: list[list[dict]] = []
+        for member_indices in cluster_map.values():
+            if len(member_indices) < min_cluster_size:
+                continue
+            sub_sim = cosine_sim[member_indices][:, member_indices]
+            medoid_local_idx = int(np.argmax(sub_sim.mean(axis=1)))
+            medoid_idx = member_indices[medoid_local_idx]
+            kept_indices = [
+                idx for idx in member_indices
+                if float(cosine_sim[medoid_idx, idx]) >= similarity_threshold
+            ]
+            if len(kept_indices) >= min_cluster_size:
+                tightened_clusters.append([posts[idx] for idx in kept_indices])
+
+        if not tightened_clusters:
+            logger.info(
+                "embed_and_cluster_posts: all clusters were too loose after medoid pruning "
+                "(threshold=%.2f, n=%d)",
+                similarity_threshold, len(posts),
+            )
+            return []
+
         # Sort by cluster size descending, return top max_clusters
-        sorted_clusters = sorted(cluster_map.values(), key=len, reverse=True)
+        sorted_clusters = sorted(tightened_clusters, key=len, reverse=True)
         result = sorted_clusters[:max_clusters]
         logger.info(
             "embed_and_cluster_posts: %d posts → %d clusters (sizes: %s)",
@@ -780,7 +804,7 @@ async def discover_hot_events(
 
     # ── PRIMARY: embedding-based DBSCAN clustering ────────────────────────────
     embed_clusters = await embed_and_cluster_posts(
-        posts, max_clusters=max_events + 2, min_cluster_size=2, similarity_threshold=0.62
+        posts, max_clusters=max_events + 2, min_cluster_size=2, similarity_threshold=0.74
     )
 
     if embed_clusters:

@@ -29,7 +29,7 @@ const SENTIMENT_LABEL = {
   neutral: 'Trung lập',
 };
 
-export default function HotSummaryDialog({ cluster, open, onClose, hours = 48, onPlayAudio }) {
+export default function HotSummaryDialog({ cluster, open, onClose, hours = 24, onPlayAudio }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [data, setData] = useState(null);

@@ -24,7 +24,7 @@ export default function HotNewsTab() {
   const [clusters, setClusters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [hours, setHours] = useState(48);
+  const [hours, setHours] = useState(24);
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [audioPlayer, setAudioPlayer] = useState(null);
@@ -125,18 +125,40 @@ export default function HotNewsTab() {
           </Typography>
         </Box>
         <Box display="flex" gap={0.75} alignItems="center" flexWrap="wrap">
-          {[24, 48, 72].map((h) => (
-            <Chip
-              key={h}
-              label={`${h}h`}
-              size="small"
-              clickable
-              onClick={() => setHours(h)}
-              color={hours === h ? 'primary' : 'default'}
-              variant={hours === h ? 'filled' : 'outlined'}
-              sx={{ fontWeight: hours === h ? 700 : 500 }}
-            />
-          ))}
+          {[24, 48, 72].map((h) => {
+            const active = hours === h;
+            return (
+              <Tooltip
+                key={h}
+                title={`Xem tin nóng trong ${h} giờ gần nhất`}
+                arrow
+              >
+                <Chip
+                  label={`${h}h`}
+                  size="small"
+                  clickable
+                  onClick={() => setHours(h)}
+                  color={active ? 'primary' : 'default'}
+                  variant={active ? 'filled' : 'outlined'}
+                  sx={{
+                    fontWeight: active ? 800 : 600,
+                    borderColor: active ? 'primary.main' : 'divider',
+                    bgcolor: active ? 'primary.main' : 'background.paper',
+                    color: active ? 'primary.contrastText' : 'text.primary',
+                    transition: 'background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease',
+                    boxShadow: active ? '0 2px 8px rgba(25, 118, 210, 0.24)' : 'none',
+                    '&:hover': {
+                      bgcolor: active ? 'primary.dark' : 'rgba(25, 118, 210, 0.08)',
+                      borderColor: 'primary.main',
+                      color: active ? 'primary.contrastText' : 'primary.main',
+                      boxShadow: '0 3px 10px rgba(25, 118, 210, 0.18)',
+                      transform: 'translateY(-1px)',
+                    },
+                  }}
+                />
+              </Tooltip>
+            );
+          })}
           <Tooltip title="Làm mới">
             <span>
               <IconButton size="small" onClick={() => load(hours)} disabled={loading}>

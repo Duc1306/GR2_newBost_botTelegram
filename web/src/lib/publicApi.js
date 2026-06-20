@@ -86,7 +86,7 @@ export async function searchXPosts(q = '', skip = 0, limit = 20, signal) {
  * Fetch hot news clusters (grouped by topic) for the last N hours.
  * @returns {{ clusters: Array, since: string, hours: number }}
  */
-export async function fetchHotNewsClusters(hours = 48, signal) {
+export async function fetchHotNewsClusters(hours = 24, signal) {
   const res = await fetch(`${API_BASE}/public/hotnews?hours=${hours}`, { signal });
   if (!res.ok) throw new Error('Failed to fetch hot news clusters');
   return res.json();
@@ -97,7 +97,7 @@ export async function fetchHotNewsClusters(hours = 48, signal) {
  * Results are cached server-side for 30 minutes.
  * @returns {{ summary, key_points, sentiment, ai, post_count }}
  */
-export async function fetchHotNewsSummary(slug, hours = 48, signal) {
+export async function fetchHotNewsSummary(slug, hours = 24, signal) {
   const res = await fetch(`${API_BASE}/public/hotnews/${encodeURIComponent(slug)}/summary?hours=${hours}`, {
     method: 'POST',
     signal,
@@ -110,7 +110,7 @@ export async function fetchHotNewsSummary(slug, hours = 48, signal) {
  * Fetch TTS audio (MP3) for a hot-news cluster.
  * Returns a Blob URL (revoke after use).
  */
-export async function fetchHotNewsAudio(slug, hours = 48, signal) {
+export async function fetchHotNewsAudio(slug, hours = 24, signal) {
   const res = await fetch(
     `${API_BASE}/public/hotnews/${encodeURIComponent(slug)}/audio?hours=${hours}`,
     { signal },

@@ -249,7 +249,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
     """
     from src.processing.ai_topic_detector import (
         filter_relevant_posts, discover_hot_events,
-        cluster_and_summarize as _cas, gpt_name_ml_clusters,
+        cluster_and_summarize as _cas,
     )
 
     posts_coll = db["posts"]
@@ -263,46 +263,58 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
     }
 
     # ── Step 1: Fetch posts ───────────────────────────────────────────────────
-    RECENT_SPAN = min(hours, 24)
-    RECENT_SLICES = 3
-    RECENT_PPL = 150
+    _EMBED_CAP = 450
+    WINDOW_SLICE_HOURS = 12
+    window_slices = max(1, min(8, math.ceil(hours / WINDOW_SLICE_HOURS)))
+    per_slice_limit = max(40, math.ceil(_EMBED_CAP / window_slices))
     all_posts: list[dict] = []
     seen_ids: set = set()
 
-    recent_slice_h = math.ceil(RECENT_SPAN / RECENT_SLICES)
-    for i in range(RECENT_SLICES):
-        slice_end = now - timedelta(hours=i * recent_slice_h)
-        slice_start = now - timedelta(hours=(i + 1) * recent_slice_h)
+    slice_h = math.ceil(hours / window_slices)
+    for i in range(window_slices):
+        slice_end = now - timedelta(hours=i * slice_h)
+        slice_start = now - timedelta(hours=(i + 1) * slice_h)
         if slice_start < since:
             slice_start = since
         for p in posts_coll.find(
             {"created_at": {"$gte": slice_start, "$lt": slice_end}}, projection,
-        ).sort("created_at", -1).limit(RECENT_PPL):
+        ).sort("created_at", -1).limit(per_slice_limit):
             pid = str(p["_id"])
             if pid not in seen_ids:
                 seen_ids.add(pid)
                 p["_id"] = pid
                 all_posts.append(p)
 
-    if hours > 24:
-        older_start = since
-        older_end = now - timedelta(hours=24)
-        older_limit = 150 * max(1, (hours - 24) // 24)
-        for p in posts_coll.find(
-            {"created_at": {"$gte": older_start, "$lt": older_end}}, projection,
-        ).sort("created_at", -1).limit(older_limit):
-            pid = str(p["_id"])
-            if pid not in seen_ids:
-                seen_ids.add(pid)
-                p["_id"] = pid
-                all_posts.append(p)
-
-    _EMBED_CAP = 450
     if len(all_posts) > _EMBED_CAP:
-        _wl = [p for p in all_posts if p.get("links")]
-        _nl = [p for p in all_posts if not p.get("links")]
-        logger.info("hotnews: capped all_posts %d→%d", len(all_posts), _EMBED_CAP)
-        all_posts = (_wl + _nl)[:_EMBED_CAP]
+        by_slice: list[list[dict]] = [[] for _ in range(window_slices)]
+        for p in all_posts:
+            created = p.get("created_at")
+            if not created:
+                by_slice[0].append(p)
+                continue
+            age_hours = max(0.0, (now - created).total_seconds() / 3600)
+            idx = min(window_slices - 1, int(age_hours // slice_h))
+            by_slice[idx].append(p)
+
+        balanced: list[dict] = []
+        slice_quota = max(1, _EMBED_CAP // window_slices)
+        for bucket in by_slice:
+            with_links = [p for p in bucket if p.get("links")]
+            no_links = [p for p in bucket if not p.get("links")]
+            balanced.extend((with_links + no_links)[:slice_quota])
+
+        if len(balanced) < _EMBED_CAP:
+            used = {p["_id"] for p in balanced}
+            remainder = [p for p in all_posts if p["_id"] not in used]
+            with_links = [p for p in remainder if p.get("links")]
+            no_links = [p for p in remainder if not p.get("links")]
+            balanced.extend((with_links + no_links)[:_EMBED_CAP - len(balanced)])
+
+        logger.info(
+            "hotnews: balanced cap all_posts %d→%d across %d slices",
+            len(all_posts), len(balanced[:_EMBED_CAP]), window_slices,
+        )
+        all_posts = balanced[:_EMBED_CAP]
 
     clusters: list[dict] = []
 
@@ -320,14 +332,20 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
             )[:600].strip()
             _filter_query = _anchor_text if len(_anchor_text) > 60 else ev["name"]
             event_filtered = await filter_relevant_posts(
-                ev_posts, topic_name=_filter_query, threshold=0.50, top_k=15,
+                ev_posts, topic_name=_filter_query, threshold=0.58, top_k=15,
             )
             if len(event_filtered) < 2:
                 logger.info(
-                    "_build_cluster: anchor filter too strict for %r (%d→%d), keeping original",
+                    "_build_cluster: dropped loose cluster %r (%d→%d)",
                     ev["name"], len(ev_posts), len(event_filtered),
                 )
-                event_filtered = ev_posts[:15]
+                return None
+            if "_ai_score" in event_filtered[0] and event_filtered[0].get("_ai_score", 0) < 0.58:
+                logger.info(
+                    "_build_cluster: dropped low-confidence cluster %r top_score=%.3f",
+                    ev["name"], event_filtered[0].get("_ai_score", 0),
+                )
+                return None
         except Exception as _fe:
             logger.warning("_build_cluster: filter failed: %s", _fe)
             event_filtered = ev_posts[:15]
@@ -456,9 +474,9 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
         trending = list(posts_coll.aggregate(velocity_pipeline))
         existing_slugs = {c["slug"] for c in clusters}
 
-        ml_raw_clusters = []
+        ml_subcluster_tasks = []
         for item in trending:
-            if len(clusters) + len(ml_raw_clusters) >= 8:
+            if len(clusters) + len(ml_subcluster_tasks) >= 8:
                 break
             topic_name = item["_id"]
             if not topic_name:
@@ -480,50 +498,32 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
                              key=lambda p: p.get("created_at") or datetime.min, reverse=True)
             sorted_posts = has_link + no_link
 
-            filtered = await filter_relevant_posts(sorted_posts, topic_name=topic_name, top_k=15)
-            if not filtered:
-                continue
-            for p in filtered:
-                p.pop("_emb", None)
-                p.pop("_ai_score", None)
-
-            filtered = sorted(filtered, key=lambda p: (not bool(p.get("links")), 0))
-            latest = filtered[0].get("created_at")
-            latest_str = latest.isoformat() if hasattr(latest, "isoformat") else str(latest or "")
-            headline = (
-                (filtered[0].get("full_article") or {}).get("title")
-                or (filtered[0].get("text") or "")[:120]
+            # Do not publish a broad ML topic as one "event". First split it
+            # into specific embedding/GPT event clusters, then reuse the same
+            # strict cluster builder as the primary path.
+            topic_events = await discover_hot_events(
+                sorted_posts,
+                max_events=max(1, min(3, 8 - len(clusters) - len(ml_subcluster_tasks))),
             )
-            ml_raw_clusters.append({
-                "slug": slug,
-                "topic_name": topic_name,
-                "color": _ML_TOPIC_COLORS.get(topic_name, "#6b7280"),
-                "post_count": len(filtered),
-                "posts_with_links": len([p for p in filtered if any(
-                    l.startswith("http") and "t.me" not in l
-                    for l in (p.get("links") or [])
-                )]),
-                "latest_at": latest_str,
-                "headline": headline,
-                "posts": filtered[:15],
-            })
-            existing_slugs.add(slug)
+            for ev in topic_events:
+                ev["_broad_topic"] = topic_name
+                ev.setdefault("color", _ML_TOPIC_COLORS.get(topic_name, "#6b7280"))
+                ev_slug = _ml_topic_slug(ev.get("name", ""))
+                if ev_slug and ev_slug not in existing_slugs:
+                    ml_subcluster_tasks.append(_build_cluster(ev))
+                    existing_slugs.add(ev_slug)
+                if len(clusters) + len(ml_subcluster_tasks) >= 8:
+                    break
 
-        ml_named = await gpt_name_ml_clusters(ml_raw_clusters)
-        for cl in ml_named:
-            clusters.append({
-                "slug": cl["slug"],
-                "name": cl["name"],
-                "description": cl.get("description", ""),
-                "color": cl.get("color", "#6b7280"),
-                "post_count": cl["post_count"],
-                "posts_with_links": cl["posts_with_links"],
-                "latest_at": cl["latest_at"],
-                "headline": cl["headline"],
-                "posts": cl["posts"],
-                "source": "ml_velocity",
-                "broad_topic": cl["topic_name"],
-            })
+        if ml_subcluster_tasks:
+            ml_results = await asyncio.gather(*ml_subcluster_tasks, return_exceptions=True)
+            for cl in ml_results:
+                if isinstance(cl, Exception):
+                    logger.warning("ml topic subcluster build error: %s", cl)
+                    continue
+                if cl and not any(c["slug"] == cl["slug"] for c in clusters):
+                    cl["source"] = "ml_topic_subcluster"
+                    clusters.append(cl)
 
     # ── Step 4: Clean + timestamp ─────────────────────────────────────────────
     clusters = [cl for cl in clusters if cl.get("slug") and cl.get("name")]
