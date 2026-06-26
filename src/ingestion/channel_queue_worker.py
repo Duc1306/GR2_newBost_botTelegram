@@ -39,6 +39,7 @@ POLL_INTERVAL          = int(os.getenv("QUEUE_POLL_INTERVAL", "30"))    # second
 MAX_ATTEMPTS           = int(os.getenv("QUEUE_MAX_ATTEMPTS", "3"))
 SUMMARY_POSTS          = int(os.getenv("SUMMARY_MAX_POSTS", "15"))   # posts fed to AI
 REFRESH_INTERVAL       = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "43200"))  # 12 hours = 2× per day
+REFRESH_ON_STARTUP     = os.getenv("CHANNEL_REFRESH_ON_STARTUP", "false").lower() in {"1", "true", "yes", "on"}
 SUMMARY_MIN_NEW_POSTS  = int(os.getenv("SUMMARY_MIN_NEW_POSTS", "3"))   # min new posts để trigger regenerate summary
 SUMMARY_COOLDOWN_HOURS = int(os.getenv("SUMMARY_COOLDOWN_HOURS", "4"))  # giờ cooldown giữa 2 lần summary cùng channel
 
@@ -700,16 +701,16 @@ async def refresh_active_channels(db) -> None:
 
 async def run_refresh_loop() -> None:
     """Background loop: refresh all active channels every REFRESH_INTERVAL seconds.
-    Runs immediately on startup so data is collected right away, then repeats every
-    REFRESH_INTERVAL seconds (default 43200 = 2× per day).
+    By default it waits one interval before refreshing so API startup stays
+    responsive. Set CHANNEL_REFRESH_ON_STARTUP=true to refresh immediately.
     """
     db = get_db()
     logger.info(f"Active-channel refresh loop started (interval: {REFRESH_INTERVAL}s, ~{REFRESH_INTERVAL//3600}h)")
-    # Run immediately on startup — don't wait for the first interval to pass
-    try:
-        await refresh_active_channels(db)
-    except Exception as exc:
-        logger.exception(f"Refresh loop error (initial run): {exc}")
+    if REFRESH_ON_STARTUP:
+        try:
+            await refresh_active_channels(db)
+        except Exception as exc:
+            logger.exception(f"Refresh loop error (initial run): {exc}")
     while True:
         await asyncio.sleep(REFRESH_INTERVAL)
         try:

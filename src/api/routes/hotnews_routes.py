@@ -34,6 +34,53 @@ def _hotnews_mem_ttl(hours: int) -> timedelta:
     return timedelta(hours=3)
 
 
+def _hotnews_bucket_size(hours: int) -> int:
+    if hours <= 24:
+        return 1
+    if hours <= 48:
+        return 2
+    return 3
+
+
+def _hotnews_cache_key(hours: int, now: datetime) -> str:
+    bucket_size = _hotnews_bucket_size(hours)
+    bucket_hour = (now.hour // bucket_size) * bucket_size
+    return f"hotnews_kw:{hours}:{now.strftime('%Y%m%d')}{bucket_hour:02d}"
+
+
+def _parent_hotnews_windows(hours: int) -> list[int]:
+    if hours <= 24:
+        return []
+    if hours <= 48:
+        return [24]
+    return [48]
+
+
+def _merge_cluster_lists(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+
+    for cl in primary + secondary:
+        slug = cl.get("slug") or _ml_topic_slug(cl.get("name", ""))
+        key = slug or cl.get("name", "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(cl)
+    return merged
+
+
+def _is_usable_stale_hotnews_cache(doc: Optional[dict], now: datetime, hours: int) -> bool:
+    """Only serve stale hotnews while a nearby bucket is being recomputed."""
+    if not doc or not doc.get("clusters"):
+        return False
+    created_at = doc.get("created_at")
+    if not isinstance(created_at, datetime):
+        return False
+    max_age = timedelta(hours=max(6, _hotnews_bucket_size(hours) * 3))
+    return now - max_age <= created_at <= now + timedelta(minutes=5)
+
+
 def _cleanup_hotnews_cache() -> None:
     now = datetime.utcnow()
     expired = []
@@ -54,6 +101,43 @@ def _get_hotnews_lock(key: str) -> asyncio.Lock:
     if key not in _hotnews_locks:
         _hotnews_locks[key] = asyncio.Lock()
     return _hotnews_locks[key]
+
+
+async def _ensure_hotnews_window_clusters(db, hours: int, now: datetime) -> list[dict]:
+    """Return raw clusters for a window, computing the current bucket if needed."""
+    cache_coll = db["hotnews_v2_cache"]
+    cache_key = _hotnews_cache_key(hours, now)
+
+    cached = cache_coll.find_one({"key": cache_key})
+    if cached and cached.get("clusters"):
+        return cached["clusters"]
+
+    prev = cache_coll.find_one(
+        {
+            "key": re.compile(f"^hotnews_kw:{hours}:"),
+            "clusters": {"$exists": True, "$ne": []},
+        },
+        sort=[("created_at", -1)],
+    )
+    if _is_usable_stale_hotnews_cache(prev, now, hours):
+        return prev["clusters"]
+
+    lock = _get_hotnews_lock(cache_key)
+    async with lock:
+        cached = cache_coll.find_one({"key": cache_key})
+        if cached and cached.get("clusters"):
+            return cached["clusters"]
+        return await _compute_hotnews_clusters(db, hours, now, cache_key)
+
+
+async def _with_parent_window_clusters(db, hours: int, now: datetime, clusters: list[dict]) -> list[dict]:
+    """Make larger windows visibly contain the smaller-window hotnews lists."""
+    merged = clusters
+    for parent_hours in _parent_hotnews_windows(hours):
+        parent_raw = await _ensure_hotnews_window_clusters(db, parent_hours, now)
+        parent_merged = await _with_parent_window_clusters(db, parent_hours, now, parent_raw)
+        merged = _merge_cluster_lists(parent_merged, merged)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +333,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
     """
     from src.processing.ai_topic_detector import (
         filter_relevant_posts, discover_hot_events,
-        cluster_and_summarize as _cas,
+        cluster_and_summarize as _cas, gpt_name_ml_clusters,
     )
 
     posts_coll = db["posts"]
@@ -456,6 +540,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
             clusters.append(cl)
 
     # ── Step 3: ML-topic velocity fallback ───────────────────────────────────
+    trending = []
     if len(clusters) < 4:
         velocity_pipeline = [
             {"$match": {"created_at": {"$gte": since}, "topics": {"$exists": True, "$ne": []}}},
@@ -472,58 +557,80 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
             {"$limit": 8},
         ]
         trending = list(posts_coll.aggregate(velocity_pipeline))
-        existing_slugs = {c["slug"] for c in clusters}
 
-        ml_subcluster_tasks = []
+    # ── Step 3b: Controlled broad-topic fallback ─────────────────────────────
+    # If strict event clustering is too sparse, fill the page with the hottest
+    # ML topics so users still see fresh 48h/72h activity instead of old cache.
+    if len(clusters) < 6 and trending:
+        existing_slugs = {c["slug"] for c in clusters}
+        fallback_inputs: list[dict] = []
+        fallback_budget = 8 - len(clusters)
+
         for item in trending:
-            if len(clusters) + len(ml_subcluster_tasks) >= 8:
+            if len(fallback_inputs) >= fallback_budget:
                 break
-            topic_name = item["_id"]
-            if not topic_name:
+            topic_name = item.get("_id")
+            if not topic_name or item.get("count", 0) < 2:
                 continue
-            slug = _ml_topic_slug(topic_name)
-            if slug in existing_slugs:
+
+            topic_slug = _ml_topic_slug(topic_name)
+            if topic_slug in existing_slugs:
                 continue
 
             raw_posts = list(
                 posts_coll.find({"created_at": {"$gte": since}, "topics": topic_name}, projection)
-                .limit(60)
+                .sort("created_at", -1)
+                .limit(30)
             )
+            if len(raw_posts) < 2:
+                continue
+
             for p in raw_posts:
                 p["_id"] = str(p["_id"])
 
-            has_link = sorted([p for p in raw_posts if p.get("links")],
-                              key=lambda p: p.get("created_at") or datetime.min, reverse=True)
-            no_link = sorted([p for p in raw_posts if not p.get("links")],
-                             key=lambda p: p.get("created_at") or datetime.min, reverse=True)
-            sorted_posts = has_link + no_link
-
-            # Do not publish a broad ML topic as one "event". First split it
-            # into specific embedding/GPT event clusters, then reuse the same
-            # strict cluster builder as the primary path.
-            topic_events = await discover_hot_events(
-                sorted_posts,
-                max_events=max(1, min(3, 8 - len(clusters) - len(ml_subcluster_tasks))),
+            with_links = [p for p in raw_posts if p.get("links")]
+            no_links = [p for p in raw_posts if not p.get("links")]
+            topic_posts = (with_links + no_links)[:12]
+            latest = max(
+                (p.get("created_at") for p in topic_posts if p.get("created_at")),
+                default=None,
             )
-            for ev in topic_events:
-                ev["_broad_topic"] = topic_name
-                ev.setdefault("color", _ML_TOPIC_COLORS.get(topic_name, "#6b7280"))
-                ev_slug = _ml_topic_slug(ev.get("name", ""))
-                if ev_slug and ev_slug not in existing_slugs:
-                    ml_subcluster_tasks.append(_build_cluster(ev))
-                    existing_slugs.add(ev_slug)
-                if len(clusters) + len(ml_subcluster_tasks) >= 8:
-                    break
+            anchor = topic_posts[0]
+            headline = (
+                (anchor.get("full_article") or {}).get("title")
+                or (anchor.get("text") or "")[:120]
+            )
 
-        if ml_subcluster_tasks:
-            ml_results = await asyncio.gather(*ml_subcluster_tasks, return_exceptions=True)
-            for cl in ml_results:
-                if isinstance(cl, Exception):
-                    logger.warning("ml topic subcluster build error: %s", cl)
+            fallback_inputs.append({
+                "topic_name": topic_name,
+                "slug": topic_slug,
+                "color": _ML_TOPIC_COLORS.get(topic_name, "#6b7280"),
+                "post_count": len(topic_posts),
+                "posts_with_links": len([p for p in topic_posts if any(
+                    l.startswith("http") and "t.me" not in l
+                    for l in (p.get("links") or [])
+                )]),
+                "latest_at": latest.isoformat() if hasattr(latest, "isoformat") else "",
+                "headline": headline,
+                "posts": topic_posts,
+                "source": "ml_topic_fallback",
+            })
+            existing_slugs.add(topic_slug)
+
+        if fallback_inputs:
+            named_fallbacks = await gpt_name_ml_clusters(fallback_inputs)
+            for cl in named_fallbacks:
+                name = cl.get("name") or cl.get("topic_name")
+                slug = _ml_topic_slug(name or cl.get("slug", ""))
+                if not slug:
                     continue
-                if cl and not any(c["slug"] == cl["slug"] for c in clusters):
-                    cl["source"] = "ml_topic_subcluster"
-                    clusters.append(cl)
+                if any(c["slug"] == slug for c in clusters):
+                    slug = cl.get("slug") or slug
+                cl["slug"] = slug
+                cl["name"] = name
+                clusters.append(cl)
+                if len(clusters) >= 8:
+                    break
 
     # ── Step 4: Clean + timestamp ─────────────────────────────────────────────
     clusters = [cl for cl in clusters if cl.get("slug") and cl.get("name")]
@@ -715,15 +822,7 @@ async def get_public_hotnews(
     cache_coll = db["hotnews_v2_cache"]
     now = datetime.utcnow()
     since = now - timedelta(hours=hours)
-
-    if hours <= 24:
-        bucket_size = 1
-    elif hours <= 48:
-        bucket_size = 2
-    else:
-        bucket_size = 3
-    bucket_hour = (now.hour // bucket_size) * bucket_size
-    cache_key = f"hotnews_kw:{hours}:{now.strftime('%Y%m%d')}{bucket_hour:02d}"
+    cache_key = _hotnews_cache_key(hours, now)
 
     # L1: in-memory cache
     mem = _hotnews_mem.get(cache_key)
@@ -733,7 +832,8 @@ async def get_public_hotnews(
     # L2: MongoDB cache
     cached = cache_coll.find_one({"key": cache_key})
     if cached and cached.get("clusters"):
-        result = {"clusters": cached["clusters"], "since": since.isoformat(), "hours": hours, "cached": True}
+        clusters = await _with_parent_window_clusters(db, hours, now, cached["clusters"])
+        result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": True}
         _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
         return result
 
@@ -741,11 +841,15 @@ async def get_public_hotnews(
     lock = _get_hotnews_lock(cache_key)
     if lock.locked():
         prev = cache_coll.find_one(
-            {"clusters": {"$exists": True, "$ne": []}},
+            {
+                "key": re.compile(f"^hotnews_kw:{hours}:"),
+                "clusters": {"$exists": True, "$ne": []},
+            },
             sort=[("created_at", -1)],
         )
-        if prev and prev.get("clusters"):
-            return {"clusters": prev["clusters"], "since": since.isoformat(),
+        if _is_usable_stale_hotnews_cache(prev, now, hours):
+            clusters = await _with_parent_window_clusters(db, hours, now, prev["clusters"])
+            return {"clusters": clusters, "since": since.isoformat(),
                     "hours": hours, "cached": True, "refreshing": True}
 
     prev_cached = cache_coll.find_one(
@@ -755,10 +859,15 @@ async def get_public_hotnews(
         },
         sort=[("created_at", -1)],
     )
-    if prev_cached and prev_cached.get("clusters") and prev_cached.get("key") != cache_key:
+    if (
+        prev_cached
+        and prev_cached.get("key") != cache_key
+        and _is_usable_stale_hotnews_cache(prev_cached, now, hours)
+    ):
         asyncio.create_task(_bg_ensure_hotnews_cached(hours, cache_key, now))
+        clusters = await _with_parent_window_clusters(db, hours, now, prev_cached["clusters"])
         return {
-            "clusters": prev_cached["clusters"],
+            "clusters": clusters,
             "since": since.isoformat(),
             "hours": hours,
             "cached": True,
@@ -772,11 +881,13 @@ async def get_public_hotnews(
             return {**mem["result"], "cached": True}
         fresh = cache_coll.find_one({"key": cache_key})
         if fresh and fresh.get("clusters"):
-            result = {"clusters": fresh["clusters"], "since": since.isoformat(), "hours": hours, "cached": True}
+            clusters = await _with_parent_window_clusters(db, hours, now, fresh["clusters"])
+            result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": True}
             _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
             return result
 
         clusters = await _compute_hotnews_clusters(db, hours, now, cache_key)
+        clusters = await _with_parent_window_clusters(db, hours, now, clusters)
         result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": False}
         _hotnews_mem[cache_key] = {"result": result, "ts": now}
         return result
