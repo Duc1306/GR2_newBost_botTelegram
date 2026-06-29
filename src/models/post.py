@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import List, Optional, Literal
 from datetime import datetime, UTC
 from pydantic import BaseModel, Field
-import hashlib
+from src.processing.dedupe import make_dedupe_key
 
 class MediaItem(BaseModel):
     type: str = Field(description="photo|video|gif|document|other")
@@ -83,8 +83,7 @@ class Post(BaseModel):
 
     @staticmethod
     def make_dedupe_key(text: str, links: List[str]) -> str:
-        base = text + "|" + "|".join(sorted(links))
-        return hashlib.sha256(base.encode("utf-8")).hexdigest()[:32]
+        return make_dedupe_key(text, links)
 
     @classmethod
     def from_raw(

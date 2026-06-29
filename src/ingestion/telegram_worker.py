@@ -16,6 +16,7 @@ from telethon.tl.custom.message import Message
 from src.config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING, TELEGRAM_FETCH_LIMIT
 from src.ingestion.sources import CHANNELS
 from src.processing.cleaning import clean_text
+from src.processing.dedupe import find_similar_post, is_duplicate_text
 from src.processing.lang import detect_language
 from src.processing.web_scraper import enrich_post_with_article
 from src.processing.topic_classifier import classify_post_topics
@@ -274,8 +275,6 @@ async def process_message(m: Message, channel_name: str = "telegram") -> Post:
     return post
 
 async def save_posts(posts: List[Post], scrape_articles: bool = False) -> None:
-    from pymongo.errors import DuplicateKeyError
-    
     coll = get_posts_collection()
     if not posts:
         return
@@ -283,6 +282,7 @@ async def save_posts(posts: List[Post], scrape_articles: bool = False) -> None:
     # Enrich with full articles if requested
     docs = []
     scraped_count = 0
+    duplicates = 0
     for p in posts:
         d = p.model_dump()
         if scrape_articles and d.get('links'):
@@ -290,11 +290,38 @@ async def save_posts(posts: List[Post], scrape_articles: bool = False) -> None:
             d = enrich_post_with_article(d, verbose=False)
             if 'full_article' in d and 'full_article' not in original_keys:
                 scraped_count += 1
+
+        # Preserve idempotent updates for the same source post, but skip
+        # near-duplicates from other sources using TF-IDF + cosine similarity.
+        is_batch_duplicate, _ = is_duplicate_text(
+            d.get("text") or "",
+            [doc.get("text") or "" for doc in docs if doc.get("id") != d.get("id")],
+        )
+        if is_batch_duplicate:
+            duplicates += 1
+            continue
+
+        if not coll.find_one({"id": d["id"]}, {"_id": 1}):
+            similar_post, similarity = find_similar_post(
+                coll,
+                text=d.get("text") or "",
+                links=d.get("links") or [],
+                created_at=d.get("created_at"),
+                exclude_id=d.get("id"),
+            )
+            if similar_post:
+                duplicates += 1
+                continue
         docs.append(d)
     
     inserted = 0
     updated = 0
-    duplicates = 0
+    if not docs:
+        status_msg = f"   💾 DB: 0 mới, 0 cập nhật, 0 đã tồn tại, {duplicates} trùng lặp"
+        if scrape_articles and scraped_count > 0:
+            status_msg += f" | 📰 {scraped_count} bài scraped"
+        print(status_msg)
+        return
 
     from pymongo import UpdateOne
     from pymongo.errors import BulkWriteError
@@ -306,9 +333,10 @@ async def save_posts(posts: List[Post], scrape_articles: bool = False) -> None:
     except BulkWriteError as bwe:
         inserted = bwe.details.get("nUpserted", 0)
         updated = bwe.details.get("nModified", 0)
-        duplicates = len(bwe.details.get("writeErrors", []))
+        duplicates += len(bwe.details.get("writeErrors", []))
     
-    status_msg = f"   💾 DB: {inserted} mới, {updated} cập nhật, {len(docs) - inserted - updated - duplicates} đã tồn tại, {duplicates} trùng lặp"
+    existing = max(0, len(docs) - inserted - updated)
+    status_msg = f"   💾 DB: {inserted} mới, {updated} cập nhật, {existing} đã tồn tại, {duplicates} trùng lặp"
     if scrape_articles and scraped_count > 0:
         status_msg += f" | 📰 {scraped_count} bài scraped"
     print(status_msg)

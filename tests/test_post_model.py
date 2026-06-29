@@ -20,7 +20,7 @@ class TestPostModel(unittest.TestCase):
             created_at=datetime.now(UTC),
         )
         self.assertTrue(p.id.startswith("telegram:"))
-        self.assertEqual(len(p.dedupe_key), 32)
+        self.assertTrue(p.dedupe_key.startswith("tfidf:"))
         self.assertEqual(p.links[0], "https://example.com")
 
 if __name__ == "__main__":

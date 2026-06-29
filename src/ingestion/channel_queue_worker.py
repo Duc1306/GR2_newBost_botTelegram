@@ -32,6 +32,7 @@ from src.config import (
 from src.db.mongo import get_db
 from src.models.post import Post
 from src.processing.cleaning import clean_text
+from src.processing.dedupe import find_similar_post
 from src.processing.lang import detect_language
 from src.processing.topic_classifier import classify_post_topics
 
@@ -165,9 +166,26 @@ async def _fetch_and_store(client, channel_username: str, db, min_id: int = 0) -
                 "fetched_at": datetime.utcnow(),
                 "dedupe_key": dedupe_key,
             }
-            # upsert by dedupe_key (content hash) — idempotent, works across id format changes
+
+            similar_post, similarity = find_similar_post(
+                posts_col,
+                text=text,
+                links=links,
+                created_at=post_doc["created_at"],
+                exclude_id=post_id,
+            )
+            if similar_post:
+                logger.info(
+                    "Skipped duplicate-like post %s in %s; similar=%s score=%.3f",
+                    source_id,
+                    channel_username,
+                    similar_post.get("id"),
+                    similarity,
+                )
+                continue
+
             result = posts_col.update_one(
-                {"dedupe_key": dedupe_key},
+                {"id": post_id},
                 {"$setOnInsert": post_doc},
                 upsert=True,
             )
