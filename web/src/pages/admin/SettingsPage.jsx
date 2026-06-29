@@ -30,6 +30,7 @@ import {
   DarkMode as DarkModeIcon
 } from '@mui/icons-material';
 import { api } from '../../lib/api.jsx';
+import OperationsPanel from './OperationsPanel.jsx';
 
 function TabPanel({ children, value, index }) {
   return (
@@ -306,6 +307,8 @@ export default function SettingsPage() {
             ]}
             sx={{ maxWidth: 400, mt: 2 }}
           />
+
+          <OperationsPanel />
         </TabPanel>
 
         {/* ML Settings Tab */}

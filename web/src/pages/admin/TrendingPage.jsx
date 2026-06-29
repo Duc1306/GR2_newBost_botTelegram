@@ -14,6 +14,7 @@ import ChatBubbleIcon from '@mui/icons-material/ChatBubble';
 import ArticleIcon from '@mui/icons-material/Article';
 import { useTrendingTopics, useKeywords, useHotNews } from '../../hooks/useApi.jsx';
 import { getTopicColor } from '../../theme/colors.jsx';
+import HotTopicAdminPanel from './HotTopicAdminPanel.jsx';
 
 // Backend stores naive UTC — append 'Z' so JS parses correctly
 function parseUTC(str) {
@@ -113,6 +114,8 @@ export default function TrendingPage() {
           ))}
         </ButtonGroup>
       </Box>
+
+      <HotTopicAdminPanel />
 
       <Grid container spacing={3}>
         {/* ── Left: Hot News Clusters ── */}

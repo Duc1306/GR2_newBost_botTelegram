@@ -36,6 +36,16 @@ from src.processing.dedupe import find_similar_post
 from src.processing.lang import detect_language
 from src.processing.topic_classifier import classify_post_topics
 
+
+async def _rebuild_hotnews_if_new_posts(saved_count: int, db, reason: str) -> None:
+    if saved_count <= 0:
+        return
+    try:
+        from src.api.routes.hotnews_routes import rebuild_hotnews_after_fetch
+        await rebuild_hotnews_after_fetch(db, reason=reason)
+    except Exception as exc:
+        logger.warning("Hotnews rebuild skipped after %s: %s", reason, exc)
+
 POLL_INTERVAL          = int(os.getenv("QUEUE_POLL_INTERVAL", "30"))    # seconds — pending queue poll
 MAX_ATTEMPTS           = int(os.getenv("QUEUE_MAX_ATTEMPTS", "3"))
 SUMMARY_POSTS          = int(os.getenv("SUMMARY_MAX_POSTS", "15"))   # posts fed to AI
@@ -558,6 +568,8 @@ async def process_one(pending_doc: dict, db):
 
         await client.disconnect()
 
+        await _rebuild_hotnews_if_new_posts(saved, db, f"pending channel @{ch_username}")
+
         # Generate AI summary
         summary = await _generate_summary(ch_username, db)
         total_posts = await loop.run_in_executor(
@@ -655,6 +667,7 @@ async def refresh_active_channels(db) -> None:
     x_channels  = [ch for ch in active if ch.get("platform") == "twitter"]
 
     logger.info(f"Refreshing {len(tg_channels)} Telegram + {len(x_channels)} X channel(s)…")
+    total_new_posts = 0
 
     # ── Telegram ──────────────────────────────────────────────
     if tg_channels:
@@ -673,6 +686,7 @@ async def refresh_active_channels(db) -> None:
                             "created_at": {"$lt": cutoff},
                         })
                         saved = await _fetch_and_store(client, username, db)
+                        total_new_posts += saved
                         total_posts = db["posts"].count_documents({"source": username})
                         channels_col.update_one(
                             {"username": username},
@@ -715,6 +729,8 @@ async def refresh_active_channels(db) -> None:
     # Dữ liệu được cập nhật khi user bấm "Tóm tắt lại" (_run_summarize).
     if x_channels:
         logger.debug(f"  X refresh: skipped ({len(x_channels)} channels — on-demand only)")
+
+    await _rebuild_hotnews_if_new_posts(total_new_posts, db, "active-channel refresh")
 
 
 async def run_refresh_loop() -> None:

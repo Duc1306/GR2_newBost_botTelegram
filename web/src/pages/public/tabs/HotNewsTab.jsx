@@ -3,7 +3,6 @@ import {
   Box,
   Typography,
   Grid,
-  Chip,
   IconButton,
   Tooltip,
   Alert,
@@ -20,11 +19,12 @@ import HotSummaryDialog from '../../../components/public/HotSummaryDialog.jsx';
 import { ClusterSkeleton } from '../../../components/public/Skeletons.jsx';
 import AudioPlayer from '../../../components/AudioPlayer.jsx';
 
+const HOTNEWS_HOURS = 24;
+
 export default function HotNewsTab() {
   const [clusters, setClusters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [hours, setHours] = useState(24);
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [audioPlayer, setAudioPlayer] = useState(null);
@@ -53,14 +53,14 @@ export default function HotNewsTab() {
 
   useEffect(() => {
     const ac = new AbortController();
-    load(hours, ac.signal);
+    load(HOTNEWS_HOURS, ac.signal);
     return () => ac.abort();
-  }, [hours, load]);
+  }, [load]);
 
   useEffect(() => {
     const ac = new AbortController();
     const id = setInterval(() => {
-      fetchHotNewsClusters(hours, ac.signal)
+      fetchHotNewsClusters(HOTNEWS_HOURS, ac.signal)
         .then((d) => {
           const incoming = d.clusters || [];
           const truly = incoming.filter((c) => !currentSlugsRef.current.has(c.slug));
@@ -79,7 +79,7 @@ export default function HotNewsTab() {
       clearInterval(id);
       ac.abort();
     };
-  }, [hours]);
+  }, []);
 
   const applyPending = () => {
     const slugs = new Set(pendingClusters.map((c) => c.slug));
@@ -125,43 +125,9 @@ export default function HotNewsTab() {
           </Typography>
         </Box>
         <Box display="flex" gap={0.75} alignItems="center" flexWrap="wrap">
-          {[24, 48, 72].map((h) => {
-            const active = hours === h;
-            return (
-              <Tooltip
-                key={h}
-                title={`Xem tin nóng trong ${h} giờ gần nhất`}
-                arrow
-              >
-                <Chip
-                  label={`${h}h`}
-                  size="small"
-                  clickable
-                  onClick={() => setHours(h)}
-                  color={active ? 'primary' : 'default'}
-                  variant={active ? 'filled' : 'outlined'}
-                  sx={{
-                    fontWeight: active ? 800 : 600,
-                    borderColor: active ? 'primary.main' : 'divider',
-                    bgcolor: active ? 'primary.main' : 'background.paper',
-                    color: active ? 'primary.contrastText' : 'text.primary',
-                    transition: 'background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease',
-                    boxShadow: active ? '0 2px 8px rgba(25, 118, 210, 0.24)' : 'none',
-                    '&:hover': {
-                      bgcolor: active ? 'primary.dark' : 'rgba(25, 118, 210, 0.08)',
-                      borderColor: 'primary.main',
-                      color: active ? 'primary.contrastText' : 'primary.main',
-                      boxShadow: '0 3px 10px rgba(25, 118, 210, 0.18)',
-                      transform: 'translateY(-1px)',
-                    },
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
           <Tooltip title="Làm mới">
             <span>
-              <IconButton size="small" onClick={() => load(hours)} disabled={loading}>
+              <IconButton size="small" onClick={() => load(HOTNEWS_HOURS)} disabled={loading}>
                 <RefreshIcon fontSize="small" />
               </IconButton>
             </span>
@@ -218,7 +184,7 @@ export default function HotNewsTab() {
       ) : clusters.length === 0 ? (
         <Box textAlign="center" py={8}>
           <TrendingUpIcon sx={{ fontSize: 64, color: 'divider', mb: 2 }} />
-          <Typography color="text.secondary">Chưa có tin nóng trong {hours} giờ qua.</Typography>
+          <Typography color="text.secondary">Chưa có tin nóng trong {HOTNEWS_HOURS} giờ qua.</Typography>
           <Typography variant="caption" color="text.disabled">
             Hãy chạy fetch để thu thập dữ liệu mới.
           </Typography>
@@ -243,7 +209,7 @@ export default function HotNewsTab() {
         cluster={selectedCluster}
         open={summaryOpen}
         onClose={() => setSummaryOpen(false)}
-        hours={hours}
+        hours={HOTNEWS_HOURS}
         onPlayAudio={(p) => setAudioPlayer(p)}
       />
 

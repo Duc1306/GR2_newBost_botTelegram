@@ -152,7 +152,10 @@ async def public_x_live_search(
     if not cache_hit and _APIFY_TOKEN:
         try:
             from src.ingestion.x_worker import ingest_once
-            await ingest_once(mode="keyword", keywords=[q.strip()], max_items=30, language="")
+            saved = await ingest_once(mode="keyword", keywords=[q.strip()], max_items=30, language="")
+            if saved > 0:
+                from src.api.routes.hotnews_routes import rebuild_hotnews_after_fetch
+                await rebuild_hotnews_after_fetch(get_db(), reason="public X live search")
             _x_search_cache[norm_q] = now
         except Exception as exc:
             logger.error(f"[public/x/search] Apify error for '{q}': {exc}")

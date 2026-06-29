@@ -12,9 +12,27 @@ from loguru import logger
 from src.db.mongo import get_db, get_users_collection
 from src.api.auth import get_current_admin_user
 from src.models.user import UpdateUserStatusRequest, UpdateUserRoleRequest
-from src.api.routes.hotnews_routes import DEFAULT_HOT_TOPICS, _hotnews_mem
+from src.api.routes.hotnews_routes import (
+    DEFAULT_HOT_TOPICS,
+    clear_hotnews_caches,
+    rebuild_hotnews_after_fetch,
+)
 
 router = APIRouter(tags=["Admin"])
+
+
+def _clean_slug(slug: str) -> str:
+    return (slug or "").strip()
+
+
+def _slug_lookup(slug: str) -> dict:
+    clean = _clean_slug(slug)
+    return {
+        "$or": [
+            {"slug": clean},
+            {"$expr": {"$eq": [{"$trim": {"input": "$slug"}}, clean]}},
+        ]
+    }
 
 
 # =============================================================================
@@ -71,6 +89,8 @@ async def admin_fetch_x(
             max_items=body.max_items,
             language=body.language,
         )
+        if saved > 0:
+            await rebuild_hotnews_after_fetch(get_db(), reason="admin X fetch")
         return {"saved": saved, "keywords": body.keywords}
     except Exception as exc:
         logger.error(f"[admin/x/fetch] error: {exc}")
@@ -83,17 +103,14 @@ async def admin_fetch_x(
 
 @router.delete("/admin/hotnews-cache")
 async def clear_hotnews_cache(current_user: str = Depends(get_current_admin_user)):
-    """Force-clear all hotnews caches so all windows recompute fresh."""
-    _hotnews_mem.clear()
-    db = get_db()
-    r1 = db["hotnews_v2_cache"].delete_many({})
-    r2 = db["hotnews_summary_cache"].delete_many({})
-    r3 = db["hotnews_audio_cache"].delete_many({})
+    """Force-clear all hotnews caches so the next request recomputes fresh."""
+    deleted = clear_hotnews_caches(get_db())
     return {
-        "deleted_clusters": r1.deleted_count,
-        "deleted_summaries": r2.deleted_count,
-        "deleted_audio": r3.deleted_count,
-        "message": "All caches cleared. Next request will recompute.",
+        "deleted_filter": deleted.get("hotnews_filter_cache", 0),
+        "deleted_clusters": deleted.get("hotnews_v2_cache", 0),
+        "deleted_summaries": deleted.get("hotnews_summary_cache", 0),
+        "deleted_audio": deleted.get("hotnews_audio_cache", 0),
+        "message": "All hotnews caches cleared. Next request will recompute.",
     }
 
 
@@ -160,12 +177,16 @@ async def admin_create_hot_topic(
         if field not in topic:
             raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
 
-    if coll.find_one({"slug": topic["slug"]}):
+    slug = _clean_slug(topic["slug"])
+    if not slug:
+        raise HTTPException(status_code=400, detail="Slug cannot be empty")
+
+    if coll.find_one(_slug_lookup(slug)):
         raise HTTPException(status_code=409, detail="Slug already exists")
 
     doc = {
-        "slug": topic["slug"],
-        "name": topic["name"],
+        "slug": slug,
+        "name": str(topic["name"]).strip(),
         "description": topic.get("description", ""),
         "keywords": topic["keywords"],
         "color": topic.get("color", "#6b7280"),
@@ -193,7 +214,9 @@ async def admin_update_hot_topic(
         updates.pop(field, None)
     updates["updated_at"] = datetime.utcnow()
 
-    result = coll.update_one({"slug": slug}, {"$set": updates})
+    clean_slug = _clean_slug(slug)
+    updates["slug"] = clean_slug
+    result = coll.update_one(_slug_lookup(clean_slug), {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Hot topic not found")
     return {"success": True}
@@ -206,7 +229,7 @@ async def admin_delete_hot_topic(
 ):
     """Admin: delete a hot topic."""
     db = get_db()
-    result = db["hot_topics"].delete_one({"slug": slug})
+    result = db["hot_topics"].delete_one(_slug_lookup(slug))
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Hot topic not found")
     return {"success": True}
@@ -276,10 +299,11 @@ async def ai_expand_keywords(
     from src.processing.ai_topic_detector import expand_keywords
     db = get_db()
     coll = db["hot_topics"]
+    clean_slug = _clean_slug(slug)
 
-    topic = coll.find_one({"slug": slug}, {"_id": 0})
+    topic = coll.find_one(_slug_lookup(clean_slug), {"_id": 0})
     if not topic:
-        topic = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == slug), None)
+        topic = next((t for t in DEFAULT_HOT_TOPICS if t["slug"] == clean_slug), None)
         if not topic:
             raise HTTPException(status_code=404, detail="Hot topic not found")
 
@@ -288,13 +312,13 @@ async def ai_expand_keywords(
     new_count = len(expanded) - len(original_keywords)
 
     coll.update_one(
-        {"slug": slug},
-        {"$set": {"keywords": expanded, "updated_at": datetime.utcnow()}},
+        _slug_lookup(clean_slug),
+        {"$set": {"slug": clean_slug, "keywords": expanded, "updated_at": datetime.utcnow()}},
         upsert=True,
     )
 
     return {
-        "slug": slug,
+        "slug": clean_slug,
         "original_count": len(original_keywords),
         "expanded_count": len(expanded),
         "new_keywords_added": new_count,

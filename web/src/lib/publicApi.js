@@ -102,7 +102,10 @@ export async function fetchHotNewsSummary(slug, hours = 24, signal) {
     method: 'POST',
     signal,
   });
-  if (!res.ok) throw new Error('Failed to fetch summary');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Không thể tải tóm tắt (${res.status})`);
+  }
   return res.json();
 }
 

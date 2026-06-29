@@ -20,54 +20,31 @@ router = APIRouter(tags=["Public"])
 
 # ---------------------------------------------------------------------------
 # In-memory hotnews cache
-# TTL matches bucket_size: 1h for 24h window, 2h for 48h, 3h for 72h+.
+# Hot news is intentionally focused on the latest 24h.
 # ---------------------------------------------------------------------------
 _hotnews_mem: dict[str, dict] = {}
 _hotnews_locks: dict[str, asyncio.Lock] = {}
+HOTNEWS_WINDOW_HOURS = 24
+HOTNEWS_TARGET_CLUSTERS = 10
+HOTNEWS_MAX_CLUSTER_POSTS = 12
+
+
+def _normalize_hotnews_hours(_: int | None = None) -> int:
+    return HOTNEWS_WINDOW_HOURS
 
 
 def _hotnews_mem_ttl(hours: int) -> timedelta:
-    if hours <= 24:
-        return timedelta(hours=1)
-    elif hours <= 48:
-        return timedelta(hours=2)
-    return timedelta(hours=3)
+    return timedelta(hours=1)
 
 
 def _hotnews_bucket_size(hours: int) -> int:
-    if hours <= 24:
-        return 1
-    if hours <= 48:
-        return 2
-    return 3
+    return 1
 
 
 def _hotnews_cache_key(hours: int, now: datetime) -> str:
     bucket_size = _hotnews_bucket_size(hours)
     bucket_hour = (now.hour // bucket_size) * bucket_size
     return f"hotnews_kw:{hours}:{now.strftime('%Y%m%d')}{bucket_hour:02d}"
-
-
-def _parent_hotnews_windows(hours: int) -> list[int]:
-    if hours <= 24:
-        return []
-    if hours <= 48:
-        return [24]
-    return [48]
-
-
-def _merge_cluster_lists(primary: list[dict], secondary: list[dict]) -> list[dict]:
-    merged: list[dict] = []
-    seen: set[str] = set()
-
-    for cl in primary + secondary:
-        slug = cl.get("slug") or _ml_topic_slug(cl.get("name", ""))
-        key = slug or cl.get("name", "")
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        merged.append(cl)
-    return merged
 
 
 def _is_usable_stale_hotnews_cache(doc: Optional[dict], now: datetime, hours: int) -> bool:
@@ -88,7 +65,7 @@ def _cleanup_hotnews_cache() -> None:
         try:
             hours = int(k.split(":")[1])
         except (IndexError, ValueError):
-            hours = 72
+            hours = HOTNEWS_WINDOW_HOURS
         if now - v["ts"] > _hotnews_mem_ttl(hours):
             expired.append(k)
     for k in expired:
@@ -103,41 +80,254 @@ def _get_hotnews_lock(key: str) -> asyncio.Lock:
     return _hotnews_locks[key]
 
 
-async def _ensure_hotnews_window_clusters(db, hours: int, now: datetime) -> list[dict]:
-    """Return raw clusters for a window, computing the current bucket if needed."""
-    cache_coll = db["hotnews_v2_cache"]
-    cache_key = _hotnews_cache_key(hours, now)
+def _hotnews_summary_cache_key(slug: str, hours: int) -> str:
+    return f"{slug}:{hours}:v4"
 
-    cached = cache_coll.find_one({"key": cache_key})
-    if cached and cached.get("clusters"):
-        return cached["clusters"]
 
-    prev = cache_coll.find_one(
-        {
-            "key": re.compile(f"^hotnews_kw:{hours}:"),
-            "clusters": {"$exists": True, "$ne": []},
-        },
-        sort=[("created_at", -1)],
+def _strip_runtime_fields(posts: list[dict]) -> list[dict]:
+    for p in posts:
+        p.pop("_emb", None)
+        p.pop("_ai_score", None)
+    return posts
+
+
+_SOURCE_STOP_TERMS = {
+    "media", "news", "latest", "insight", "wild", "the", "and", "for", "with",
+    "trong", "ngoai", "ngay", "nhieu", "nhung", "duoc", "dang", "rằng", "rung",
+    "cho", "cua", "các", "một", "với", "khi", "sau", "trước", "này", "được",
+    "những", "nhiều", "theo", "rằng", "đang", "ngày",
+}
+
+
+def _source_terms(text: str) -> set[str]:
+    return {
+        t
+        for t in re.findall(r"[0-9A-Za-zÀ-ỹ]+", (text or "").lower())
+        if len(t) >= 4 and t not in _SOURCE_STOP_TERMS
+    }
+
+
+def _post_source_text(post: dict) -> str:
+    fa = post.get("full_article") or {}
+    return " ".join(
+        str(v or "")
+        for v in (
+            fa.get("title"),
+            post.get("text"),
+            fa.get("body"),
+            fa.get("content"),
+        )
     )
-    if _is_usable_stale_hotnews_cache(prev, now, hours):
-        return prev["clusters"]
 
+
+def _has_external_link(post: dict) -> bool:
+    return any(
+        l.startswith("http") and "t.me" not in l
+        for l in (post.get("links") or [])
+    )
+
+
+def _posts_related_to_query(posts: list[dict], query: str, min_overlap: int = 2) -> list[dict]:
+    query_terms = _source_terms(query)
+    if not query_terms:
+        return posts
+
+    # Proper nouns / acronyms in titles are very strong anchors for news events.
+    original_tokens = re.findall(r"[0-9A-Za-zÀ-ỹ]+", query or "")
+    anchors = {
+        t.lower()
+        for t in original_tokens
+        if (
+            (len(t) >= 3 and t.isupper())
+            or (len(t) >= 4 and t.isascii() and t[:1].isupper())
+            or any(ch.isdigit() for ch in t)
+            or len(t) >= 7
+        )
+    } - _SOURCE_STOP_TERMS
+    strong_anchors = {t for t in anchors if len(t) >= 5 or t.isascii()}
+
+    related = []
+    for post in posts:
+        terms = _source_terms(_post_source_text(post))
+        overlap = terms & query_terms
+        if strong_anchors and not (terms & strong_anchors):
+            continue
+        if (anchors and terms & anchors) or len(overlap) >= min_overlap:
+            related.append(post)
+    return related
+
+
+def _fallback_topic_name(topic_name: str) -> str:
+    return f"{topic_name} nổi bật 24h"
+
+
+def _refresh_cluster_post_stats(cl: dict, posts: list[dict]) -> None:
+    posts = _strip_runtime_fields(posts[:HOTNEWS_MAX_CLUSTER_POSTS])
+    cl["posts"] = posts
+    cl["post_count"] = len(posts)
+    cl["posts_with_links"] = len([p for p in posts if _has_external_link(p)])
+    latest = max(
+        (p.get("created_at") for p in posts if p.get("created_at")),
+        default=None,
+    )
+    cl["latest_at"] = latest.isoformat() if hasattr(latest, "isoformat") else ""
+    if posts:
+        anchor = next((p for p in posts if _has_external_link(p)), posts[0])
+        cl["headline"] = _event_title(anchor)[:120]
+
+
+def _clean_news_title(title: str) -> str:
+    title = re.sub(r"\s+", " ", title or "").strip()
+    title = re.sub(r"^Media(?=[A-ZÀ-Ỹ])", "", title).strip()
+    title = re.sub(r"\s+via\s+Tin\s+mới\s+nhất.*$", "", title, flags=re.IGNORECASE).strip()
+    title = re.sub(r"\s+\|\s*(News|Markets|YouTube).*$", "", title, flags=re.IGNORECASE).strip()
+    if len(title) > 110:
+        for sep in ("; ", ". ", " - "):
+            head = title.split(sep, 1)[0].strip()
+            if 35 <= len(head) <= 110:
+                title = head
+                break
+    return title
+
+
+def _event_title(post: dict) -> str:
+    fa = post.get("full_article") or {}
+    return _clean_news_title(fa.get("title") or post.get("text") or "")
+
+
+def _event_text(post: dict) -> str:
+    fa = post.get("full_article") or {}
+    return " ".join(
+        str(v or "")
+        for v in (fa.get("title"), post.get("text"), fa.get("body"), fa.get("content"))
+    )
+
+
+def _title_for_cluster(posts: list[dict]) -> str:
+    if len(posts) >= 4:
+        titles = [_event_title(p).lower() for p in posts]
+        if sum("world cup" in t for t in titles) >= max(3, len(posts) // 2):
+            if any("2026" in t for t in titles):
+                return "World Cup 2026 nổi bật"
+            return "World Cup nổi bật"
+
+    anchor = next((p for p in posts if _has_external_link(p)), posts[0] if posts else {})
+    title = _event_title(anchor)
+    return title[:110] if title else "Tin nổi bật 24h"
+
+
+def _cluster_summary_text(posts: list[dict]) -> str:
+    return " ".join(_event_text(p)[:350] for p in posts[:5])
+
+
+def _unique_hotnews_slug(base: str, used_slugs: set[str]) -> str:
+    slug = _ml_topic_slug(base[:110])
+    if not slug:
+        slug = "tin-noi-bat-24h"
+    original = slug
+    idx = 2
+    while slug in used_slugs:
+        slug = f"{original}-{idx}"
+        idx += 1
+    used_slugs.add(slug)
+    return slug
+
+
+def _derive_event_groups(posts: list[dict], used_ids: set[str], limit: int) -> list[list[dict]]:
+    """Split a broad ML topic into smaller event-like groups."""
+    candidates = [
+        p for p in posts
+        if str(p.get("_id") or p.get("id") or p.get("source_id") or "") not in used_ids
+    ]
+    candidates = sorted(
+        candidates,
+        key=lambda p: (
+            not _has_external_link(p),
+            -((p.get("created_at") or datetime.min).timestamp()),
+        ),
+    )
+    groups: list[list[dict]] = []
+    consumed: set[str] = set()
+
+    for anchor in candidates:
+        aid = str(anchor.get("_id") or anchor.get("id") or anchor.get("source_id") or "")
+        if aid in consumed:
+            continue
+        if not _has_external_link(anchor):
+            continue
+
+        title = _event_title(anchor)
+        if not title:
+            continue
+
+        related = _posts_related_to_query(candidates, title, min_overlap=2)
+
+        group = []
+        for post in related:
+            pid = str(post.get("_id") or post.get("id") or post.get("source_id") or "")
+            if pid in consumed:
+                continue
+            group.append(post)
+            if len(group) >= HOTNEWS_MAX_CLUSTER_POSTS:
+                break
+
+        if len(group) < 2:
+            continue
+        if not any(_has_external_link(p) for p in group):
+            continue
+
+        for post in group:
+            pid = str(post.get("_id") or post.get("id") or post.get("source_id") or "")
+            if pid:
+                consumed.add(pid)
+        groups.append(group)
+        if len(groups) >= limit:
+            break
+
+    return groups
+
+
+def clear_hotnews_caches(db=None) -> dict:
+    """Clear all persisted and in-memory hotnews artifacts."""
+    _hotnews_mem.clear()
+    _hotnews_locks.clear()
+    if db is None:
+        db = get_db()
+    deleted = {}
+    for name in (
+        "hotnews_filter_cache",
+        "hotnews_v2_cache",
+        "hotnews_summary_cache",
+        "hotnews_audio_cache",
+    ):
+        deleted[name] = db[name].delete_many({}).deleted_count
+    return deleted
+
+
+async def rebuild_hotnews_after_fetch(db=None, reason: str = "fetch") -> None:
+    """Invalidate hotnews and rebuild the 24h cache after new posts arrive."""
+    if db is None:
+        db = get_db()
+    deleted = clear_hotnews_caches(db)
+    now = datetime.utcnow()
+    hours = HOTNEWS_WINDOW_HOURS
+    cache_key = _hotnews_cache_key(hours, now)
+    logger.info("hotnews: invalidated after %s: %s; rebuilding %s", reason, deleted, cache_key)
     lock = _get_hotnews_lock(cache_key)
+    if lock.locked():
+        return
     async with lock:
-        cached = cache_coll.find_one({"key": cache_key})
-        if cached and cached.get("clusters"):
-            return cached["clusters"]
-        return await _compute_hotnews_clusters(db, hours, now, cache_key)
-
-
-async def _with_parent_window_clusters(db, hours: int, now: datetime, clusters: list[dict]) -> list[dict]:
-    """Make larger windows visibly contain the smaller-window hotnews lists."""
-    merged = clusters
-    for parent_hours in _parent_hotnews_windows(hours):
-        parent_raw = await _ensure_hotnews_window_clusters(db, parent_hours, now)
-        parent_merged = await _with_parent_window_clusters(db, parent_hours, now, parent_raw)
-        merged = _merge_cluster_lists(parent_merged, merged)
-    return merged
+        clusters = await _compute_hotnews_clusters(db, hours, now, cache_key)
+        since = now - timedelta(hours=hours)
+        _hotnews_mem[cache_key] = {
+            "result": {
+                "clusters": clusters,
+                "since": since.isoformat(),
+                "hours": hours,
+                "cached": False,
+            },
+            "ts": now,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +523,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
     """
     from src.processing.ai_topic_detector import (
         filter_relevant_posts, discover_hot_events,
-        cluster_and_summarize as _cas, gpt_name_ml_clusters,
+        cluster_and_summarize as _cas,
     )
 
     posts_coll = db["posts"]
@@ -434,11 +624,18 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
             logger.warning("_build_cluster: filter failed: %s", _fe)
             event_filtered = ev_posts[:15]
 
+        lexical_filtered = _posts_related_to_query(
+            event_filtered,
+            f"{ev['name']} {ev.get('description', '')}",
+        )
+        if lexical_filtered:
+            event_filtered = lexical_filtered
+
         filtered = sorted(event_filtered, key=lambda p: (not bool(p.get("links")), 0))
-        filtered = filtered[:15]
-        for p in filtered:
-            p.pop("_emb", None)
-            p.pop("_ai_score", None)
+        filtered = _strip_runtime_fields(filtered[:15])
+        if len(filtered) < 2:
+            logger.info("_build_cluster: dropped one-source cluster %r after lexical filter", ev["name"])
+            return None
 
         latest = max(
             (p.get("created_at") for p in filtered if p.get("created_at")),
@@ -450,16 +647,16 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
             or (filtered[0].get("text") or "")[:120]
         )
         cl_slug = _ml_topic_slug(ev["name"])
+        if not cl_slug:
+            logger.info("_build_cluster: dropped cluster with empty slug/name=%r", ev.get("name"))
+            return None
         cluster = {
             "slug": cl_slug,
             "name": ev["name"],
             "description": ev.get("description", ""),
             "color": ev.get("color", "#be123c"),
             "post_count": len(filtered),
-            "posts_with_links": len([p for p in filtered if any(
-                l.startswith("http") and "t.me" not in l
-                for l in (p.get("links") or [])
-            )]),
+            "posts_with_links": len([p for p in filtered if _has_external_link(p)]),
             "latest_at": latest_str,
             "headline": headline,
             "posts": filtered,
@@ -468,7 +665,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
 
         try:
             summary_coll = db["hotnews_summary_cache"]
-            summary_cache_key = f"{cl_slug}:{hours}:v2"
+            summary_cache_key = _hotnews_summary_cache_key(cl_slug, hours)
             existing = summary_coll.find_one(
                 {"key": summary_cache_key, "expires_at": {"$gt": now}},
                 {"_id": 0, "title": 1},
@@ -482,8 +679,20 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
                     try:
                         _result = await _cas(_filtered, topic_name=_ev_name)
                         _gpt_validated = _result.pop("_filtered_posts", None) or _filtered
+                        try:
+                            _source_posts = await filter_relevant_posts(
+                                _filtered,
+                                topic_name=_result.get("title") or _ev_name,
+                                topic_description=_result.get("lead") or "",
+                                threshold=0.54,
+                                top_k=10,
+                            )
+                        except Exception as _src_exc:
+                            logger.warning("_bg_summary source filter failed for %s: %s", _slug, _src_exc)
+                            _source_posts = _filtered[:10]
+                        _source_posts = _strip_runtime_fields(_source_posts)
                         _link_posts = []
-                        for _p in _gpt_validated:
+                        for _p in _source_posts:
                             _links = _p.get("links") or []
                             _fa2 = _p.get("full_article") or {}
                             _url = next(
@@ -495,7 +704,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
                                 if _fa_url and _fa_url.startswith("http") and "t.me" not in _fa_url:
                                     _url = _fa_url
                             _link_posts.append({
-                                "title": _fa2.get("title") or (_p.get("text") or "")[:120],
+                                "title": _clean_news_title(_fa2.get("title") or (_p.get("text") or "")[:120]),
                                 "url": _url,
                                 "source": _p.get("source") or _p.get("channel_username") or "",
                                 "snippet": (_p.get("text") or "")[:200],
@@ -504,7 +713,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
                         _saved_summary = {
                             **_result,
                             "key": summary_cache_key,
-                            "post_count": len(_gpt_validated),
+                            "post_count": len(_source_posts),
                             "link_posts": _link_posts,
                             "expires_at": _expires,
                         }
@@ -527,7 +736,7 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
 
         return cluster
 
-    events = await discover_hot_events(all_posts, max_events=8)
+    events = await discover_hot_events(all_posts, max_events=HOTNEWS_TARGET_CLUSTERS)
     build_results = await asyncio.gather(
         *[_build_cluster(ev) for ev in events],
         return_exceptions=True,
@@ -554,33 +763,34 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
                 "latest": {"$max": "$created_at"},
             }},
             {"$sort": {"count": -1}},
-            {"$limit": 8},
+            {"$limit": 20},
         ]
         trending = list(posts_coll.aggregate(velocity_pipeline))
 
-    # ── Step 3b: Controlled broad-topic fallback ─────────────────────────────
-    # If strict event clustering is too sparse, fill the page with the hottest
-    # ML topics so users still see fresh 48h/72h activity instead of old cache.
-    if len(clusters) < 6 and trending:
+    # ── Step 3b: Controlled event fallback inside ML topics ──────────────────
+    # If strict embedding clusters are too sparse, mine the hottest ML topics
+    # for smaller event-like groups. Do not expose a whole broad category as a
+    # hotnews card, because the card headline and AI summary will drift apart.
+    if len(clusters) < HOTNEWS_TARGET_CLUSTERS and trending:
         existing_slugs = {c["slug"] for c in clusters}
-        fallback_inputs: list[dict] = []
-        fallback_budget = 8 - len(clusters)
+        fallback_budget = HOTNEWS_TARGET_CLUSTERS - len(clusters)
+        used_post_ids = {
+            str(p.get("_id") or p.get("id") or p.get("source_id") or "")
+            for cl in clusters
+            for p in (cl.get("posts") or [])
+        }
 
         for item in trending:
-            if len(fallback_inputs) >= fallback_budget:
+            if fallback_budget <= 0:
                 break
             topic_name = item.get("_id")
             if not topic_name or item.get("count", 0) < 2:
                 continue
 
-            topic_slug = _ml_topic_slug(topic_name)
-            if topic_slug in existing_slugs:
-                continue
-
             raw_posts = list(
                 posts_coll.find({"created_at": {"$gte": since}, "topics": topic_name}, projection)
                 .sort("created_at", -1)
-                .limit(30)
+                .limit(50)
             )
             if len(raw_posts) < 2:
                 continue
@@ -588,52 +798,108 @@ async def _compute_hotnews_clusters(db, hours: int, now: datetime, cache_key: st
             for p in raw_posts:
                 p["_id"] = str(p["_id"])
 
-            with_links = [p for p in raw_posts if p.get("links")]
-            no_links = [p for p in raw_posts if not p.get("links")]
-            topic_posts = (with_links + no_links)[:12]
-            latest = max(
-                (p.get("created_at") for p in topic_posts if p.get("created_at")),
-                default=None,
-            )
-            anchor = topic_posts[0]
-            headline = (
-                (anchor.get("full_article") or {}).get("title")
-                or (anchor.get("text") or "")[:120]
-            )
+            event_groups = _derive_event_groups(raw_posts, used_post_ids, fallback_budget)
+            for group in event_groups:
+                title = _title_for_cluster(group)
+                slug = _unique_hotnews_slug(title, existing_slugs)
+                cl = {
+                    "topic_name": topic_name,
+                    "slug": slug,
+                    "name": title,
+                    "description": _cluster_summary_text(group)[:280],
+                    "color": _ML_TOPIC_COLORS.get(topic_name, "#6b7280"),
+                    "source": "ml_event_fallback",
+                }
+                _refresh_cluster_post_stats(cl, group)
+                if title.startswith("World Cup"):
+                    cl["headline"] = "Các diễn biến và câu chuyện đáng chú ý về World Cup trong 24 giờ qua"
+                clusters.append(cl)
+                for post in group:
+                    pid = str(post.get("_id") or post.get("id") or post.get("source_id") or "")
+                    if pid:
+                        used_post_ids.add(pid)
+                fallback_budget = HOTNEWS_TARGET_CLUSTERS - len(clusters)
+                if len(clusters) >= HOTNEWS_TARGET_CLUSTERS:
+                    break
 
-            fallback_inputs.append({
-                "topic_name": topic_name,
-                "slug": topic_slug,
-                "color": _ML_TOPIC_COLORS.get(topic_name, "#6b7280"),
-                "post_count": len(topic_posts),
-                "posts_with_links": len([p for p in topic_posts if any(
+    if len(clusters) < HOTNEWS_TARGET_CLUSTERS:
+        used_ids = {
+            str(p.get("_id") or p.get("id") or p.get("source_id") or "")
+            for cl in clusters
+            for p in (cl.get("posts") or [])
+        }
+        recent_posts = []
+        for p in all_posts:
+            pid = str(p.get("_id") or p.get("id") or p.get("source_id") or "")
+            if pid and pid in used_ids:
+                continue
+            if not any(
+                l.startswith("http") and "t.me" not in l
+                for l in (p.get("links") or [])
+            ):
+                continue
+            recent_posts.append(p)
+            if len(recent_posts) >= HOTNEWS_MAX_CLUSTER_POSTS:
+                break
+
+        if len(recent_posts) < 2:
+            recent_posts = []
+            for p in posts_coll.find(
+                {"created_at": {"$gte": since}, "links": {"$exists": True, "$ne": []}},
+                projection,
+            ).sort("created_at", -1).limit(60):
+                p["_id"] = str(p["_id"])
+                if not any(
                     l.startswith("http") and "t.me" not in l
                     for l in (p.get("links") or [])
-                )]),
-                "latest_at": latest.isoformat() if hasattr(latest, "isoformat") else "",
-                "headline": headline,
-                "posts": topic_posts,
-                "source": "ml_topic_fallback",
-            })
-            existing_slugs.add(topic_slug)
-
-        if fallback_inputs:
-            named_fallbacks = await gpt_name_ml_clusters(fallback_inputs)
-            for cl in named_fallbacks:
-                name = cl.get("name") or cl.get("topic_name")
-                slug = _ml_topic_slug(name or cl.get("slug", ""))
-                if not slug:
+                ):
                     continue
-                if any(c["slug"] == slug for c in clusters):
-                    slug = cl.get("slug") or slug
-                cl["slug"] = slug
-                cl["name"] = name
-                clusters.append(cl)
-                if len(clusters) >= 8:
+                recent_posts.append(p)
+                if len(recent_posts) >= HOTNEWS_MAX_CLUSTER_POSTS:
                     break
+
+        if len(recent_posts) >= 2:
+            fallback_cluster = {
+                "slug": "tin-moi-noi-bat-24h",
+                "name": "Tin mới nổi bật 24h",
+                "description": "Các bài mới có link đáng chú ý trong 24 giờ qua",
+                "color": "#64748b",
+                "source": "recent_link_fallback",
+            }
+            _refresh_cluster_post_stats(fallback_cluster, recent_posts)
+            clusters.append(fallback_cluster)
 
     # ── Step 4: Clean + timestamp ─────────────────────────────────────────────
     clusters = [cl for cl in clusters if cl.get("slug") and cl.get("name")]
+    if (
+        len(clusters) < HOTNEWS_TARGET_CLUSTERS
+        and not any(cl.get("slug") == "tin-moi-noi-bat-24h" for cl in clusters)
+    ):
+        recent_posts = []
+        for p in posts_coll.find(
+            {"created_at": {"$gte": since}, "links": {"$exists": True, "$ne": []}},
+            projection,
+        ).sort("created_at", -1).limit(60):
+            p["_id"] = str(p["_id"])
+            if not any(
+                l.startswith("http") and "t.me" not in l
+                for l in (p.get("links") or [])
+            ):
+                continue
+            recent_posts.append(p)
+            if len(recent_posts) >= HOTNEWS_MAX_CLUSTER_POSTS:
+                break
+        if len(recent_posts) >= 2:
+            fallback_cluster = {
+                "slug": "tin-moi-noi-bat-24h",
+                "name": "Tin mới nổi bật 24h",
+                "description": "Các bài mới có link đáng chú ý trong 24 giờ qua",
+                "color": "#64748b",
+                "source": "recent_link_fallback",
+            }
+            _refresh_cluster_post_stats(fallback_cluster, recent_posts)
+            clusters.append(fallback_cluster)
+
     for cl in clusters:
         cl["first_seen_at"] = now.isoformat()
 
@@ -669,17 +935,16 @@ async def _bg_ensure_hotnews_cached(hours: int, cache_key: str, now: datetime) -
 
 
 async def _hotnews_precompute_worker() -> None:
-    """Background worker: pre-warm the 24h hotnews cache every 5 minutes."""
+    """Background worker: pre-warm hotnews caches every 5 minutes."""
     await asyncio.sleep(120)
     while True:
         try:
             now = datetime.utcnow()
             db = get_db()
             cache_coll = db["hotnews_v2_cache"]
-            for hours in [24]:
-                bucket_size = 1
-                bucket_hour = (now.hour // bucket_size) * bucket_size
-                cache_key = f"hotnews_kw:{hours}:{now.strftime('%Y%m%d')}{bucket_hour:02d}"
+            for hours in [HOTNEWS_WINDOW_HOURS]:
+                bucket_size = _hotnews_bucket_size(hours)
+                cache_key = _hotnews_cache_key(hours, now)
 
                 if not cache_coll.find_one({"key": cache_key}, {"_id": 1}):
                     logger.info("hotnews warmer: computing missing bucket %s", cache_key)
@@ -690,8 +955,7 @@ async def _hotnews_precompute_worker() -> None:
                 mins_left = (bucket_size * 60) - mins_past
                 if mins_left <= 10:
                     next_now = now + timedelta(minutes=mins_left + 1)
-                    next_bh = (next_now.hour // bucket_size) * bucket_size
-                    next_key = f"hotnews_kw:{hours}:{next_now.strftime('%Y%m%d')}{next_bh:02d}"
+                    next_key = _hotnews_cache_key(hours, next_now)
                     if not cache_coll.find_one({"key": next_key}, {"_id": 1}):
                         logger.info("hotnews warmer: pre-computing next bucket %s", next_key)
                         asyncio.create_task(_bg_ensure_hotnews_cached(hours, next_key, next_now))
@@ -815,9 +1079,10 @@ async def get_hot_topic_posts_ai(
 @limiter.limit("120/minute")
 async def get_public_hotnews(
     request: Request,
-    hours: int = Query(48, ge=1, le=168),
+    hours: int = Query(HOTNEWS_WINDOW_HOURS, ge=1, le=168),
 ):
     """Return hot-news clusters driven by embedding-based event clustering."""
+    hours = _normalize_hotnews_hours(hours)
     db = get_db()
     cache_coll = db["hotnews_v2_cache"]
     now = datetime.utcnow()
@@ -832,8 +1097,12 @@ async def get_public_hotnews(
     # L2: MongoDB cache
     cached = cache_coll.find_one({"key": cache_key})
     if cached and cached.get("clusters"):
-        clusters = await _with_parent_window_clusters(db, hours, now, cached["clusters"])
-        result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": True}
+        result = {
+            "clusters": cached["clusters"],
+            "since": since.isoformat(),
+            "hours": hours,
+            "cached": True,
+        }
         _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
         return result
 
@@ -848,8 +1117,7 @@ async def get_public_hotnews(
             sort=[("created_at", -1)],
         )
         if _is_usable_stale_hotnews_cache(prev, now, hours):
-            clusters = await _with_parent_window_clusters(db, hours, now, prev["clusters"])
-            return {"clusters": clusters, "since": since.isoformat(),
+            return {"clusters": prev["clusters"], "since": since.isoformat(),
                     "hours": hours, "cached": True, "refreshing": True}
 
     prev_cached = cache_coll.find_one(
@@ -865,9 +1133,8 @@ async def get_public_hotnews(
         and _is_usable_stale_hotnews_cache(prev_cached, now, hours)
     ):
         asyncio.create_task(_bg_ensure_hotnews_cached(hours, cache_key, now))
-        clusters = await _with_parent_window_clusters(db, hours, now, prev_cached["clusters"])
         return {
-            "clusters": clusters,
+            "clusters": prev_cached["clusters"],
             "since": since.isoformat(),
             "hours": hours,
             "cached": True,
@@ -881,13 +1148,16 @@ async def get_public_hotnews(
             return {**mem["result"], "cached": True}
         fresh = cache_coll.find_one({"key": cache_key})
         if fresh and fresh.get("clusters"):
-            clusters = await _with_parent_window_clusters(db, hours, now, fresh["clusters"])
-            result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": True}
+            result = {
+                "clusters": fresh["clusters"],
+                "since": since.isoformat(),
+                "hours": hours,
+                "cached": True,
+            }
             _hotnews_mem[cache_key] = {"result": result, "ts": datetime.utcnow()}
             return result
 
         clusters = await _compute_hotnews_clusters(db, hours, now, cache_key)
-        clusters = await _with_parent_window_clusters(db, hours, now, clusters)
         result = {"clusters": clusters, "since": since.isoformat(), "hours": hours, "cached": False}
         _hotnews_mem[cache_key] = {"result": result, "ts": now}
         return result
@@ -898,11 +1168,12 @@ async def get_public_hotnews(
 async def get_hotnews_summary(
     request: Request,
     slug: str,
-    hours: int = Query(48, ge=1, le=168),
+    hours: int = Query(HOTNEWS_WINDOW_HOURS, ge=1, le=168),
 ):
     """Use OpenAI to summarise all recent posts for a hot-topic cluster."""
-    from src.processing.ai_topic_detector import cluster_and_summarize
+    from src.processing.ai_topic_detector import cluster_and_summarize, filter_relevant_posts
 
+    hours = _normalize_hotnews_hours(hours)
     db = get_db()
     cache_coll = db["hotnews_summary_cache"]
     posts_coll = db["posts"]
@@ -917,13 +1188,85 @@ async def get_hotnews_summary(
                 fa_url = fa.get("url", "")
                 if fa_url and fa_url.startswith("http") and "t.me" not in fa_url:
                     url = fa_url
-            title = fa.get("title") or (p.get("text") or "")[:120]
+            title = _clean_news_title(fa.get("title") or (p.get("text") or "")[:120])
             snippet = (p.get("text") or "")[:200]
             source = p.get("source") or p.get("channel_username") or ""
             result.append({"title": title, "url": url, "source": source, "snippet": snippet})
         return result
 
-    cache_key = f"{slug}:{hours}:v2"
+    def _source_key(post: dict) -> str:
+        links = post.get("links") or []
+        fa = post.get("full_article") or {}
+        url = next((l for l in links if l.startswith("http") and "t.me" not in l), None)
+        if not url:
+            url = fa.get("url", "")
+        title = fa.get("title") or (post.get("text") or "")[:120]
+        return str(url or post.get("id") or post.get("_id") or post.get("source_id") or title)
+
+    def _dedupe_posts(posts: list[dict]) -> list[dict]:
+        deduped = []
+        seen = set()
+        for post in posts:
+            key = _source_key(post)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(post)
+        return deduped
+
+    async def _rank_sources(summary: dict, candidates: list[dict], threshold: float) -> list[dict]:
+        if not candidates:
+            return []
+        query_title = summary.get("title") or topic_display_name
+        query_desc = summary.get("lead") or ""
+        try:
+            return await filter_relevant_posts(
+                _dedupe_posts(candidates),
+                topic_name=query_title,
+                topic_description=query_desc,
+                threshold=threshold,
+                top_k=10,
+            )
+        except Exception as exc:
+            logger.warning("summary source relevance filter failed slug=%s: %s", slug, exc)
+            return []
+
+    async def _select_summary_sources(
+        summary: dict,
+        core_candidates: list[dict],
+        cluster_candidates: list[dict] | None = None,
+    ) -> list[dict]:
+        pool = _dedupe_posts(cluster_candidates or core_candidates)
+        if not pool:
+            return []
+
+        ranked_core = await _rank_sources(summary, core_candidates, threshold=0.57)
+        chosen = _dedupe_posts(ranked_core)
+
+        min_sources = min(6, len(pool))
+        if len(chosen) < min_sources:
+            chosen_keys = {_source_key(p) for p in chosen}
+            query_text = f"{summary.get('title') or ''} {summary.get('lead') or ''}"
+            related_pool = _posts_related_to_query(pool, query_text)
+            if not related_pool:
+                related_pool = pool
+            remaining = [p for p in related_pool if _source_key(p) not in chosen_keys]
+            ranked_extra = await _rank_sources(summary, remaining, threshold=0.52)
+            chosen = _dedupe_posts(chosen + ranked_extra)
+
+        if len(chosen) < min_sources:
+            chosen_keys = {_source_key(p) for p in chosen}
+            query_text = f"{summary.get('title') or ''} {summary.get('lead') or ''}"
+            related_pool = _posts_related_to_query(pool, query_text)
+            if not related_pool:
+                related_pool = pool
+            with_links = [p for p in related_pool if p.get("links") and _source_key(p) not in chosen_keys]
+            no_links = [p for p in related_pool if not p.get("links") and _source_key(p) not in chosen_keys]
+            chosen = _dedupe_posts(chosen + with_links + no_links)
+
+        return _strip_runtime_fields(chosen[:10])
+
+    cache_key = _hotnews_summary_cache_key(slug, hours)
     cached = cache_coll.find_one({"key": cache_key})
     if cached and cached.get("expires_at") and cached["expires_at"] > datetime.utcnow():
         if cached.get("post_count", 0) <= 1:
@@ -937,6 +1280,7 @@ async def get_hotnews_summary(
             "conclusion": cached.get("conclusion", ""),
             "key_points": cached.get("key_points", []),
             "sentiment": cached.get("sentiment", "neutral"),
+            "risk_score": cached.get("risk_score"),
             "ai": cached.get("ai", False),
             "cached": True,
             "post_count": cached.get("post_count", 0),
@@ -945,6 +1289,35 @@ async def get_hotnews_summary(
 
     since = datetime.utcnow() - timedelta(hours=hours)
     proj = {"_id": 0, "text": 1, "full_article": 1, "source": 1, "links": 1, "created_at": 1}
+
+    cutoff = datetime.utcnow() - timedelta(hours=max(hours, 6))
+    hn_cached = db["hotnews_v2_cache"].find_one(
+        {"clusters.slug": slug, "created_at": {"$gte": cutoff}},
+        sort=[("created_at", -1)],
+    )
+    if hn_cached:
+        cluster = next((c for c in (hn_cached.get("clusters") or []) if c.get("slug") == slug), None)
+        if cluster and cluster.get("posts"):
+            posts = _strip_runtime_fields(cluster.get("posts", [])[:HOTNEWS_MAX_CLUSTER_POSTS])
+            topic_display_name = cluster.get("name") or slug
+            result = await cluster_and_summarize(posts, topic_display_name)
+            if topic_display_name.endswith("nổi bật"):
+                result["title"] = topic_display_name
+            used_posts = result.pop("_filtered_posts", None) or posts
+            source_posts = await _select_summary_sources(result, used_posts, posts)
+            link_posts = _extract_link_posts(source_posts)
+            expires_at = datetime.utcnow() + timedelta(minutes=30)
+            cache_coll.update_one(
+                {"key": cache_key},
+                {"$set": {**result, "key": cache_key, "post_count": len(source_posts),
+                          "link_posts": link_posts, "expires_at": expires_at}},
+                upsert=True,
+            )
+            db["hotnews_audio_cache"].delete_many(
+                {"key": re.compile(f"^audio:{re.escape(slug)}")}
+            )
+            return {"slug": slug, **result, "cached": False,
+                    "post_count": len(source_posts), "link_posts": link_posts}
 
     ml_topic_name = next(
         (name for name in _ML_TOPIC_COLORS if _ml_topic_slug(name) == slug), None,
@@ -963,7 +1336,7 @@ async def get_hotnews_summary(
                 cluster_posts = cl["posts"][:15]
 
         if cluster_posts:
-            posts = cluster_posts
+            posts = _strip_runtime_fields(cluster_posts)
         else:
             raw = list(
                 posts_coll.find({"created_at": {"$gte": since}, "topics": ml_topic_name}, proj)
@@ -988,15 +1361,16 @@ async def get_hotnews_summary(
             if hn_cached:
                 cluster = next((c for c in (hn_cached.get("clusters") or []) if c["slug"] == slug), None)
                 if cluster:
-                    posts = cluster.get("posts", [])[:15]
+                    posts = _strip_runtime_fields(cluster.get("posts", [])[:15])
                     topic_display_name = cluster["name"]
                     result = await cluster_and_summarize(posts, topic_display_name)
-                    result.pop("_filtered_posts", None)
-                    link_posts = _extract_link_posts(posts)
+                    used_posts = result.pop("_filtered_posts", None) or posts
+                    source_posts = await _select_summary_sources(result, used_posts, posts)
+                    link_posts = _extract_link_posts(source_posts)
                     expires_at = datetime.utcnow() + timedelta(minutes=30)
                     cache_coll.update_one(
                         {"key": cache_key},
-                        {"$set": {**result, "key": cache_key, "post_count": len(posts),
+                        {"$set": {**result, "key": cache_key, "post_count": len(source_posts),
                                   "link_posts": link_posts, "expires_at": expires_at}},
                         upsert=True,
                     )
@@ -1004,10 +1378,23 @@ async def get_hotnews_summary(
                         {"key": re.compile(f"^audio:{re.escape(slug)}")}
                     )
                     return {"slug": slug, **result, "cached": False,
-                            "post_count": len(posts), "link_posts": link_posts}
+                            "post_count": len(source_posts), "link_posts": link_posts}
 
         if not topic_doc:
-            raise HTTPException(status_code=404, detail="Hot topic not found")
+            return {
+                "slug": slug,
+                "title": "",
+                "lead": "Chủ đề này vừa được làm mới hoặc không còn nằm trong Hot News 24h.",
+                "body": [],
+                "conclusion": "",
+                "key_points": [],
+                "sentiment": "neutral",
+                "risk_score": None,
+                "ai": False,
+                "cached": False,
+                "post_count": 0,
+                "link_posts": [],
+            }
 
         keywords = topic_doc.get("keywords", [])
         if not keywords:
@@ -1024,14 +1411,28 @@ async def get_hotnews_summary(
         posts = list(posts_coll.find(query, proj).sort("created_at", -1).limit(30))
         topic_display_name = topic_doc["name"]
 
+        try:
+            posts = await filter_relevant_posts(
+                posts,
+                topic_name=topic_doc["name"],
+                topic_description=topic_doc.get("description", ""),
+                topic_keywords=keywords,
+                threshold=0.56,
+                top_k=15,
+            )
+        except Exception as exc:
+            logger.warning("get_hotnews_summary relevance filter failed slug=%s: %s", slug, exc)
+            posts = posts[:15]
+
     if not posts:
         return {"slug": slug, "title": "", "lead": "", "body": [],
                 "conclusion": "", "key_points": [], "sentiment": "neutral",
                 "post_count": 0, "link_posts": []}
 
     result = await cluster_and_summarize(posts, topic_display_name)
-    result.pop("_filtered_posts", None)
-    link_posts = _extract_link_posts(posts)
+    used_posts = result.pop("_filtered_posts", None) or posts
+    source_posts = await _select_summary_sources(result, used_posts, posts)
+    link_posts = _extract_link_posts(source_posts)
 
     expires_at = datetime.utcnow() + timedelta(minutes=30)
     cache_coll.update_one(
@@ -1044,8 +1445,9 @@ async def get_hotnews_summary(
             "conclusion": result.get("conclusion", ""),
             "key_points": result.get("key_points", []),
             "sentiment": result.get("sentiment", "neutral"),
+            "risk_score": result.get("risk_score"),
             "ai": result.get("ai", False),
-            "post_count": len(posts),
+            "post_count": len(source_posts),
             "link_posts": link_posts,
             "expires_at": expires_at,
         }},
@@ -1061,9 +1463,10 @@ async def get_hotnews_summary(
         "conclusion": result.get("conclusion", ""),
         "key_points": result.get("key_points", []),
         "sentiment": result.get("sentiment", "neutral"),
+        "risk_score": result.get("risk_score"),
         "ai": result.get("ai", False),
         "cached": False,
-        "post_count": len(posts),
+        "post_count": len(source_posts),
         "link_posts": link_posts,
     }
 
@@ -1073,16 +1476,17 @@ async def get_hotnews_summary(
 async def get_hotnews_audio(
     request: Request,
     slug: str,
-    hours: int = Query(48, ge=1, le=168),
+    hours: int = Query(HOTNEWS_WINDOW_HOURS, ge=1, le=168),
 ):
     """Trả về file MP3 (TTS) tóm tắt tin nóng. Dùng edge-tts, voice vi-VN-HoaiMyNeural."""
+    hours = _normalize_hotnews_hours(hours)
     db = get_db()
     audio_cache = db["hotnews_audio_cache"]
     summary_cache = db["hotnews_summary_cache"]
     now = datetime.utcnow()
 
     summary_doc = summary_cache.find_one(
-        {"key": re.compile(f"^{re.escape(slug)}:\\d+:v2$"), "expires_at": {"$gt": now}},
+        {"key": _hotnews_summary_cache_key(slug, hours), "expires_at": {"$gt": now}},
         sort=[("expires_at", -1)],
     )
 
